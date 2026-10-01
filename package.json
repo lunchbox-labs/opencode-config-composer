@@ -1,0 +1,74 @@
+{
+  "name": "@lunchbox/opencode-config-composer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Compose OpenCode agent prompts, ordered groups, model presets, and native skill includes",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lunchbox-labs/opencode-config-composer.git"
+  },
+  "engines": {
+    "node": ">=22.18.0",
+    "opencode": "1.18.34"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "default": "./dist/tui.js"
+    },
+    "./schema.json": "./schema.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "tsconfig.build.json",
+    "schema.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
+    "format:check": "prettier --check src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
+    "test": "node --experimental-strip-types --test tests/*.test.*",
+    "test:package": "npm run build && node --experimental-strip-types --test tests/package.integration.ts",
+    "test:native": "npm run build && node scripts/opencode.mjs test",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run test:package",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "jsonc-parser": "3.3.1",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "4.7.2",
+    "@eslint/js": "10.0.1",
+    "@opencode-ai/plugin": "1.18.34",
+    "@opencode-ai/sdk": "1.18.34",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/node": "24.10.1",
+    "eslint": "10.10.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-regexp": "3.3.0",
+    "globals": "17.12.0",
+    "prettier": "3.9.6",
+    "solid-js": "1.9.12",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.69.0"
+  }
+}
