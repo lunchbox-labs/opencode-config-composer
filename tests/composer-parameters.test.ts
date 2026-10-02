@@ -340,3 +340,35 @@ test('title dispatch ignores the original worker variant even when the title mod
     assert.equal(output.options.reasoningEffort, 'medium');
   }
 });
+
+test('compaction preserves the native original request variant across model identities', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-compaction-variant-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, 'composer.jsonc');
+  await writeFile(
+    file,
+    JSON.stringify({
+      agent: {
+        groups: {
+          compact: { model: 'a/beta', variant: 'low', parameters: { options: { customSetting: { enabled: true } } } },
+        },
+      },
+    }),
+  );
+  const hooks = await server.server({} as PluginInput, { configFile: file });
+  await hooks.config!({ agent: { compaction: { groups: ['compact'] } } });
+  const input = {
+    agent: 'compaction',
+    model: { providerID: 'a', id: 'beta', variants: { low: {}, high: { customSetting: { enabled: false } } } },
+    message: { model: { providerID: 'a', modelID: 'alpha', variant: 'high' } },
+  } as unknown as Parameters<NonNullable<Hooks['chat.params']>>[0];
+  const output = {
+    temperature: 1,
+    topP: 1,
+    topK: 1,
+    maxOutputTokens: undefined,
+    options: { customSetting: { enabled: false } },
+  };
+  await hooks['chat.params']!(input, output);
+  assert.deepEqual(output.options.customSetting, { enabled: false });
+});
