@@ -555,7 +555,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   let serverRoot = root;
   let unregistered = false;
   let dispose: (() => void) | undefined;
-  const commands: { name: string; run: () => void | Promise<void> }[] = [];
+  const commands: { name: string; slashName: string; run: () => void | Promise<void> }[] = [];
   const toasts: { message: string }[] = [];
   const api = {
     state: { path: { config: serverDirectory } },
@@ -655,6 +655,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   registerSettings(api, root, globalDirectory);
   return {
     api,
+    commands,
     controller,
     delayProofAfter(skip: number) {
       const requested = Promise.withResolvers<undefined>();
@@ -778,6 +779,44 @@ test('a delayed reference picker does not reopen after Escape', async (t) => {
   await pending;
   assert.equal(ui.dialog, current);
 });
+
+for (const entry of ['slash command', 'menu button'] as const) {
+  test(`TUI reload via ${entry} retains confirmation, cancellation, busy guard, and success feedback`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    if (entry === 'slash command') {
+      const command = ui.commands.find((item) => item.slashName === 'reload-configs');
+      assert.ok(command !== undefined, '/reload-configs must be registered');
+      await command.run();
+    } else {
+      await ui.command();
+      await ui.select('+reload');
+    }
+    assert.equal(ui.dialog?.title, 'Settings saved');
+    assert.equal(ui.updates, 0);
+    await ui.select('reload');
+    assert.equal(ui.dialog.title, 'Reload OpenCode settings?');
+    assert.ok('message' in ui.dialog);
+    assert.match(ui.dialog.message, /ALL workspaces/);
+    assert.equal(ui.updates, 0);
+    await ui.cancel();
+    assert.equal(ui.updates, 0);
+    assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), config);
+    ui.setActive(true);
+    await ui.select('reload');
+    await ui.confirm();
+    assert.equal(ui.updates, 0);
+    assert.match(ui.toasts.at(-1)!.message, /still running/);
+    ui.setActive(false);
+    await ui.select('reload');
+    await ui.confirm();
+    assert.equal(ui.updates, 1);
+    assert.equal(ui.dialog, undefined);
+    assert.match(ui.toasts.at(-1)!.message, /New agent calls use the saved defaults/);
+    assert.match(await readFile(join(root, 'opencode.jsonc'), 'utf8'), /reloadToken/);
+    ui.dispose();
+  });
+}
 
 test('TUI model selection previews, saves, and blocks reload while an agent runs', async (t) => {
   const root = await fixture(t);

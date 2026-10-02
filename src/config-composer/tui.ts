@@ -803,6 +803,17 @@ export function registerSettings(
           return run(groupsMenu);
         },
       },
+      {
+        name: 'config-composer.reload',
+        title: 'Reload saved settings',
+        category: 'Config',
+        namespace: 'palette',
+        slashName: 'reload-configs',
+        run: () => {
+          navigation.reset();
+          return run(() => offerReload(true));
+        },
+      },
     ],
   });
   api.lifecycle.onDispose(unregister);
