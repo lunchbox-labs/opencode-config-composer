@@ -1,6 +1,14 @@
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
-import { type AgentSettings, type EffectiveChoice, SettingsError, record, resolveChoice } from './settings.ts';
+import {
+  type AgentSettings,
+  type EffectiveChoice,
+  SettingsError,
+  agentGroups,
+  record,
+  resolveChoice,
+} from './settings.ts';
 import { loadConfiguration } from './configuration.ts';
+import { composePermissions, nativePermission } from './composition/permissions.ts';
 import { composePrompts, expandIncludes } from './prompts.ts';
 
 function agentConfigurations(value: unknown): value is Record<string, AgentSettings> {
@@ -12,9 +20,12 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
   const { groups, modelPresets } = settings;
   let agents: Partial<Record<string, AgentSettings>> = {};
   let choices: Partial<Record<string, EffectiveChoice>> = {};
+  const globalPermissions = new WeakMap<object, { native: unknown; applied: unknown }>();
   const authored = new WeakMap<
     AgentSettings,
     {
+      permission?: unknown;
+      appliedPermission?: unknown;
       prompt?: string;
       model?: string;
       variant?: string;
@@ -42,6 +53,12 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
       if (!agentConfigurations(configured)) {
         throw new SettingsError('An agent configuration must be an object.');
       }
+      const previousGlobal = globalPermissions.get(config);
+      const nativeGlobal =
+        previousGlobal !== undefined && config.permission === previousGlobal.applied
+          ? previousGlobal.native
+          : config.permission;
+      const globalPolicy = composePermissions([nativePermission(nativeGlobal), settings.permission ?? {}]);
       const context = { modelPresets, native: config };
       const staged = Object.fromEntries(
         Object.entries(configured).map(([name, agent]) => {
@@ -50,6 +67,9 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
             name,
             {
               ...agent,
+              ...(previous !== undefined && agent.permission === previous.appliedPermission
+                ? { permission: previous.permission }
+                : {}),
               ...(previous !== undefined && agent.prompt === previous.appliedPrompt ? { prompt: previous.prompt } : {}),
               ...(previous !== undefined && agent.model === previous.appliedModel ? { model: previous.model } : {}),
               ...(previous !== undefined && agent.variant === previous.appliedVariant
@@ -59,15 +79,52 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
           ];
         }),
       );
+      for (const [name, override] of Object.entries(settings.agentOverrides ?? {})) {
+        if (override.permission !== undefined && !Object.hasOwn(staged, name)) {
+          staged[name] = {};
+        }
+      }
+      const permissions = Object.fromEntries(
+        Object.entries(staged)
+          .filter(([, agent]) => agent.disable !== true)
+          .map(([name, agent]) => {
+            const layers = agentGroups(agent, groups).flatMap((group) =>
+              groups[group].permission === undefined ? [] : [groups[group].permission],
+            );
+            const override = settings.agentOverrides?.[name]?.permission;
+            const explicit = nativePermission(agent.permission);
+            return [
+              name,
+              layers.length > 0 || override !== undefined
+                ? composePermissions([globalPolicy, ...layers, explicit, ...(override === undefined ? [] : [override])])
+                : agent.permission,
+            ];
+          }),
+      );
       const nextChoices = Object.fromEntries(
         Object.entries(staged)
           .filter(([, agent]) => agent.disable !== true)
           .map(([name, agent]) => [name, resolveChoice(agent, groups, context)]),
       );
       const prompts = await composePrompts(staged, settings);
+      if (settings.permission !== undefined) {
+        config.permission = globalPolicy;
+        globalPermissions.set(config, { native: nativeGlobal, applied: globalPolicy });
+      }
+      for (const name of Object.keys(staged)) {
+        if (!Object.hasOwn(configured, name)) {
+          configured[name] = {};
+        }
+      }
+      config.agent = configured;
       for (const [name, agent] of Object.entries(configured)) {
         if (agent.disable === true) {
           continue;
+        }
+        if (permissions[name] === undefined) {
+          delete agent.permission;
+        } else {
+          agent.permission = permissions[name];
         }
         if (staged[name].model === undefined) {
           delete agent.model;
@@ -90,6 +147,8 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
           agent.prompt = prompts[name];
         }
         authored.set(agent, {
+          permission: staged[name].permission,
+          appliedPermission: agent.permission,
           prompt: typeof staged[name].prompt === 'string' ? staged[name].prompt : undefined,
           model: staged[name].model,
           variant: staged[name].variant,
