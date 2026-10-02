@@ -43,6 +43,9 @@ function uniqueKeys(node: JsonNode | undefined): void {
   }
   if (node.type === 'object') {
     const keys = node.children?.map((child): unknown => child.children?.[0].value) ?? [];
+    if (keys.some((key) => key === '__proto__' || key === 'prototype' || key === 'constructor')) {
+      throw new SettingsError('The Config Composer configuration contains an unsafe object key.');
+    }
     if (keys.length !== new Set(keys).size) {
       throw new SettingsError('The Config Composer configuration has duplicate JSON keys.');
     }
@@ -60,7 +63,7 @@ export function parseConfiguration(text: string): Record<string, unknown> {
   return value;
 }
 
-async function configurationFile(path: string): Promise<ConfigurationFile> {
+export async function configurationFile(path: string): Promise<ConfigurationFile> {
   try {
     const before = await lstat(path);
     if (!before.isFile() || before.size > MAX_CONFIGURATION_BYTES) {
