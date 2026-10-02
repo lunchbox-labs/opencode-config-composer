@@ -8,7 +8,7 @@ import { loadConfiguration } from '../src/config-composer/configuration.ts';
 import { resolveLegacy } from '../src/config-composer/composition/legacy.ts';
 import type { NativeInput, SourceDocument } from '../src/config-composer/composition/types.ts';
 import { composePrompts } from '../src/config-composer/prompts.ts';
-import { SettingsError, applyDefaults, readSettings } from '../src/config-composer/settings.ts';
+import { SettingsError, applyDefaults, readSettings, resolveChoice } from '../src/config-composer/settings.ts';
 
 function source(value: Record<string, unknown> = {}): SourceDocument {
   const text = JSON.stringify(value);
@@ -184,4 +184,48 @@ test('unresolved native agent defaults do not invent an effective agent model', 
   const result = resolveLegacy(source(), { model: 'fixture/main', small_model: 'fixture/small', agent: { title: {} } });
   assert.equal(Object.hasOwn(result.provenance, '/agent/title/model'), false);
   assert.equal(result.provenance['/model'].operation, 'native');
+});
+
+test('explicit group variants retain the overridden preset and earlier candidates', () => {
+  const custom = source({
+    agent: {
+      modelPresets: {
+        balanced: { model: 'fixture/main', variant: 'high' },
+        plain: { model: 'fixture/main' },
+      },
+      groups: {
+        earlier: { model: 'fixture/earlier', variant: 'medium' },
+        base: { modelRef: 'preset:balanced', variant: 'low' },
+        plain: { modelRef: 'preset:plain', variant: 'low' },
+      },
+    },
+  });
+  const agents = {
+    worker: { groups: ['base'] },
+    layered: { groups: ['earlier', 'base'], variant: 'max' },
+    plain: { groups: ['plain'] },
+  };
+  const result = resolveLegacy(custom, { agent: agents });
+  const applied = structuredClone(agents);
+  applyDefaults(applied, result.settings.groups, { modelPresets: result.settings.modelPresets });
+  assert.equal(applied.layered.variant, 'max');
+  assert.equal(
+    resolveChoice(agents.worker, result.settings.groups, { modelPresets: result.settings.modelPresets }).variant,
+    'low',
+  );
+  const winner = result.provenance['/agent/worker/variant'];
+  assert.equal(winner.pointer, '/agent/groups/base/variant');
+  assert.equal(winner.sourceId, custom.id);
+  assert.equal(winner.overwritten.length, 1);
+  assert.equal(winner.overwritten[0].pointer, '/agent/groups/base/modelRef');
+  assert.equal(winner.overwritten[0].sourceId, custom.id);
+  assert.deepEqual(winner.overwritten[0].references, ['/agent/modelPresets/balanced/variant']);
+  const pinned = result.provenance['/agent/layered/variant'];
+  assert.equal(pinned.operation, 'native');
+  const group = pinned.overwritten[0];
+  assert.equal(group.pointer, '/agent/groups/base/variant');
+  const preset = group.overwritten[0];
+  assert.deepEqual(preset.references, ['/agent/modelPresets/balanced/variant']);
+  assert.equal(preset.overwritten[0].pointer, '/agent/groups/earlier/variant');
+  assert.deepEqual(result.provenance['/agent/plain/variant'].overwritten, []);
 });
