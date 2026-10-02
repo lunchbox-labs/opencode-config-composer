@@ -6,7 +6,7 @@ OpenCode or Anomaly.
 Compose agent prompts, ordered group defaults, reusable model presets, and inline includes in native skill output.
 The TUI provides `/agent-models` and `/agent-groups` for reviewing and saving settings.
 
-The npm package name is **`@lunchbox/opencode-config-composer`**.
+The npm package name is **`@lunchbox-labs/opencode-config-composer`**.
 
 Supported and tested host: **OpenCode V1 1.18.34**. The `opencode` engine requirement is intentionally exact.
 Broaden it only after checking another host version. This package does not implement a V2 port.
@@ -40,7 +40,7 @@ Register its **installed package directory** in each configuration file. Replace
 ```
 
 Preserve other plugin entries. Register exactly one Composer server and one Composer TUI entry.
-For a registry installation, replace the directory in both files with `@lunchbox/opencode-config-composer@VERSION`.
+For a registry installation, replace the directory in both files with `@lunchbox-labs/opencode-config-composer@VERSION`.
 Replace `VERSION` with the published version. Use the same specifier in both files; OpenCode selects `./server` or `./tui`.
 The root export also supplies the server module for direct JavaScript imports.
 
@@ -70,9 +70,9 @@ Create `config-composer.jsonc` in the OpenCode configuration directory:
 
 Use real provider model IDs and supported variants. The example values are placeholders.
 The authoritative [schema](schema.json) is hosted at the raw GitHub URL above, tracking `main`.
-For an installed-version schema, use `"$schema": "./node_modules/@lunchbox/opencode-config-composer/schema.json"`
+For an installed-version schema, use `"$schema": "./node_modules/@lunchbox-labs/opencode-config-composer/schema.json"`
 when `node_modules` is beside your settings, or adjust the relative path. A copied schema can use `"$schema": "./schema.json"`.
-JavaScript consumers can import the supported `@lunchbox/opencode-config-composer/schema.json` subpath with `{ type: "json" }` import attributes.
+JavaScript consumers can import the supported `@lunchbox-labs/opencode-config-composer/schema.json` subpath with `{ type: "json" }` import attributes.
 
 The server loads `config-composer.jsonc` by default. To select another file, use a plugin options tuple:
 
@@ -173,9 +173,9 @@ OpenCode loads the plugin through these entrypoints. Server and TUI imports each
 
 | Export | Purpose |
 | --- | --- |
-| `@lunchbox/opencode-config-composer` or `@lunchbox/opencode-config-composer/server` | Server plugin module |
-| `@lunchbox/opencode-config-composer/tui` | TUI plugin module |
-| `@lunchbox/opencode-config-composer/schema.json` | Settings JSON schema |
+| `@lunchbox-labs/opencode-config-composer` or `@lunchbox-labs/opencode-config-composer/server` | Server plugin module |
+| `@lunchbox-labs/opencode-config-composer/tui` | TUI plugin module |
+| `@lunchbox-labs/opencode-config-composer/schema.json` | Settings JSON schema |
 
 The package provides no executable command. `exports` defines the supported import surface.
 Settings, configuration, storage, navigation, and package metadata subpaths are not exported.
