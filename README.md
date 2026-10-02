@@ -161,6 +161,8 @@ the end, including its retained patterns. Repeated patterns move to the end of
 that block. A later outer `"*": "allow"` therefore overrides earlier tool
 blocks. Keep authored key order; integer-like keys are rejected because object
 enumeration cannot reliably preserve their order.
+OpenCode 1.18.34 requires scalar actions for `todowrite`, `question`,
+`webfetch`, `websearch`, and `doom_loop`; Composer rejects pattern maps for these keys.
 
 These settings overlay runtime configuration without writing native files.
 Configure them in the settings file and reload OpenCode to apply changes.

@@ -12,6 +12,7 @@ import {
   resolveChoice,
   resolveGroup,
 } from '../settings.ts';
+import { type PermissionPolicy, composePermissions, nativePermission } from './permissions.ts';
 import type { FieldOrigin, NativeInput, ResolvedComposition, SourceDocument } from './types.ts';
 
 function escapePointer(value: string): string {
@@ -152,6 +153,138 @@ function promptOrigins(
   }
 }
 
+interface PermissionLayer {
+  policy: PermissionPolicy;
+  pointer: string;
+  sourceId?: string;
+  shorthand?: boolean;
+}
+
+function permissionOrigins(layers: PermissionLayer[]): Map<string, FieldOrigin> {
+  let policy: PermissionPolicy = {};
+  let root: FieldOrigin | undefined;
+  const blocks: Record<string, { origin: FieldOrigin; patterns: Map<string, FieldOrigin> }> = {};
+  for (const layer of layers) {
+    const nextPolicy = composePermissions([policy, layer.policy]);
+    for (const [name, rules] of Object.entries(layer.policy)) {
+      const previous = Object.hasOwn(blocks, name) ? blocks[name] : undefined;
+      const merging = record(policy[name]) && record(rules);
+      const patterns = merging ? new Map(previous?.patterns) : new Map<string, FieldOrigin>();
+      const pointer = layer.shorthand === true ? layer.pointer : `${layer.pointer}/${escapePointer(name)}`;
+      if (record(rules)) {
+        for (const pattern of Object.keys(rules)) {
+          const overwritten = patterns.get(pattern);
+          patterns.delete(pattern);
+          patterns.set(pattern, {
+            ...origin(`${pointer}/${escapePointer(pattern)}`, layer.sourceId),
+            overwritten: overwritten === undefined ? [] : [overwritten],
+          });
+        }
+      }
+      blocks[name] = {
+        origin: {
+          ...origin(pointer, layer.sourceId),
+          ...(merging ? { operation: 'merge' as const } : {}),
+          references: [...patterns.values()].map((item) => item.pointer),
+          overwritten: previous === undefined ? [] : [previous.origin],
+        },
+        patterns,
+      };
+    }
+    policy = nextPolicy;
+    root = {
+      ...origin(layer.pointer, layer.sourceId),
+      ...(root === undefined ? {} : { operation: 'merge' as const }),
+      references: Object.keys(policy).map((name) => blocks[name].origin.pointer),
+      overwritten: root === undefined ? [] : [root],
+    };
+  }
+  // Store blocks and their children in emitted order, with references retaining
+  // that same sequence. Removed descendants exist only in overwrite history.
+  const result = new Map<string, FieldOrigin>();
+  if (root !== undefined) {
+    result.set('', root);
+  }
+  for (const name of Object.keys(policy)) {
+    const block = blocks[name];
+    const pointer = `/${escapePointer(name)}`;
+    result.set(pointer, block.origin);
+    for (const [pattern, value] of block.patterns) {
+      result.set(`${pointer}/${escapePointer(pattern)}`, value);
+    }
+  }
+  return result;
+}
+
+function applyPermissionOrigins(
+  provenance: Record<string, FieldOrigin>,
+  pointer: string,
+  layers: PermissionLayer[],
+): void {
+  for (const key of Object.keys(provenance)) {
+    if (key === pointer || key.startsWith(`${pointer}/`)) {
+      Reflect.deleteProperty(provenance, key);
+    }
+  }
+  for (const [suffix, value] of permissionOrigins(layers)) {
+    provenance[`${pointer}${suffix}`] = value;
+  }
+}
+
+function effectivePermissionOrigins(
+  source: SourceDocument,
+  native: NativeInput,
+  settings: GroupOptions,
+  provenance: Record<string, FieldOrigin>,
+): void {
+  const global: PermissionLayer[] = [];
+  if (native.permission !== undefined) {
+    global.push({
+      policy: nativePermission(native.permission),
+      pointer: '/permission',
+      shorthand: typeof native.permission === 'string',
+    });
+  }
+  if (settings.permission !== undefined) {
+    global.push({ policy: settings.permission, pointer: '/agent/permission', sourceId: source.id });
+    applyPermissionOrigins(provenance, '/permission', global);
+  }
+  const names = new Set([...Object.keys(native.agent ?? {}), ...Object.keys(settings.agentOverrides ?? {})]);
+  for (const name of names) {
+    const agent = native.agent?.[name] ?? {};
+    if (agent.disable === true) {
+      continue;
+    }
+    const groups = agentGroups(agent, settings.groups).flatMap((group): PermissionLayer[] => {
+      const policy = settings.groups[group].permission;
+      return policy === undefined
+        ? []
+        : [{ policy, pointer: `/agent/groups/${escapePointer(group)}/permission`, sourceId: source.id }];
+    });
+    const override = settings.agentOverrides?.[name]?.permission;
+    if (groups.length === 0 && override === undefined) {
+      continue;
+    }
+    const pointer = `/agent/${escapePointer(name)}/permission`;
+    const layers = [...global, ...groups];
+    if (agent.permission !== undefined) {
+      layers.push({
+        policy: nativePermission(agent.permission),
+        pointer,
+        shorthand: typeof agent.permission === 'string',
+      });
+    }
+    if (override !== undefined) {
+      layers.push({
+        policy: override,
+        pointer: `/agent/overrides/${escapePointer(name)}/permission`,
+        sourceId: source.id,
+      });
+    }
+    applyPermissionOrigins(provenance, pointer, layers);
+  }
+}
+
 /** Normalize the single-file baseline without applying it or reading prompt includes. */
 export function resolveLegacy(source: SourceDocument, native: NativeInput): ResolvedComposition {
   const settings = readSettings(source.value);
@@ -166,6 +299,8 @@ export function resolveLegacy(source: SourceDocument, native: NativeInput): Reso
   // Map normalized settings separately from native agents (an agent can be named
   // 'groups'); origin.pointer always addresses the original source document.
   for (const [key, pointer] of [
+    ['permission', '/agent/permission'],
+    ['agentOverrides', '/agent/overrides'],
     ['groups', '/agent/groups'],
     ['modelPresets', '/agent/modelPresets'],
     ['promptSources', '/sourceDirectories'],
@@ -186,6 +321,7 @@ export function resolveLegacy(source: SourceDocument, native: NativeInput): Reso
     modelOrigins(agent, pointer, settings, source, native, provenance);
     promptOrigins(name, agent, pointer, settings, source, provenance);
   }
+  effectivePermissionOrigins(source, native, settings, provenance);
   return {
     settings,
     ...(native.model === undefined ? {} : { model: native.model }),

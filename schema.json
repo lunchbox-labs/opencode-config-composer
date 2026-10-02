@@ -287,6 +287,13 @@
       "propertyNames": {
         "$ref": "#/$defs/permissionKey"
       },
+      "properties": {
+        "todowrite": { "$ref": "#/$defs/permissionAction" },
+        "question": { "$ref": "#/$defs/permissionAction" },
+        "webfetch": { "$ref": "#/$defs/permissionAction" },
+        "websearch": { "$ref": "#/$defs/permissionAction" },
+        "doom_loop": { "$ref": "#/$defs/permissionAction" }
+      },
       "additionalProperties": {
         "anyOf": [
           {

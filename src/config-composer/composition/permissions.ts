@@ -27,6 +27,9 @@ export function parsePermission(value: unknown): PermissionPolicy {
       if (action(rules)) {
         return [permission, rules];
       }
+      if (['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'].includes(permission)) {
+        throw new SettingsError(`OpenCode 1.18.34 permission ${permission} requires a scalar allow, ask, or deny.`);
+      }
       if (!record(rules)) {
         throw new SettingsError('Permission rules must be allow, ask, deny, or a pattern map.');
       }

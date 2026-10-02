@@ -1,3 +1,4 @@
+import { resolveLegacy } from '../src/config-composer/composition/legacy.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -152,4 +153,102 @@ test('invalid native policy fails before mutating global or agent configuration'
   const before = structuredClone(config);
   await assert.rejects(hooks.config!(config), /integer/i);
   assert.deepEqual(config, before);
+});
+
+test('known scalar-only native permissions reject pattern maps at every Composer layer', async () => {
+  const names = ['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'];
+  for (const name of names) {
+    const permission = { [name]: { '*': 'allow' } };
+    for (const agent of [
+      { permission },
+      { groups: { base: { permission } } },
+      { overrides: { build: { permission } } },
+    ]) {
+      assert.throws(() => readSettings({ agent }), /requires a scalar/);
+    }
+    assert.deepEqual(readSettings({ agent: { permission: { [name]: 'allow' } } }).permission, { [name]: 'allow' });
+  }
+  // Keep the published native shape restrictions in sync with runtime validation.
+  const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as {
+    $defs: { permission: { properties: Record<string, { $ref: string }> }; permissionAction: { enum: string[] } };
+  };
+  assert.deepEqual(Object.keys(schema.$defs.permission.properties), names);
+  for (const name of names) {
+    assert.equal(schema.$defs.permission.properties[name].$ref, '#/$defs/permissionAction');
+  }
+  assert.deepEqual(schema.$defs.permissionAction.enum, ['allow', 'ask', 'deny']);
+  assert.doesNotThrow(() => readSettings({ agent: { permission: { custom_tool: { '*': 'allow' } } } }));
+});
+
+test('permission provenance follows ordered global, group, native and Composer contributions', () => {
+  const value = {
+    agent: {
+      permission: { bash: { 'git *': 'allow' }, read: 'ask' },
+      groups: { base: { permission: { bash: { 'npm *': 'deny' } } } },
+      overrides: {
+        'team/worker': { permission: { bash: { '*': 'allow' } } },
+        build: { permission: { task: 'allow' } },
+      },
+    },
+  };
+  const source = {
+    id: 'composer',
+    path: '/config/composer.jsonc',
+    text: JSON.stringify(value),
+    fingerprint: 'fixture',
+    writable: true,
+    value,
+  };
+  const result = resolveLegacy(source, {
+    permission: { bash: { 'git *': 'deny' }, edit: 'deny' },
+    agent: {
+      'team/worker': { groups: ['base'], permission: { bash: { 'npm *': 'ask' } } },
+      untouched: { permission: { bash: 'deny' } },
+    },
+  });
+  const origins = result.provenance;
+  assert.equal(origins['/settings/permission/bash/git *'].pointer, '/agent/permission/bash/git *');
+  assert.equal(origins['/settings/agentOverrides/team~1worker/permission/bash/*'].sourceId, source.id);
+  assert.equal(origins['/permission/bash/git *'].sourceId, source.id);
+  assert.equal(origins['/permission/bash/git *'].overwritten[0].operation, 'native');
+  assert.equal(origins['/permission/edit'].operation, 'native');
+  const base = '/agent/team~1worker/permission';
+  assert.equal(origins[`${base}/bash/*`].pointer, '/agent/overrides/team~1worker/permission/bash/*');
+  assert.equal(origins[`${base}/bash/npm *`].operation, 'native');
+  assert.equal(origins[`${base}/bash/npm *`].sourceId, undefined);
+  assert.equal(origins[`${base}/bash/npm *`].overwritten[0].pointer, '/agent/groups/base/permission/bash/npm *');
+  assert.deepEqual(origins[`${base}/bash`].references, [
+    '/agent/permission/bash/git *',
+    '/agent/team~1worker/permission/bash/npm *',
+    '/agent/overrides/team~1worker/permission/bash/*',
+  ]);
+  assert.equal(origins[`${base}/bash`].operation, 'merge');
+  assert.equal(origins['/agent/build/permission/task'].sourceId, source.id);
+  assert.equal(origins['/agent/untouched/permission/bash'].operation, 'native');
+});
+
+test('permission provenance removes replaced descendants and retains their overwrite history', () => {
+  const value = {
+    agent: { permission: { bash: 'allow' }, groups: { base: { permission: { bash: { 'other-*': 'deny' } } } } },
+  };
+  const source = {
+    id: 'composer',
+    path: '/config/composer.jsonc',
+    text: JSON.stringify(value),
+    fingerprint: 'fixture',
+    writable: true,
+    value,
+  };
+  const result = resolveLegacy(source, {
+    permission: { bash: { 'git *': 'deny' } },
+    agent: { worker: { groups: ['base'] }, off: { disable: true, groups: ['missing'] } },
+  });
+  assert.equal(result.provenance['/permission/bash/git *'], undefined);
+  assert.equal(result.provenance['/permission/bash'].overwritten[0].operation, 'native');
+  const block = result.provenance['/agent/worker/permission/bash'];
+  assert.equal(block.pointer, '/agent/groups/base/permission/bash');
+  assert.equal(block.overwritten[0].pointer, '/agent/permission/bash');
+  assert.deepEqual(block.references, ['/agent/groups/base/permission/bash/other-*']);
+  assert.equal(result.provenance['/agent/worker/permission/bash/git *'], undefined);
+  assert.equal(result.provenance['/agent/off/permission'], undefined);
 });
