@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { installPackage } from './install-package.ts';
 
-test('OpenCode loads the packaged TUI entrypoint and renders both Composer menus', { timeout: 140_000 }, async (t) => {
+test('OpenCode renders packaged compose inspection and legacy menus', { timeout: 140_000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'composer-tui-native-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configRoot = join(root, 'config', 'opencode');
@@ -81,5 +81,6 @@ test('OpenCode loads the packaged TUI entrypoint and renders both Composer menus
     { env, timeout: 130_000, maxBuffer: 1_000_000 },
   );
   assert.match(result.stdout, /native TUI rendered both Composer menus/);
+  assert.match(result.stdout, /native TUI rendered compose inspection and nested navigation/);
   assert.equal(requests, 0, 'opening Composer menus must not send a model prompt');
 });

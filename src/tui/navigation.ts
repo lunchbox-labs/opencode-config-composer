@@ -41,7 +41,8 @@ export function dialogNavigation(api: TuiPluginApi, decoration?: DialogDecoratio
     }
     const client = api.client;
     const route = api.route.current;
-    const sessionID = route.name === 'session' ? route.params?.sessionID : undefined;
+    const name = route.name;
+    const sessionID = name === 'session' ? route.params?.sessionID : undefined;
     const active = ++revision;
     replacing = true;
     try {
@@ -62,7 +63,7 @@ export function dialogNavigation(api: TuiPluginApi, decoration?: DialogDecoratio
             api.lifecycle.signal.aborted ||
             client !== api.client ||
             api.ui.dialog.open ||
-            current.name !== route.name ||
+            current.name !== name ||
             (current.name === 'session' && current.params?.sessionID !== sessionID)
           ) {
             reset();

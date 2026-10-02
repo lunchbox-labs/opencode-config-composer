@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
 import type { Config, SessionStatus } from '@opencode-ai/sdk/v2';
-import { dialogNavigation } from '../tui/navigation.ts';
+import { composeNavigation, openEffective, registerCompose } from './tui/compose.ts';
+import { resolveLegacy } from './composition/legacy.ts';
 import {
   type CatalogModel,
   type GroupChoice,
@@ -32,7 +33,7 @@ import {
   reloadConfiguration,
   savePlan,
 } from './storage.ts';
-import { configurationDirectory } from './configuration.ts';
+import { configurationDirectory, loadConfiguration } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
@@ -54,7 +55,7 @@ export function registerSettings(
     'opencode',
   ),
 ): void {
-  const navigation = dialogNavigation(api);
+  const navigation = composeNavigation(api);
   let busy = false;
   const native = new WeakMap<Snapshot, NativeModels>();
   const context = (snapshot: Snapshot): ResolutionContext => ({
@@ -692,8 +693,12 @@ export function registerSettings(
       },
       ...agentOptions(snapshot, members(snapshot, name)).map((option) => ({ ...option, category: 'Members' })),
     ]);
-  const groupsMenu = async () => {
+  const groupsMenu = async (root = true) => {
+    const isCurrent = navigation.checkpoint();
     const snapshot = await load();
+    if (!isCurrent()) {
+      return;
+    }
     menu(
       'Agent groups',
       [
@@ -712,11 +717,15 @@ export function registerSettings(
         { title: 'All agents', value: '+agents', run: () => menu('Agents', agentOptions(snapshot, snapshot.agents)) },
       ],
       undefined,
-      true,
+      root,
     );
   };
-  const modelsMenu = async () => {
+  const modelsMenu = async (root = true) => {
+    const isCurrent = navigation.checkpoint();
     const snapshot = await load();
+    if (!isCurrent()) {
+      return;
+    }
     menu(
       'Agent models: scope',
       [
@@ -776,9 +785,32 @@ export function registerSettings(
         { title: 'Reload saved settings…', value: '+reload', run: () => offerReload() },
       ],
       undefined,
-      true,
+      root,
     );
   };
+  registerCompose(api, [
+    {
+      id: 'effective',
+      title: 'Effective configuration and sources',
+      open: () =>
+        run(async () => {
+          const isCurrent = navigation.checkpoint();
+          const snapshot = await load();
+          const { source } = await loadConfiguration({ configFile: snapshot.settingsFile.path }, snapshot.root);
+          const response = await api.client.config.get();
+          if (Boolean(response.error) || response.data === undefined) {
+            throw new SettingsError('Could not read effective configuration. Check the server connection.');
+          }
+          const { model, small_model, default_agent } = response.data;
+          const resolved = resolveLegacy(source, { model, small_model, default_agent });
+          if (isCurrent()) {
+            openEffective(api, resolved);
+          }
+        }),
+    },
+    { id: 'models', title: 'Agent models', open: () => run(() => modelsMenu(false)) },
+    { id: 'groups', title: 'Agent groups', open: () => run(() => groupsMenu(false)) },
+  ]);
   const unregister = api.keymap.registerLayer({
     commands: [
       {

@@ -4,7 +4,8 @@ This project is independently maintained. It is not built by the OpenCode team a
 OpenCode or Anomaly.
 
 Compose agent prompts, ordered group defaults, reusable model presets, and inline includes in native skill output.
-The TUI provides `/agent-models` and `/agent-groups` for reviewing and saving settings.
+The TUI provides `/compose` for effective/source inspection and the existing model and group editors.
+`/agent-models` and `/agent-groups` remain direct shortcuts for reviewing and saving settings.
 Use `/reload-configs` to open the same reload flow as **Reload saved settings…** in `/agent-models`.
 Choose **Reload now…** and confirm to apply saved settings. Reload affects all workspaces on the server;
 wait for agents in every workspace to finish. Existing session model selections remain in effect.
@@ -147,6 +148,9 @@ and excessive depth or size are rejected. Limits are 64 KiB per snippet, 256 KiB
 32 include levels, and 256 include expansions. Settings files have a 1 MiB limit.
 
 ## Settings editor
+
+Use `/compose` to open effective/source inspection, agent models, or agent groups. Back and Escape return to the previous view.
+Inspection is read-only: running native defaults have no editable source filename, while saved Composer declarations show their source and pointer. Saved declarations may differ from the running configuration; agent-level applied provenance and applied revision are not available in this view. Command and skill composition remain unsupported.
 
 Use `/agent-models` for global defaults, presets, groups, and individual overrides.
 Use `/agent-groups` for ordered memberships. Model and variant choices come from the provider API.
