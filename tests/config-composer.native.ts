@@ -120,8 +120,12 @@ test(
     assert.ok(address !== null && typeof address !== 'string');
     const model = {
       name: 'Synthetic model',
+      temperature: true,
       limit: { context: 8192, output: 256 },
-      variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } },
+      variants: {
+        low: { reasoningEffort: 'low' },
+        high: { reasoningEffort: 'high', customSetting: { enabled: false } },
+      },
     };
     const config = {
       plugin: [installed.directory],
@@ -134,22 +138,44 @@ test(
           name: 'Fixture',
           npm: '@ai-sdk/openai-compatible',
           options: { baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: 'synthetic-test-key' },
-          models: { alpha: model, beta: model },
+          models: { alpha: model, beta: model, gamma: { ...model, variants: { low: { reasoningEffort: 'low' } } } },
         },
       },
       agent: {
         pinned: { mode: 'subagent', groups: ['base', 'developers'], model: 'fixture/alpha', variant: 'high' },
         'main-follower': { mode: 'primary', groups: ['primary'], prompt: 'Reply briefly.' },
         'small-follower': { mode: 'primary', groups: ['small'], prompt: 'Reply briefly.' },
-        compaction: { groups: ['base'] },
+        compaction: { groups: ['compact'] },
+        title: { groups: ['titles'] },
       },
     };
     const composer = {
       sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
       agent: {
-        modelPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
+        modelPresets: {
+          balanced: {
+            model: 'fixture/alpha',
+            variant: 'low',
+            parameters: {
+              temperature: 0.35,
+              topP: 0.65,
+              topK: 5,
+              maxOutputTokens: 64,
+              options: { reasoningEffort: 'medium', customSetting: { enabled: true, values: ['text', 1, null] } },
+            },
+          },
+        },
         prompts: { defaults: { append: ['{{include:@shared/default.md}}'] } },
         groups: {
+          titles: {
+            model: 'fixture/gamma',
+            parameters: { maxOutputTokens: 64, options: { reasoningEffort: 'medium' } },
+          },
+          compact: {
+            model: 'fixture/beta',
+            variant: 'low',
+            parameters: { options: { customSetting: { enabled: true } } },
+          },
           base: { model: 'fixture/beta', variant: 'high' },
           developers: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } },
           primary: { modelRef: 'opencode:model', variant: 'low' },
@@ -291,10 +317,11 @@ test(
     }
     const providers = await api<{ providers: { id: string; models: Record<string, unknown> }[] }>('/config/providers');
     assert.ok(Boolean(providers.providers.find((item) => item.id === 'fixture')?.models.beta));
-    const request = async (agent = 'worker') => {
+    const request = async (agent = 'worker', selection: Record<string, unknown> = {}) => {
       const session = await api<{ id: string }>('/session', { title: 'Synthetic integration check' });
       const result = await api<Message>(`/session/${session.id}/message`, {
         agent,
+        ...selection,
         parts: [{ type: 'text', text: 'Reply with verified.' }],
       });
       assert.equal(result.info.error, undefined, JSON.stringify(result.info.error));
@@ -305,6 +332,89 @@ test(
     const beforeReload = requests.find((body) => JSON.stringify(body).includes('INITIAL_WORKER_GUIDANCE'));
     assert.ok(beforeReload !== undefined, 'send expanded prompt text to the provider');
     assert.ok(!JSON.stringify(beforeReload).includes('{{include:'), 'never send unresolved directives');
+    assert.equal(beforeReload.temperature, 0.35);
+    assert.equal(beforeReload.top_p, 0.65);
+    assert.equal(beforeReload.max_tokens, 64);
+    assert.deepEqual(beforeReload.customSetting, { enabled: true, values: ['text', 1, null] });
+    assert.equal(beforeReload.reasoning_effort, 'low', 'native selected variant overrides custom options');
+    await request('worker', { variant: 'high' });
+    assert.equal(requests.at(-1)?.reasoning_effort, 'high');
+    assert.deepEqual(
+      requests.at(-1)?.customSetting,
+      { enabled: false, values: ['text', 1, null] },
+      'selected variant-only keys retain native precedence',
+    );
+    await request('worker', { model: { providerID: 'fixture', modelID: 'beta' } });
+    assert.notEqual(requests.at(-1)?.temperature, 0.35, 'different session model does not receive bound parameters');
+    assert.notEqual(requests.at(-1)?.max_tokens, 64);
+    await request('pinned');
+    assert.notEqual(requests.at(-1)?.temperature, 0.35, 'explicit same-model agent pin bypasses group parameters');
+    for (const variant of ['low', 'high']) {
+      const start = requests.length;
+      const untitled = await api<{ id: string }>('/session', {});
+      await api<Message>(`/session/${untitled.id}/message`, {
+        agent: 'worker',
+        variant,
+        parts: [{ type: 'text', text: 'Reply with verified.' }],
+      });
+      // The original worker variant must not be validated against the small title model.
+      for (let attempt = 0; attempt < 100 && !requests.slice(start).some((body) => body.model === 'gamma'); attempt++) {
+        await setTimeout(100);
+      }
+      const titleRequest = requests.slice(start).find((body) => body.model === 'gamma');
+      assert.ok(titleRequest !== undefined, `small title request dispatches for worker variant ${variant}`);
+      assert.equal(titleRequest.reasoning_effort, 'medium');
+      assert.equal(titleRequest.max_tokens, 64);
+    }
+
+    const compactSession = await api<{ id: string }>('/session', { title: 'Compaction variant regression' });
+    await api<Message>(`/session/${compactSession.id}/message`, {
+      agent: 'worker',
+      variant: 'high',
+      model: { providerID: 'fixture', modelID: 'alpha' },
+      parts: [{ type: 'text', text: 'Reply with verified.' }],
+    });
+    // Seed a pending compaction on a user message carrying the original variant.
+    // The summarize endpoint creates a new variant-less user message instead.
+    const pending = await api<{ info: { id: string }; parts: { id: string }[] }>(
+      `/session/${compactSession.id}/message`,
+      {
+        agent: 'worker',
+        variant: 'high',
+        model: { providerID: 'fixture', modelID: 'alpha' },
+        noReply: true,
+        parts: [{ type: 'text', text: 'Compact this history.' }],
+      },
+    );
+    const partID = pending.parts[0].id;
+    await api(
+      `/session/${compactSession.id}/message/${pending.info.id}/part/${partID}`,
+      {
+        id: partID,
+        sessionID: compactSession.id,
+        messageID: pending.info.id,
+        type: 'compaction',
+        auto: false,
+      },
+      'PATCH',
+    );
+    const compactStart = requests.length;
+    await api<Message>(`/session/${compactSession.id}/message`, {
+      messageID: pending.info.id,
+      agent: 'worker',
+      variant: 'high',
+      model: { providerID: 'fixture', modelID: 'alpha' },
+      parts: [],
+    });
+    const compactRequest = requests.slice(compactStart).find((body) => body.model === 'beta');
+    assert.ok(compactRequest !== undefined, 'native compaction dispatches to its configured different model');
+    assert.equal(compactRequest.reasoning_effort, 'high');
+    assert.deepEqual(
+      compactRequest.customSetting,
+      { enabled: false },
+      'native compaction retains original high variant precedence over Composer options',
+    );
+
     const nativeConfig = await api<{ references?: Record<string, unknown> }>('/config');
     assert.equal(nativeConfig.references?.['agent-prompts'], undefined, 'sources are not native prompt references');
     const skillSession = await api<{ id: string }>('/session', { title: 'Native skill composition check' });
@@ -391,6 +501,8 @@ test(
     assert.equal((await request()).info.modelID, 'beta');
     const reloadedRequest = requests.find((body) => JSON.stringify(body).includes('RELOADED_WORKER_GUIDANCE'));
     assert.ok(reloadedRequest !== undefined, 'reread fragments after token reload');
+    assert.notEqual(reloadedRequest.temperature, 0.35, 'removed preset parameters do not survive reload');
+    assert.notEqual(reloadedRequest.max_tokens, 64);
     assert.ok(!JSON.stringify(reloadedRequest).includes('INITIAL_WORKER_GUIDANCE'));
     await writeFile(
       join(project, 'opencode.json'),

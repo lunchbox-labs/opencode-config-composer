@@ -84,7 +84,9 @@ test('legacy settings retain group order and explicit pins with overwritten refe
   const agents = structuredClone(native.agent ?? {});
   applyDefaults(agents, result.settings.groups, { modelPresets: result.settings.modelPresets, native });
   assert.equal(agents.worker.model, 'fixture/next');
-  assert.equal(agents.worker.variant, 'high');
+  assert.equal(agents.worker.variant, undefined);
+  assert.equal(result.provenance['/agent/worker/variant'].operation, 'unset');
+  assert.equal(result.provenance['/agent/worker/variant'].overwritten[0].pointer, '/agent/groups/base/modelRef');
   assert.equal(agents.reviewer.model, 'fixture/small');
   assert.equal(agents.reviewer.variant, 'medium');
   assert.equal(agents.pinned.model, 'fixture/pinned');
@@ -226,6 +228,90 @@ test('explicit group variants retain the overridden preset and earlier candidate
   assert.equal(group.pointer, '/agent/groups/base/variant');
   const preset = group.overwritten[0];
   assert.deepEqual(preset.references, ['/agent/modelPresets/balanced/variant']);
-  assert.equal(preset.overwritten[0].pointer, '/agent/groups/earlier/variant');
+  assert.equal(preset.overwritten[0].operation, 'unset');
+  assert.equal(preset.overwritten[0].overwritten[0].pointer, '/agent/groups/earlier/variant');
   assert.deepEqual(result.provenance['/agent/plain/variant'].overwritten, []);
+});
+
+test('effective parameter origins track preset references, ordered nested overrides, replacements and resets', () => {
+  const custom = source({
+    agent: {
+      modelPresets: {
+        balanced: {
+          model: 'fixture/main',
+          parameters: {
+            temperature: 0.3,
+            options: { keep: true, nested: { left: 1, right: 2 }, replace: { stale: true }, array: [1, 2] },
+          },
+        },
+      },
+      groups: {
+        first: { modelRef: 'preset:balanced', parameters: { temperature: 0.5, options: { nested: { right: 3 } } } },
+        second: {
+          modelRef: 'preset:balanced',
+          parameters: {
+            temperature: 0.8,
+            options: { nested: { right: 4 }, replace: null, array: [3], 'slash/key': false },
+          },
+        },
+        reset: { model: 'fixture/other', parameters: { topK: 5 } },
+      },
+    },
+  });
+  const native = {
+    agent: {
+      worker: { groups: ['first', 'second'] },
+      reset: { groups: ['first', 'reset'] },
+      pinned: { model: 'fixture/pin', groups: ['first'] },
+    },
+  };
+  const result = resolveLegacy(custom, native);
+  const effective = resolveChoice(native.agent.worker, result.settings.groups, {
+    modelPresets: result.settings.modelPresets,
+  });
+  assert.equal(effective.parameters?.temperature, 0.8);
+  const parameter = result.provenance['/agent/worker/parameters/temperature'];
+  assert.ok(
+    Object.hasOwn(result.provenance, '/agent/worker/parameters/temperature'),
+    'effective parameter needs a winning origin',
+  );
+  assert.equal(parameter.pointer, '/agent/groups/second/parameters/temperature');
+  assert.equal(parameter.sourceId, custom.id);
+  assert.equal(parameter.operation, 'set');
+  assert.ok(
+    parameter.overwritten.some((candidate) => candidate.pointer === '/agent/groups/first/parameters/temperature'),
+  );
+  const preset = parameter.overwritten.find((candidate) => candidate.pointer === '/agent/groups/second/modelRef');
+  assert.deepEqual(preset?.references, ['/agent/modelPresets/balanced/parameters/temperature']);
+  const kept = result.provenance['/agent/worker/parameters/options/keep'];
+  assert.equal(kept.pointer, '/agent/groups/second/modelRef');
+  assert.deepEqual(kept.references, ['/agent/modelPresets/balanced/parameters/options/keep']);
+  assert.equal(result.provenance['/agent/worker/parameters/options/nested'].operation, 'merge');
+  assert.equal(
+    result.provenance['/agent/worker/parameters/options/nested/right'].pointer,
+    '/agent/groups/second/parameters/options/nested/right',
+  );
+  assert.equal(
+    result.provenance['/agent/worker/parameters/options/slash~1key'].pointer,
+    '/agent/groups/second/parameters/options/slash~1key',
+  );
+  assert.equal(result.provenance['/agent/worker/parameters/options/replace/stale'].operation, 'unset');
+  assert.equal(result.provenance['/agent/worker/parameters/options/array/1'].operation, 'unset');
+  assert.equal(
+    result.provenance['/agent/worker/parameters/options/array/0'].pointer,
+    '/agent/groups/second/parameters/options/array/0',
+  );
+  const reset = result.provenance['/agent/reset/parameters/temperature'];
+  assert.equal(reset.operation, 'unset');
+  assert.equal(reset.pointer, '/agent/groups/reset/model');
+  assert.equal(reset.overwritten[0].pointer, '/agent/groups/first/parameters/temperature');
+  assert.equal(result.provenance['/agent/reset/parameters/topK'].pointer, '/agent/groups/reset/parameters/topK');
+  assert.equal(result.provenance['/agent/pinned/parameters'], undefined);
+  const again = resolveLegacy(custom, native);
+  assert.deepEqual(again.provenance, result.provenance);
+  const removed = source({ agent: { groups: { first: { model: 'fixture/main' } } } });
+  assert.equal(
+    resolveLegacy(removed, { agent: { worker: { groups: ['first'] } } }).provenance['/agent/worker/parameters'],
+    undefined,
+  );
 });

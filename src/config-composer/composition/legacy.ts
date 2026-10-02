@@ -72,6 +72,86 @@ function replace(provenance: Record<string, FieldOrigin>, pointer: string, next:
   provenance[pointer] = { ...next, overwritten: Object.hasOwn(provenance, pointer) ? [previous] : [] };
 }
 
+// Parameter objects merge recursively; arrays/scalars replace. Keep effective
+// leaf origins separately from definition origins, including tombstones for removals.
+function parameterOrigin(provenance: Record<string, FieldOrigin>, pointer: string, next: FieldOrigin): void {
+  const previous = Object.hasOwn(provenance, pointer) ? [provenance[pointer]] : [];
+  provenance[pointer] = { ...next, overwritten: [...next.overwritten, ...previous] };
+}
+
+function unsetParameters(
+  provenance: Record<string, FieldOrigin>,
+  pointer: string,
+  cause: FieldOrigin,
+  includeRoot = true,
+): void {
+  for (const key of Object.keys(provenance)) {
+    if ((key.startsWith(`${pointer}/`) || (includeRoot && key === pointer)) && provenance[key].operation !== 'unset') {
+      parameterOrigin(provenance, key, { ...cause, operation: 'unset' });
+    }
+  }
+}
+
+function parameterTree(
+  previous: unknown,
+  value: unknown,
+  pointer: string,
+  provenance: Record<string, FieldOrigin>,
+  authored: (suffix: string) => FieldOrigin,
+  suffix = '',
+): unknown {
+  const next = authored(suffix);
+  const merging = record(previous) && record(value);
+  if (!merging) {
+    unsetParameters(provenance, pointer, next, false);
+  }
+  parameterOrigin(provenance, pointer, { ...next, operation: merging ? 'merge' : next.operation });
+  if (record(value)) {
+    const base = record(previous) ? previous : {};
+    return {
+      ...base,
+      ...Object.fromEntries(
+        Object.entries(value).map(([key, child]) => {
+          const segment = `/${escapePointer(key)}`;
+          return [key, parameterTree(base[key], child, pointer + segment, provenance, authored, suffix + segment)];
+        }),
+      ),
+    };
+  }
+  if (Array.isArray(value)) {
+    return value.map((child: unknown, index) =>
+      parameterTree(undefined, child, `${pointer}/${index}`, provenance, authored, `${suffix}/${index}`),
+    );
+  }
+  return value;
+}
+
+function groupParameterOrigins(
+  source: SourceDocument,
+  name: string,
+  group: GroupChoice,
+  settings: GroupOptions,
+): Record<string, FieldOrigin> {
+  const provenance: Record<string, FieldOrigin> = {};
+  let parameters: unknown;
+  if (group.modelRef?.startsWith('preset:') === true) {
+    const preset = group.modelRef.slice(7);
+    const inherited = settings.modelPresets[preset].parameters;
+    if (inherited !== undefined) {
+      parameters = parameterTree(undefined, inherited, '', provenance, (suffix) => ({
+        ...origin(`/agent/groups/${escapePointer(name)}/modelRef`, source.id),
+        references: [`/agent/modelPresets/${escapePointer(preset)}/parameters${suffix}`],
+      }));
+    }
+  }
+  if (group.parameters !== undefined) {
+    parameterTree(parameters, group.parameters, '', provenance, (suffix) =>
+      origin(`/agent/groups/${escapePointer(name)}/parameters${suffix}`, source.id),
+    );
+  }
+  return provenance;
+}
+
 function modelOrigins(
   agent: AgentSettings,
   pointer: string,
@@ -87,9 +167,22 @@ function modelOrigins(
     return;
   }
   Reflect.deleteProperty(provenance, `${pointer}/variant`);
+  let identity: { model?: string; modelRef?: string } = {};
+  let parameters: unknown;
   for (const name of agentGroups(agent, settings.groups)) {
     const group = settings.groups[name];
     const resolved = resolveGroup(group, context);
+    if (resolved.model !== undefined) {
+      if (resolved.model !== identity.model || resolved.modelRef !== identity.modelRef) {
+        const cause = groupOrigin(source, name, group, 'model');
+        if (Object.hasOwn(provenance, `${pointer}/variant`)) {
+          replace(provenance, `${pointer}/variant`, { ...cause, operation: 'unset' });
+        }
+        unsetParameters(provenance, `${pointer}/parameters`, cause);
+        parameters = undefined;
+      }
+      identity = resolved;
+    }
     if (
       group.variant !== undefined &&
       group.modelRef?.startsWith('preset:') === true &&
@@ -98,6 +191,22 @@ function modelOrigins(
       // Record the referenced candidate before its explicit group override so
       // both it and any earlier group remain in the overwrite chain.
       replace(provenance, `${pointer}/variant`, groupOrigin(source, name, { ...group, variant: undefined }, 'variant'));
+    }
+    if (resolved.parameters !== undefined) {
+      const candidates = groupParameterOrigins(source, name, group, settings);
+      const root = `${pointer}/parameters`;
+      parameters = parameterTree(parameters, resolved.parameters, root, provenance, (suffix) => candidates[suffix]);
+      // Preserve removals that occurred inside the preset + group composition,
+      // even when this is the first contributing group for the agent.
+      for (const [suffix, candidate] of Object.entries(candidates)) {
+        const key = root + suffix;
+        if (
+          candidate.operation === 'unset' &&
+          (!Object.hasOwn(provenance, key) || provenance[key].operation === 'unset')
+        ) {
+          parameterOrigin(provenance, key, candidate);
+        }
+      }
     }
     for (const field of ['model', 'variant'] as const) {
       if (resolved[field] !== undefined) {

@@ -206,10 +206,17 @@
       "additionalProperties": false,
       "required": ["model"],
       "properties": {
-        "model": { "description": "Required concrete model selected by this preset.", "$ref": "#/$defs/model" },
+        "model": {
+          "description": "Required concrete model selected by this preset.",
+          "$ref": "#/$defs/model"
+        },
         "variant": {
           "description": "Optional model variant inherited unless a group or agent specifies its own variant.",
           "$ref": "#/$defs/variant"
+        },
+        "parameters": {
+          "description": "Explicit request controls and custom provider options bound to this model.",
+          "$ref": "#/$defs/parameters"
         }
       }
     },
@@ -233,20 +240,104 @@
         "prompt": {
           "description": "Group prompt layers applied in membership order unless an agent sets inheritGroups to false.",
           "$ref": "#/$defs/prompt"
+        },
+        "parameters": {
+          "description": "Explicit request controls and custom provider options bound to this model.",
+          "$ref": "#/$defs/parameters"
         }
       },
       "not": {
         "description": "A group must not specify both a concrete model and a model reference.",
         "required": ["model", "modelRef"]
       },
-      "if": { "description": "Detect whether the group specifies a model variant.", "required": ["variant"] },
+      "if": {
+        "description": "Variant or parameters require a model binding.",
+        "anyOf": [
+          {
+            "required": ["variant"]
+          },
+          {
+            "required": ["parameters"]
+          }
+        ]
+      },
       "then": {
         "description": "A group variant requires either a concrete model or a model reference.",
         "anyOf": [
-          { "description": "A concrete model supplies the group variant's model.", "required": ["model"] },
-          { "description": "A model reference supplies the group variant's model.", "required": ["modelRef"] }
+          {
+            "description": "A concrete model supplies the group variant's model.",
+            "required": ["model"]
+          },
+          {
+            "description": "A model reference supplies the group variant's model.",
+            "required": ["modelRef"]
+          }
         ]
       }
+    },
+    "parameters": {
+      "description": "Model-bound request controls. Custom options are structurally validated, not verified provider support.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "topP": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "topK": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "options": {
+          "description": "Custom JSON object; at most 32 object/array levels and 1 MiB. Unknown provider support remains unverified.",
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": ["__proto__", "prototype", "constructor"]
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/customValue"
+          }
+        }
+      }
+    },
+    "customValue": {
+      "description": "JSON value. Runtime enforces finite numbers, duplicate-key rejection, nesting and size bounds.",
+      "anyOf": [
+        {
+          "type": ["string", "number", "boolean", "null"]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/customValue"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": ["__proto__", "prototype", "constructor"]
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/customValue"
+          }
+        }
+      ]
     }
   }
 }

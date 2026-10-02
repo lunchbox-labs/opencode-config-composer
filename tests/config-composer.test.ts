@@ -376,7 +376,7 @@ test('server hook strips group metadata and aligns built-in variant fallbacks', 
   assert.deepEqual(config.agent.title.options.groups, ['developers']);
   const input = {
     agent: 'compaction',
-    message: { variant: 'high' },
+    message: { model: { variant: 'high' } },
     model: {
       providerID: 'example',
       id: 'fast',
