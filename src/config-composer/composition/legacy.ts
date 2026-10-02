@@ -90,6 +90,15 @@ function modelOrigins(
   for (const name of agentGroups(agent, settings.groups)) {
     const group = settings.groups[name];
     const resolved = resolveGroup(group, context);
+    if (
+      group.variant !== undefined &&
+      group.modelRef?.startsWith('preset:') === true &&
+      settings.modelPresets[group.modelRef.slice(7)].variant !== undefined
+    ) {
+      // Record the referenced candidate before its explicit group override so
+      // both it and any earlier group remain in the overwrite chain.
+      replace(provenance, `${pointer}/variant`, groupOrigin(source, name, { ...group, variant: undefined }, 'variant'));
+    }
     for (const field of ['model', 'variant'] as const) {
       if (resolved[field] !== undefined) {
         replace(provenance, `${pointer}/${field}`, groupOrigin(source, name, group, field));
