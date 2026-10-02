@@ -64,7 +64,7 @@ jobs:
           name: lunchbox-labs-opencode-config-composer-release
           path: release/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
 
   publish:
     needs: verify
