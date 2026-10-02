@@ -1,0 +1,97 @@
+name: Publish @lunchbox-labs/opencode-config-composer
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable vX.Y.Z tag on main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lunchbox-labs-opencode-config-composer-publish
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'lunchbox-labs/opencode-config-composer' &&
+      ((github.event_name == 'release' && !github.event.release.prerelease) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    outputs:
+      access: ${{ steps.release.outputs.access }}
+    steps:
+      - name: Require a stable version tag
+        shell: bash
+        run: '[[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: refs/tags/${{ inputs.tag || github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a commit already on main
+        run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Validate release metadata
+        id: release
+        run: node scripts/validate-release.mjs
+      - run: npm ci
+      - run: npm run check
+      - name: Install the tested OpenCode binary
+        run: node scripts/opencode.mjs install "$RUNNER_TEMP/opencode"
+      - run: npm run test:native
+        env:
+          OPENCODE_BIN: ${{ runner.temp }}/opencode/node_modules/opencode-linux-x64/bin/opencode
+      - name: Pack the verified build
+        run: |
+          mkdir release
+          npm pack --ignore-scripts --pack-destination release
+          cd release
+          sha256sum ./*.tgz > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lunchbox-labs-opencode-config-composer-release
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: lunchbox-labs-opencode-config-composer-release
+          path: release
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Use a trusted-publishing-capable npm version
+        run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
+      - name: Publish the verified tarball with OIDC
+        working-directory: release
+        env:
+          NPM_ACCESS: ${{ needs.verify.outputs.access }}
+          # npm cannot generate provenance from this private source repository.
+          NPM_CONFIG_PROVENANCE: 'false'
+        run: |
+          sha256sum --check SHA256SUMS
+          npm publish ./*.tgz --ignore-scripts --access "$NPM_ACCESS" --tag latest

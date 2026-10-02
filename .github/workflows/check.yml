@@ -11,6 +11,20 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Validate GitHub workflows
+        shell: bash
+        run: |
+          actionlint_dir="$RUNNER_TEMP/actionlint"
+          mkdir -p "$actionlint_dir"
+          curl --fail --silent --show-error --location --retry 2 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz \
+            -o "$actionlint_dir/actionlint_1.7.7_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --retry 2 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_checksums.txt \
+            -o "$actionlint_dir/checksums.txt"
+          (cd "$actionlint_dir" && sha256sum --check --ignore-missing checksums.txt)
+          tar -xzf "$actionlint_dir/actionlint_1.7.7_linux_amd64.tar.gz" -C "$actionlint_dir" actionlint
+          "$actionlint_dir/actionlint" .github/workflows/*.yml
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
