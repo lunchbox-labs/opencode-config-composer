@@ -109,7 +109,22 @@ Later groups override earlier model fields. An explicit agent model remains pinn
 An explicit agent variant can override an inherited variant. Unsupported referenced variants fail at dispatch.
 Agent membership uses ordered `groups` arrays.
 A group may use a concrete `model`, `preset:NAME`, `opencode:model`, or `opencode:small_model`.
-Native references resolve against effective workspace defaults, including project overrides.
+Native references resolve against effective workspace defaults, including project overrides and Composer defaults.
+
+Set optional top-level `model` and `small_model` values in `config-composer.jsonc` to overlay native defaults:
+
+```jsonc
+{
+  "model": "provider/main-model",
+  "small_model": "provider/small-model"
+}
+```
+
+Each field overrides independently; omit it to inherit the native value or OpenCode fallback.
+Removing a field and reloading restores the underlying native default. These overlays do not rewrite native
+configuration or agent Markdown, and explicit agent pins and session/request model selections keep precedence.
+Values must use `provider/model` format; unset `opencode:model` or `opencode:small_model` references remain errors.
+Edit these Composer defaults in the settings file; the current `/agent-models` global-default editor edits native defaults.
 Missing presets and unset native references are errors. Presets cannot reference other presets.
 
 Prompt order is: default prepend, ordered group prepend, agent prepend, authored body,

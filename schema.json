@@ -90,6 +90,16 @@
       "description": "Reserved; leave empty. Native skill body includes use sourceDirectories.",
       "type": "object",
       "maxProperties": 0
+    },
+    "model": {
+      "description": "Runtime model default. Overrides the corresponding native default without changing native files or explicit model selections. Omit to inherit OpenCode configuration.",
+      "type": "string",
+      "pattern": "^[^\\s/]+\\/\\S+$"
+    },
+    "small_model": {
+      "description": "Runtime small_model default. Overrides the corresponding native default without changing native files or explicit model selections. Omit to inherit OpenCode configuration.",
+      "type": "string",
+      "pattern": "^[^\\s/]+\\/\\S+$"
     }
   },
   "$defs": {
