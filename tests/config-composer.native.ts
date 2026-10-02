@@ -1,3 +1,8 @@
+import {
+  type PermissionPolicy,
+  composePermissions,
+  explainPermission,
+} from '../src/config-composer/composition/permissions.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -123,8 +128,33 @@ test(
       limit: { context: 8192, output: 256 },
       variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } },
     };
+    const permissionCases: { name: string; layers: PermissionPolicy[]; action: 'allow' | 'deny' }[] = [
+      {
+        name: 'later-allow',
+        layers: [{ skill: { 'included-*': 'deny' } }, { skill: { '*': 'allow' } }],
+        action: 'allow',
+      },
+      {
+        name: 'later-deny',
+        layers: [{ skill: { '*': 'allow' } }, { skill: { 'included-*': 'deny' } }],
+        action: 'deny',
+      },
+      { name: 'outer-allow', layers: [{ skill: 'deny' }, { '*': 'allow' }], action: 'allow' },
+      {
+        name: 'retained-deny',
+        layers: [{ skill: { 'included-*': 'deny' }, '*': 'allow' }, { skill: { 'other-*': 'allow' } }],
+        action: 'deny',
+      },
+      {
+        name: 'reinsert-allow',
+        layers: [{ skill: { 'included-*': 'deny', '*': 'deny' } }, { skill: { 'included-*': 'allow' } }],
+        action: 'allow',
+      },
+      { name: 'replace-allow', layers: [{ skill: 'deny' }, { skill: { 'included-*': 'allow' } }], action: 'allow' },
+    ];
     const config = {
       plugin: [installed.directory],
+      permission: { skill: { 'included-*': 'deny' } },
       model: 'fixture/alpha',
       small_model: 'fixture/alpha',
       default_agent: 'worker',
@@ -138,6 +168,12 @@ test(
         },
       },
       agent: {
+        ...Object.fromEntries(
+          permissionCases.map(({ name, layers }) => [
+            name,
+            { mode: 'primary', groups: layers.map((_, index) => `${name}-${index}`) },
+          ]),
+        ),
         pinned: { mode: 'subagent', groups: ['base', 'developers'], model: 'fixture/alpha', variant: 'high' },
         'main-follower': { mode: 'primary', groups: ['primary'], prompt: 'Reply briefly.' },
         'small-follower': { mode: 'primary', groups: ['small'], prompt: 'Reply briefly.' },
@@ -147,9 +183,16 @@ test(
     const composer = {
       sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
       agent: {
+        permission: { skill: { '*': 'allow' }, task: { '*': 'allow' } },
+        overrides: { build: { permission: { skill: { '*': 'allow' } } } },
         modelPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
         prompts: { defaults: { append: ['{{include:@shared/default.md}}'] } },
         groups: {
+          ...Object.fromEntries(
+            permissionCases.flatMap(({ name, layers }) =>
+              layers.map((permission, index) => [`${name}-${index}`, { permission }]),
+            ),
+          ),
           base: { model: 'fixture/beta', variant: 'high' },
           developers: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } },
           primary: { modelRef: 'opencode:model', variant: 'low' },
@@ -186,6 +229,7 @@ test(
       join(project, 'opencode.json'),
       JSON.stringify({ model: 'fixture/beta', small_model: 'fixture/beta' }),
     );
+    const nativeBytes = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       XDG_CONFIG_HOME: join(root, 'config'),
@@ -254,7 +298,8 @@ test(
       model: { providerID: string; modelID: string };
       variant?: string;
       options: Record<string, unknown>;
-      prompt?: string;
+      prompt?: string | null;
+      permission: { permission: string; pattern: string; action: string }[];
     }
     interface Message {
       info: { modelID: string; error?: unknown };
@@ -264,6 +309,7 @@ test(
         tool?: string;
         state?: {
           status: string;
+          error?: string;
           title?: string;
           output?: string;
           metadata?: { name?: string; dir?: string; truncated?: boolean };
@@ -271,6 +317,69 @@ test(
       }[];
     }
     const agents = await api<Agent[]>('/agent');
+    const effective = await api<{
+      permission: PermissionPolicy;
+      agent: Record<string, { permission?: PermissionPolicy; prompt?: string }>;
+    }>('/config');
+    assert.equal(explainPermission(effective.permission, 'skill', 'included-skill').action, 'allow');
+    assert.equal(effective.agent.build.prompt, undefined, 'permission-only built-in override does not invent a prompt');
+    assert.ok(
+      agents
+        .find((agent) => agent.name === 'build')
+        ?.permission.some((rule) => rule.permission === 'task' && rule.action === 'allow') === true,
+      'enabled delegation inherits Composer defaults',
+    );
+    for (const fixture of permissionCases) {
+      const policy = composePermissions([effective.permission, ...fixture.layers]);
+      // /config's response schema enumerates known keys first; /agent exposes
+      // the ordered rules actually used by native permission evaluation.
+      assert.deepEqual(effective.agent[fixture.name].permission, policy);
+      const emitted = Object.entries(policy).flatMap(([permission, value]) =>
+        Object.entries(typeof value === 'string' ? { '*': value } : value).map(([pattern, action]) => ({
+          permission,
+          pattern,
+          action,
+        })),
+      );
+      const actual = agents.find((agent) => agent.name === fixture.name)?.permission;
+      assert.ok(actual !== undefined);
+      assert.deepEqual(
+        actual.filter((rule) => rule.permission !== 'external_directory').slice(-emitted.length),
+        emitted,
+      );
+      assert.equal(explainPermission(policy, 'skill', 'included-skill').action, fixture.action);
+      const session = await api<{ id: string }>('/session', { title: `Permission ${fixture.name}` });
+      const result = await api<Message>(`/session/${session.id}/message`, {
+        agent: fixture.name,
+        parts: [{ type: 'text', text: 'Load included-skill now.' }],
+      });
+      assert.equal(result.info.error, undefined, JSON.stringify(result.info.error));
+      const messages = await api<Message[]>(`/session/${session.id}/message`);
+      const tool = messages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
+      assert.equal(
+        tool?.state?.status,
+        fixture.action === 'allow' ? 'completed' : 'error',
+        `native evaluator: ${fixture.name}`,
+      );
+      if (fixture.action === 'deny') {
+        assert.match(tool.state.error ?? '', /rule which prevents you from using this specific tool call/);
+      }
+    }
+    assert.equal(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), nativeBytes);
+    for (const name of ['plan', 'build']) {
+      const rules = agents.find((agent) => agent.name === name)?.permission;
+      assert.ok(rules !== undefined);
+      assert.equal(
+        rules.findLast((rule) => rule.permission === 'skill')?.action,
+        'allow',
+        `${name} inherits the global policy`,
+      );
+      assert.equal(
+        agents.find((agent) => agent.name === name)?.prompt ?? undefined,
+        undefined,
+        `${name} has no synthesized prompt`,
+      );
+    }
     const worker = agents.find((agent) => agent.name === 'worker');
     assert.ok(worker !== undefined);
     assert.deepEqual(worker.model, { providerID: 'fixture', modelID: 'alpha' });

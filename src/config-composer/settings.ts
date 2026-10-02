@@ -1,3 +1,5 @@
+import { type PermissionPolicy, parsePermission } from './composition/permissions.ts';
+
 export interface ModelChoice {
   model?: string;
   variant?: string;
@@ -10,7 +12,7 @@ export interface AgentPrompt extends PromptOperations {
   inheritDefaults?: boolean;
   inheritGroups?: boolean;
 }
-export type GroupChoice = ModelChoice & { modelRef?: string; prompt?: PromptOperations };
+export type GroupChoice = ModelChoice & { modelRef?: string; prompt?: PromptOperations; permission?: PermissionPolicy };
 export type Groups = Record<string, GroupChoice>;
 export type ModelPresets = Record<string, ModelChoice>;
 export interface NativeModels {
@@ -22,6 +24,8 @@ export interface ResolutionContext {
   native?: NativeModels;
 }
 export interface GroupOptions extends NativeModels {
+  permission?: PermissionPolicy;
+  agentOverrides?: Record<string, { permission?: PermissionPolicy }>;
   groups: Groups;
   modelPresets: ModelPresets;
   promptSources: Record<string, string>;
@@ -131,19 +135,23 @@ export function promptOperations(value: unknown, perAgent = false): AgentPrompt 
 }
 
 export function groupChoice(value: unknown): GroupChoice {
-  if (!record(value) || Object.keys(value).some((key) => !['model', 'modelRef', 'variant', 'prompt'].includes(key))) {
-    throw new SettingsError('Group defaults support only model, modelRef, variant, and prompt.');
+  if (
+    !record(value) ||
+    Object.keys(value).some((key) => !['model', 'modelRef', 'variant', 'prompt', 'permission'].includes(key))
+  ) {
+    throw new SettingsError('Group defaults support only model, modelRef, variant, prompt, and permission.');
   }
+  const permission = value.permission === undefined ? {} : { permission: parsePermission(value.permission) };
   const prompt = value.prompt === undefined ? {} : { prompt: promptOperations(value.prompt) };
   if (value.modelRef === undefined) {
-    return { ...modelChoice({ model: value.model, variant: value.variant }), ...prompt };
+    return { ...modelChoice({ model: value.model, variant: value.variant }), ...prompt, ...permission };
   }
   if (value.model !== undefined) {
     throw new SettingsError('Choose either a model or a model reference, not both.');
   }
   const modelRef = modelReference(value.modelRef);
   const variant = variantName(value.variant);
-  return { modelRef, ...(variant !== undefined ? { variant } : {}), ...prompt };
+  return { modelRef, ...(variant !== undefined ? { variant } : {}), ...prompt, ...permission };
 }
 
 function configuredName(value: string): string {
@@ -224,8 +232,13 @@ export function readSettings(value: unknown): GroupOptions {
     throw new SettingsError('Config Composer sourceDirectories must map source aliases to directory paths.');
   }
   const agent = value.agent === undefined ? {} : value.agent;
-  if (!record(agent) || Object.keys(agent).some((key) => !['groups', 'modelPresets', 'prompts'].includes(key))) {
-    throw new SettingsError('Config Composer agent settings support only groups, modelPresets, and prompts.');
+  if (
+    !record(agent) ||
+    Object.keys(agent).some((key) => !['groups', 'modelPresets', 'prompts', 'permission', 'overrides'].includes(key))
+  ) {
+    throw new SettingsError(
+      'Config Composer agent settings support only groups, modelPresets, prompts, permission, and overrides.',
+    );
   }
   const prompts = agent.prompts === undefined ? {} : agent.prompts;
   if (!record(prompts) || Object.keys(prompts).some((key) => !['defaults', 'overrides'].includes(key))) {
@@ -246,8 +259,24 @@ export function readSettings(value: unknown): GroupOptions {
       defaults[field] = choice.model;
     }
   }
+  if (agent.overrides !== undefined && !record(agent.overrides)) {
+    throw new SettingsError('Agent overrides must be an object.');
+  }
+  const agentOverrides = Object.fromEntries(
+    Object.entries(record(agent.overrides) ? agent.overrides : {}).map(([name, value]) => {
+      if (!record(value) || Object.keys(value).some((key) => key !== 'permission')) {
+        throw new SettingsError('Agent overrides support only permission.');
+      }
+      return [
+        configuredName(name),
+        value.permission === undefined ? {} : { permission: parsePermission(value.permission) },
+      ];
+    }),
+  );
   return {
     ...defaults,
+    ...(agent.permission === undefined ? {} : { permission: parsePermission(agent.permission) }),
+    ...(agent.overrides === undefined ? {} : { agentOverrides }),
     ...normalizedSettings(
       {
         modelPresets: agent.modelPresets,

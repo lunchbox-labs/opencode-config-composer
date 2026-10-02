@@ -78,6 +78,27 @@
               }
             }
           }
+        },
+        "permission": {
+          "description": "Ordered native permission blocks. Later matching rules win, including broader allows.",
+          "$ref": "#/$defs/permission"
+        },
+        "overrides": {
+          "description": "Explicit Composer permissions keyed by agent name, applied after native agent permissions.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/agentName"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "permission": {
+                "description": "Ordered native permission blocks. Later matching rules win, including broader allows.",
+                "$ref": "#/$defs/permission"
+              }
+            }
+          }
         }
       }
     },
@@ -233,6 +254,10 @@
         "prompt": {
           "description": "Group prompt layers applied in membership order unless an agent sets inheritGroups to false.",
           "$ref": "#/$defs/prompt"
+        },
+        "permission": {
+          "description": "Ordered native permission blocks. Later matching rules win, including broader allows.",
+          "$ref": "#/$defs/permission"
         }
       },
       "not": {
@@ -245,6 +270,47 @@
         "anyOf": [
           { "description": "A concrete model supplies the group variant's model.", "required": ["model"] },
           { "description": "A model reference supplies the group variant's model.", "required": ["modelRef"] }
+        ]
+      }
+    },
+    "permissionKey": {
+      "description": "Integer-like keys cannot preserve authored order; unsafe object keys are unsupported.",
+      "type": "string",
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "^(?:0|[1-9][0-9]*)$"
+          },
+          {
+            "enum": ["__proto__", "constructor", "prototype"]
+          }
+        ]
+      }
+    },
+    "permissionAction": {
+      "description": "Native permission decision.",
+      "enum": ["allow", "ask", "deny"]
+    },
+    "permission": {
+      "description": "Native block order is preserved. Repeated blocks and patterns move to the end.",
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/permissionKey"
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/permissionAction"
+          },
+          {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/$defs/permissionKey"
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/permissionAction"
+            }
+          }
         ]
       }
     }
