@@ -5,6 +5,10 @@ OpenCode or Anomaly.
 
 Compose agent prompts, ordered group defaults, reusable model presets, and inline includes in native skill output.
 The TUI provides `/agent-models` and `/agent-groups` for reviewing and saving settings.
+Use `/reload-configs` to open the same reload flow as **Reload saved settings…** in `/agent-models`.
+Choose **Reload now…** and confirm to apply saved settings. Reload affects all workspaces on the server;
+wait for agents in every workspace to finish. Existing session model selections remain in effect.
+The command retains the menu's running-agent checks, filesystem checks, and success/error feedback.
 
 The npm package name is **`@lunchbox-labs/opencode-config-composer`**.
 
