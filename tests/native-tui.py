@@ -28,11 +28,17 @@ def screen():
     return escape.sub("", transcript.decode("utf-8", errors="replace"))
 
 
-def wait_for(*labels):
+def wait_for(*labels, retry_input=None):
     # Each checkpoint must appear in new terminal output, not a prior menu's text.
     start = len(transcript)
     deadline = time.monotonic() + 40
+    next_input = 0
     while time.monotonic() < deadline:
+        if retry_input is not None and time.monotonic() >= next_input:
+            # A restored dialog can render before its deferred input focus runs.
+            # Retry only an idempotent clear-and-type probe, never Enter.
+            os.write(terminal, retry_input)
+            next_input = time.monotonic() + 0.1
         ready, _, _ = select.select([terminal], [], [], 0.1)
         if not ready:
             continue
@@ -65,6 +71,16 @@ def command(name, label):
     os.write(terminal, b"\r")
 
 
+def filter_menu(query, label):
+    # A menu label alone does not prove that its search input is focused. Make
+    # the host process a nonmatching query first; this also removes every old
+    # option from the screen, so the next checkpoint proves filtering finished.
+    wait_for("No results found", retry_input=b"\x15zz-composer-focus-probe")
+    os.write(terminal, b"\x15" + query.encode())
+    wait_for(label)
+    os.write(terminal, b"\r")
+
+
 try:
     wait_for("Ask anything")
     command("/compose", "Compose configuration")
@@ -77,12 +93,15 @@ try:
     wait_for("Effective configuration and sources", "Running native defaults")
     os.write(terminal, b"\x1b")
     wait_for("Compose", "Agent models")
-    os.write(terminal, b"Agent models")
-    time.sleep(0.2)
-    os.write(terminal, b"\r")
-    wait_for("Agent models: scope", "Global defaults")
-    os.write(terminal, b"\x1b")
-    wait_for("Compose", "Agent models")
+    for _ in range(3):
+        filter_menu("models", "Agent models")
+        wait_for("Agent models: scope", "Global defaults")
+        os.write(terminal, b"\x1b")
+        wait_for("Compose", "Agent models")
+        filter_menu("groups", "Agent groups")
+        wait_for("Agent groups", "Create a new group")
+        os.write(terminal, b"\x1b")
+        wait_for("Compose", "Agent groups")
     os.write(terminal, b"\x1b")
     wait_for("Ask anything")
     print("native TUI rendered compose inspection and nested navigation")
