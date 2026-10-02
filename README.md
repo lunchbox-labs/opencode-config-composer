@@ -153,6 +153,7 @@ path resolution, and rejected internal imports outside the checkout. Unit tests 
 settings edits, reload tokens, TUI callbacks, and navigation.
 The package check also compiles installed declarations and rejected imports with `skipLibCheck: false`.
 TypeScript consumers need OpenCode's plugin/SDK and OpenTUI development types, as pinned in this repository.
+With TypeScript 6, include `"types": ["node"]` in the consumer's `compilerOptions`.
 These types are not runtime dependencies. Normal OpenCode configuration files need no TypeScript imports.
 `test:native` requires Python 3 and a Unix pseudo-terminal. It verifies the selected binary's version against
 `engines.opencode`, then loads an installed tarball in the native server and TUI.
