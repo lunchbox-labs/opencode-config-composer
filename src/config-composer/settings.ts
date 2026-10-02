@@ -21,7 +21,7 @@ export interface ResolutionContext {
   modelPresets?: ModelPresets;
   native?: NativeModels;
 }
-export interface GroupOptions {
+export interface GroupOptions extends NativeModels {
   groups: Groups;
   modelPresets: ModelPresets;
   promptSources: Record<string, string>;
@@ -213,7 +213,9 @@ function normalizedSettings(options: Record<string, unknown>, rawGroups: unknown
 export function readSettings(value: unknown): GroupOptions {
   if (
     !record(value) ||
-    Object.keys(value).some((key) => !['$schema', 'sourceDirectories', 'agent', 'command', 'skill'].includes(key)) ||
+    Object.keys(value).some(
+      (key) => !['$schema', 'model', 'small_model', 'sourceDirectories', 'agent', 'command', 'skill'].includes(key),
+    ) ||
     (value.$schema !== undefined && typeof value.$schema !== 'string')
   ) {
     throw new SettingsError('Use a valid Config Composer configuration object.');
@@ -237,15 +239,25 @@ export function readSettings(value: unknown): GroupOptions {
       );
     }
   }
-  return normalizedSettings(
-    {
-      modelPresets: agent.modelPresets,
-      promptSources: value.sourceDirectories,
-      promptDefaults: prompts.defaults,
-      agentPrompts: prompts.overrides,
-    },
-    agent.groups,
-  );
+  const defaults: NativeModels = {};
+  for (const field of ['model', 'small_model'] as const) {
+    const choice = modelChoice({ model: value[field] });
+    if (choice.model !== undefined) {
+      defaults[field] = choice.model;
+    }
+  }
+  return {
+    ...defaults,
+    ...normalizedSettings(
+      {
+        modelPresets: agent.modelPresets,
+        promptSources: value.sourceDirectories,
+        promptDefaults: prompts.defaults,
+        agentPrompts: prompts.overrides,
+      },
+      agent.groups,
+    ),
+  };
 }
 
 export function agentGroups(agent: AgentSettings, available?: Groups): string[] {
