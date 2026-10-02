@@ -146,10 +146,19 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
       const variants = record(modelVariants) ? modelVariants : {};
       const message: unknown = input.message;
       const requestModel = record(message) && record(message.model) ? message.model : undefined;
-      const requested = typeof requestModel?.variant === 'string' ? requestModel.variant : undefined;
+      // The title hook receives the original user's model/variant, but the host
+      // dispatches it with small=true and deliberately skips variant selection.
+      const small = input.agent === 'title';
+      const sameRequestModel =
+        (requestModel?.providerID === undefined || requestModel.providerID === model.providerID) &&
+        (requestModel?.modelID === undefined || requestModel.modelID === model.id);
+      const requested =
+        !small && sameRequestModel && typeof requestModel?.variant === 'string' ? requestModel.variant : undefined;
       const choice = choices[input.agent];
-      // Do not apply a referenced default to a different session-selected model.
+      // Validate normal variants, plus the explicit legacy fallback materialized below.
+      // Never validate the original worker variant for a small title dispatch.
       if (
+        (!small || Object.hasOwn(agents[input.agent]?.options ?? {}, 'reasoningEffort')) &&
         choice !== undefined &&
         (choice.source === 'group' || (choice.modelRef !== undefined && choice.modelRef !== '')) &&
         choice.model === selected
@@ -182,7 +191,7 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
         if (explicit.maxOutputTokens !== undefined) {
           output.maxOutputTokens = explicit.maxOutputTokens;
         }
-        const selectedVariant = input.agent === 'title' ? undefined : variants[requested ?? choice?.variant ?? ''];
+        const selectedVariant = small ? undefined : variants[requested ?? choice?.variant ?? ''];
         output.options = mergeOptions(
           output.options,
           unprotectedOptions(explicit.options ?? {}, [
