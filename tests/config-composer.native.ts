@@ -154,7 +154,7 @@ test(
     ];
     const config = {
       plugin: [installed.directory],
-      permission: { skill: { 'included-*': 'deny' } },
+      permission: { skill: { 'included-*': 'deny' } } satisfies PermissionPolicy,
       model: 'fixture/alpha',
       small_model: 'fixture/alpha',
       default_agent: 'worker',
@@ -183,7 +183,15 @@ test(
     const composer = {
       sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
       agent: {
-        permission: { skill: { '*': 'allow' }, task: { '*': 'allow' } },
+        permission: {
+          skill: { '*': 'allow' },
+          task: { '*': 'allow' },
+          webfetch: 'allow',
+          question: 'ask',
+          todowrite: 'allow',
+          websearch: 'deny',
+          doom_loop: 'ask',
+        } satisfies PermissionPolicy,
         overrides: { build: { permission: { skill: { '*': 'allow' } } } },
         modelPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
         prompts: { defaults: { append: ['{{include:@shared/default.md}}'] } },
@@ -322,6 +330,11 @@ test(
       agent: Record<string, { permission?: PermissionPolicy; prompt?: string }>;
     }>('/config');
     assert.equal(explainPermission(effective.permission, 'skill', 'included-skill').action, 'allow');
+    assert.equal(effective.permission.webfetch, 'allow');
+    assert.equal(effective.permission.question, 'ask');
+    assert.equal(effective.permission.todowrite, 'allow');
+    assert.equal(effective.permission.websearch, 'deny');
+    assert.equal(effective.permission.doom_loop, 'ask');
     assert.equal(effective.agent.build.prompt, undefined, 'permission-only built-in override does not invent a prompt');
     assert.ok(
       agents
@@ -330,7 +343,7 @@ test(
       'enabled delegation inherits Composer defaults',
     );
     for (const fixture of permissionCases) {
-      const policy = composePermissions([effective.permission, ...fixture.layers]);
+      const policy = composePermissions([config.permission, composer.agent.permission, ...fixture.layers]);
       // /config's response schema enumerates known keys first; /agent exposes
       // the ordered rules actually used by native permission evaluation.
       assert.deepEqual(effective.agent[fixture.name].permission, policy);
