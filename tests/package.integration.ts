@@ -33,6 +33,7 @@ test('the tarball runs outside the checkout with only production dependencies', 
     JSON.stringify({
       compilerOptions: {
         target: 'ES2023',
+        types: ['node'],
         module: 'NodeNext',
         moduleResolution: 'NodeNext',
         resolveJsonModule: true,
