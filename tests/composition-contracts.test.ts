@@ -84,7 +84,9 @@ test('legacy settings retain group order and explicit pins with overwritten refe
   const agents = structuredClone(native.agent ?? {});
   applyDefaults(agents, result.settings.groups, { modelPresets: result.settings.modelPresets, native });
   assert.equal(agents.worker.model, 'fixture/next');
-  assert.equal(agents.worker.variant, 'high');
+  assert.equal(agents.worker.variant, undefined);
+  assert.equal(result.provenance['/agent/worker/variant'].operation, 'unset');
+  assert.equal(result.provenance['/agent/worker/variant'].overwritten[0].pointer, '/agent/groups/base/modelRef');
   assert.equal(agents.reviewer.model, 'fixture/small');
   assert.equal(agents.reviewer.variant, 'medium');
   assert.equal(agents.pinned.model, 'fixture/pinned');
@@ -226,6 +228,7 @@ test('explicit group variants retain the overridden preset and earlier candidate
   assert.equal(group.pointer, '/agent/groups/base/variant');
   const preset = group.overwritten[0];
   assert.deepEqual(preset.references, ['/agent/modelPresets/balanced/variant']);
-  assert.equal(preset.overwritten[0].pointer, '/agent/groups/earlier/variant');
+  assert.equal(preset.overwritten[0].operation, 'unset');
+  assert.equal(preset.overwritten[0].overwritten[0].pointer, '/agent/groups/earlier/variant');
   assert.deepEqual(result.provenance['/agent/plain/variant'].overwritten, []);
 });

@@ -120,6 +120,7 @@ test(
     assert.ok(address !== null && typeof address !== 'string');
     const model = {
       name: 'Synthetic model',
+      temperature: true,
       limit: { context: 8192, output: 256 },
       variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } },
     };
@@ -142,12 +143,25 @@ test(
         'main-follower': { mode: 'primary', groups: ['primary'], prompt: 'Reply briefly.' },
         'small-follower': { mode: 'primary', groups: ['small'], prompt: 'Reply briefly.' },
         compaction: { groups: ['base'] },
+        title: { groups: ['developers'] },
       },
     };
     const composer = {
       sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
       agent: {
-        modelPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
+        modelPresets: {
+          balanced: {
+            model: 'fixture/alpha',
+            variant: 'low',
+            parameters: {
+              temperature: 0.35,
+              topP: 0.65,
+              topK: 5,
+              maxOutputTokens: 64,
+              options: { reasoningEffort: 'medium', customSetting: { enabled: true, values: ['text', 1, null] } },
+            },
+          },
+        },
         prompts: { defaults: { append: ['{{include:@shared/default.md}}'] } },
         groups: {
           base: { model: 'fixture/beta', variant: 'high' },
@@ -291,10 +305,11 @@ test(
     }
     const providers = await api<{ providers: { id: string; models: Record<string, unknown> }[] }>('/config/providers');
     assert.ok(Boolean(providers.providers.find((item) => item.id === 'fixture')?.models.beta));
-    const request = async (agent = 'worker') => {
+    const request = async (agent = 'worker', selection: Record<string, unknown> = {}) => {
       const session = await api<{ id: string }>('/session', { title: 'Synthetic integration check' });
       const result = await api<Message>(`/session/${session.id}/message`, {
         agent,
+        ...selection,
         parts: [{ type: 'text', text: 'Reply with verified.' }],
       });
       assert.equal(result.info.error, undefined, JSON.stringify(result.info.error));
@@ -305,6 +320,31 @@ test(
     const beforeReload = requests.find((body) => JSON.stringify(body).includes('INITIAL_WORKER_GUIDANCE'));
     assert.ok(beforeReload !== undefined, 'send expanded prompt text to the provider');
     assert.ok(!JSON.stringify(beforeReload).includes('{{include:'), 'never send unresolved directives');
+    assert.equal(beforeReload.temperature, 0.35);
+    assert.equal(beforeReload.top_p, 0.65);
+    assert.equal(beforeReload.max_tokens, 64);
+    assert.deepEqual(beforeReload.customSetting, { enabled: true, values: ['text', 1, null] });
+    assert.equal(beforeReload.reasoning_effort, 'low', 'native selected variant overrides custom options');
+    await request('worker', { variant: 'high' });
+    assert.equal(requests.at(-1)?.reasoning_effort, 'high');
+    await request('worker', { model: { providerID: 'fixture', modelID: 'beta' } });
+    assert.notEqual(requests.at(-1)?.temperature, 0.35, 'different session model does not receive bound parameters');
+    assert.notEqual(requests.at(-1)?.max_tokens, 64);
+    await request('pinned');
+    assert.notEqual(requests.at(-1)?.temperature, 0.35, 'explicit same-model agent pin bypasses group parameters');
+    const untitled = await api<{ id: string }>('/session', {});
+    await api<Message>(`/session/${untitled.id}/message`, {
+      agent: 'worker',
+      parts: [{ type: 'text', text: 'Reply with verified.' }],
+    });
+    // Native title generation dispatches with small=true and deliberately skips variants.
+    for (let attempt = 0; attempt < 100 && !requests.some((body) => body.reasoning_effort === 'medium'); attempt++) {
+      await setTimeout(100);
+    }
+    const titleRequest = requests.find((body) => body.reasoning_effort === 'medium');
+    assert.ok(titleRequest !== undefined, 'small title requests receive explicit options without a normal variant');
+    assert.equal(titleRequest.max_tokens, 64);
+
     const nativeConfig = await api<{ references?: Record<string, unknown> }>('/config');
     assert.equal(nativeConfig.references?.['agent-prompts'], undefined, 'sources are not native prompt references');
     const skillSession = await api<{ id: string }>('/session', { title: 'Native skill composition check' });
@@ -391,6 +431,8 @@ test(
     assert.equal((await request()).info.modelID, 'beta');
     const reloadedRequest = requests.find((body) => JSON.stringify(body).includes('RELOADED_WORKER_GUIDANCE'));
     assert.ok(reloadedRequest !== undefined, 'reread fragments after token reload');
+    assert.notEqual(reloadedRequest.temperature, 0.35, 'removed preset parameters do not survive reload');
+    assert.notEqual(reloadedRequest.max_tokens, 64);
     assert.ok(!JSON.stringify(reloadedRequest).includes('INITIAL_WORKER_GUIDANCE'));
     await writeFile(
       join(project, 'opencode.json'),

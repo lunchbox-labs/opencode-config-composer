@@ -106,9 +106,9 @@ test('ordered memberships merge fields and explicit agent models keep their prec
   };
   applyDefaults(agents, settings.groups, context);
   assert.equal(resolveChoice({ groups: ['base', 'developers'] }, settings.groups, context).modelRef, undefined);
-  assert.equal(resolveChoice({ groups: ['base', 'developers'] }, settings.groups, context).variant, 'high');
+  assert.equal(resolveChoice({ groups: ['base', 'developers'] }, settings.groups, context).variant, undefined);
   assert.equal(agents.worker.model, 'fixture/next');
-  assert.equal(agents.worker.variant, 'high');
+  assert.equal(agents.worker.variant, undefined);
   assert.equal(agents.reviewer.model, 'fixture/small');
   assert.equal(agents.reviewer.variant, 'medium');
   assert.equal(agents.pinned.model, 'fixture/pinned');

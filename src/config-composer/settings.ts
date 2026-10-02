@@ -1,4 +1,6 @@
+import { type ModelParameters, mergeParameters, parseParameters } from './composition/parameters.ts';
 export interface ModelChoice {
+  parameters?: ModelParameters;
   model?: string;
   variant?: string;
 }
@@ -77,19 +79,20 @@ function variantName(value: unknown): string | undefined {
 }
 
 export function modelChoice(value: unknown): ModelChoice {
-  if (!record(value) || Object.keys(value).some((key) => !['model', 'variant'].includes(key))) {
-    throw new SettingsError('Model choices support only model and variant.');
+  if (!record(value) || Object.keys(value).some((key) => !['model', 'variant', 'parameters'].includes(key))) {
+    throw new SettingsError('Model choices support only model, variant, and parameters.');
   }
   if (value.model !== undefined && (typeof value.model !== 'string' || !/^[^\s/]+\/\S+$/.test(value.model))) {
     throw new SettingsError('Select a model in provider/model format.');
   }
   const variant = variantName(value.variant);
-  if (variant !== undefined && value.model === undefined) {
-    throw new SettingsError('A variant requires a model or a group model reference.');
+  if ((variant !== undefined || value.parameters !== undefined) && value.model === undefined) {
+    throw new SettingsError('A variant or parameters requires a model or a group model reference.');
   }
   return {
     ...(value.model !== undefined ? { model: value.model } : {}),
     ...(variant !== undefined ? { variant } : {}),
+    ...(value.parameters !== undefined ? { parameters: parseParameters(value.parameters) } : {}),
   };
 }
 
@@ -131,19 +134,27 @@ export function promptOperations(value: unknown, perAgent = false): AgentPrompt 
 }
 
 export function groupChoice(value: unknown): GroupChoice {
-  if (!record(value) || Object.keys(value).some((key) => !['model', 'modelRef', 'variant', 'prompt'].includes(key))) {
-    throw new SettingsError('Group defaults support only model, modelRef, variant, and prompt.');
+  if (
+    !record(value) ||
+    Object.keys(value).some((key) => !['model', 'modelRef', 'variant', 'parameters', 'prompt'].includes(key))
+  ) {
+    throw new SettingsError('Group defaults support only model, modelRef, variant, parameters, and prompt.');
   }
   const prompt = value.prompt === undefined ? {} : { prompt: promptOperations(value.prompt) };
   if (value.modelRef === undefined) {
-    return { ...modelChoice({ model: value.model, variant: value.variant }), ...prompt };
+    return { ...modelChoice({ model: value.model, variant: value.variant, parameters: value.parameters }), ...prompt };
   }
   if (value.model !== undefined) {
     throw new SettingsError('Choose either a model or a model reference, not both.');
   }
   const modelRef = modelReference(value.modelRef);
   const variant = variantName(value.variant);
-  return { modelRef, ...(variant !== undefined ? { variant } : {}), ...prompt };
+  return {
+    modelRef,
+    ...(variant !== undefined ? { variant } : {}),
+    ...(value.parameters !== undefined ? { parameters: parseParameters(value.parameters) } : {}),
+    ...prompt,
+  };
 }
 
 function configuredName(value: string): string {
@@ -306,7 +317,14 @@ export function resolveGroup(choice: GroupChoice, context: ResolutionContext = {
   if (defaults.model === undefined || defaults.model === '') {
     throw new SettingsError(`${selected.modelRef} has no configured model. Set its model or choose OpenCode fallback.`);
   }
-  return { modelRef: selected.modelRef, model: defaults.model, variant: selected.variant ?? defaults.variant };
+  return {
+    modelRef: selected.modelRef,
+    model: defaults.model,
+    variant: selected.variant ?? defaults.variant,
+    ...(defaults.parameters !== undefined || selected.parameters !== undefined
+      ? { parameters: mergeParameters(defaults.parameters, selected.parameters) }
+      : {}),
+  };
 }
 
 export function resolveChoice(agent: AgentSettings, groups: Groups, context: ResolutionContext = {}): EffectiveChoice {
@@ -327,11 +345,18 @@ export function resolveChoice(agent: AgentSettings, groups: Groups, context: Res
     }
     const next = resolveGroup(groups[name], context);
     if (next.model !== undefined) {
+      if (next.model !== defaults.model || next.modelRef !== defaults.modelRef) {
+        delete defaults.variant;
+        delete defaults.parameters;
+      }
       defaults.model = next.model;
       defaults.modelRef = next.modelRef;
     }
     if (next.variant !== undefined) {
       defaults.variant = next.variant;
+    }
+    if (next.parameters !== undefined) {
+      defaults.parameters = mergeParameters(defaults.parameters, next.parameters);
     }
   }
   if (defaults.model !== undefined && defaults.model !== '') {
@@ -341,6 +366,7 @@ export function resolveChoice(agent: AgentSettings, groups: Groups, context: Res
       model: defaults.model,
       variant: agent.variant ?? defaults.variant,
       source: 'group',
+      ...(defaults.parameters !== undefined ? { parameters: defaults.parameters } : {}),
       ...(defaults.modelRef !== undefined && defaults.modelRef !== '' ? { modelRef: defaults.modelRef } : {}),
     };
   }

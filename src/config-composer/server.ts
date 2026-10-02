@@ -9,6 +9,7 @@ import {
 } from './settings.ts';
 import { loadConfiguration } from './configuration.ts';
 import { composePrompts, expandIncludes } from './prompts.ts';
+import { filterParameters, mergeOptions, parametersForDispatch, unprotectedOptions } from './composition/parameters.ts';
 import { resolveNativeDefaults } from './composition/defaults.ts';
 
 function agentConfigurations(value: unknown): value is Record<string, AgentSettings> {
@@ -158,6 +159,36 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
             'The group model does not support this reasoning variant. Update the agent or group settings.',
           );
         }
+      }
+      const parameters =
+        choice?.model !== undefined && choice.parameters !== undefined
+          ? parametersForDispatch(choice.model, selected, choice.parameters)
+          : undefined;
+      if (parameters !== undefined) {
+        const explicit = filterParameters(parameters, model);
+        const agent = agents[input.agent];
+        // Native temperature/top_p are agent-wide and would leak these model-bound values
+        // to a different session selection. Supply only explicit controls at dispatch instead.
+        if (explicit.temperature !== undefined && agent?.temperature === undefined) {
+          output.temperature = explicit.temperature;
+        }
+        if (explicit.topP !== undefined && agent?.top_p === undefined && agent?.topP === undefined) {
+          output.topP = explicit.topP;
+        }
+        if (explicit.topK !== undefined) {
+          output.topK = explicit.topK;
+        }
+        if (explicit.maxOutputTokens !== undefined) {
+          output.maxOutputTokens = explicit.maxOutputTokens;
+        }
+        const selectedVariant = input.agent === 'title' ? undefined : variants[requested ?? choice?.variant ?? ''];
+        output.options = mergeOptions(
+          output.options,
+          unprotectedOptions(explicit.options ?? {}, [
+            agent?.options ?? {},
+            ...(record(selectedVariant) ? [selectedVariant] : []),
+          ]),
+        );
       }
       // Small title requests skip native variant selection. Align the built-in fallbacks
       // with the configured model's variant without forwarding stale provider-specific values.
