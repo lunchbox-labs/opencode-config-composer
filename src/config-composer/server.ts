@@ -145,7 +145,8 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
       const modelVariants: unknown = 'variants' in model ? model.variants : undefined;
       const variants = record(modelVariants) ? modelVariants : {};
       const message: unknown = input.message;
-      const requested = record(message) && typeof message.variant === 'string' ? message.variant : undefined;
+      const requestModel = record(message) && record(message.model) ? message.model : undefined;
+      const requested = typeof requestModel?.variant === 'string' ? requestModel.variant : undefined;
       const choice = choices[input.agent];
       // Do not apply a referenced default to a different session-selected model.
       if (

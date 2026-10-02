@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Hooks, PluginInput } from '@opencode-ai/plugin';
 import server from '../src/server.ts';
 import { readSettings, resolveChoice } from '../src/config-composer/settings.ts';
+import { loadSnapshot, planChange } from '../src/config-composer/storage.ts';
 import { parseConfiguration } from '../src/config-composer/configuration.ts';
 
 // Keep imports behind parser acceptance so RED demonstrates missing behavior, not a missing module.
@@ -182,7 +183,7 @@ test('dispatch retains native pins and variants, scopes small requests, and remo
         limit: { output: 128 },
         variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high', nested: { kept: 9 } } },
       },
-      message: { variant },
+      message: { model: { variant } },
       provider: {},
       sessionID: 'test',
     } as unknown as Parameters<NonNullable<Hooks['chat.params']>>[0];
@@ -239,4 +240,79 @@ test('known compatible adapter verifies string routing without inventing provide
   assert.equal(metadata.controls.topK.available, false);
   assert.deepEqual(filterParameters({ topK: 4 }, model), {});
   assert.doesNotThrow(() => filterParameters({ options: { reasoningEffort: 4 } }, { api: { npm: 'unknown' } }));
+});
+
+test('existing model editors preserve unchanged bindings and clear changed or removed parameter bindings', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-parameter-edits-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    join(root, 'opencode.jsonc'),
+    JSON.stringify({ plugin: ['@lunchbox-labs/opencode-config-composer'], model: 'a/one', small_model: 'a/small' }),
+  );
+  const parameters = { temperature: 0.4, options: { oldOnly: true } };
+  const settings = {
+    agent: {
+      modelPresets: { sample: { model: 'a/one', parameters } },
+      groups: {
+        direct: { model: 'a/one', parameters, prompt: { append: ['Keep'] } },
+        linked: { modelRef: 'preset:sample', parameters },
+        global: { modelRef: 'opencode:model', parameters },
+        small: { modelRef: 'opencode:small_model', parameters },
+      },
+    },
+  };
+  await writeFile(join(root, 'config-composer.jsonc'), JSON.stringify(settings));
+  const snapshot = await loadSnapshot(root);
+  const planned = (change: Parameters<typeof planChange>[1]) => {
+    const plan = planChange(snapshot, change);
+    const text =
+      plan.edits.find((edit) => edit.file.path === snapshot.settingsFile.path)?.text ?? snapshot.settingsFile.text;
+    return readSettings(parseConfiguration(text));
+  };
+  assert.deepEqual(
+    planned({ kind: 'preset', name: 'sample', choice: { model: 'a/one', variant: 'high' } }).modelPresets.sample
+      .parameters,
+    parameters,
+  );
+  assert.equal(
+    planned({ kind: 'group', name: 'direct', choice: { model: 'b/two' } }).groups.direct.parameters,
+    undefined,
+  );
+  assert.equal(planned({ kind: 'group', name: 'direct', choice: {} }).groups.direct.parameters, undefined);
+  assert.equal(
+    planned({ kind: 'group', name: 'linked', choice: { modelRef: 'opencode:model' } }).groups.linked.parameters,
+    undefined,
+  );
+  assert.deepEqual(
+    planned({ kind: 'group', name: 'direct', choice: { model: 'a/one', variant: 'high' } }).groups.direct.parameters,
+    parameters,
+  );
+  assert.deepEqual(
+    planned({ kind: 'group', name: 'direct', choice: { model: 'b/two', parameters: { topP: 0.5 } } }).groups.direct
+      .parameters,
+    { topP: 0.5 },
+  );
+  const changed = planned({ kind: 'preset', name: 'sample', choice: { model: 'b/two' } });
+  assert.equal(changed.modelPresets.sample.parameters, undefined);
+  assert.equal(changed.groups.linked.parameters, undefined);
+  assert.deepEqual(changed.groups.direct.parameters, parameters);
+  const global = planned({ kind: 'global', field: 'model', model: 'b/two' });
+  assert.equal(global.groups.global.parameters, undefined);
+  assert.deepEqual(global.groups.small.parameters, parameters);
+  const bulk = planned({ kind: 'all', choice: { model: 'b/two' } });
+  for (const group of Object.values(bulk.groups)) {
+    assert.equal(group.parameters, undefined);
+  }
+  assert.equal(bulk.modelPresets.sample.parameters, undefined);
+  assert.deepEqual(bulk.groups.direct.prompt, { append: ['Keep'] });
+  await writeFile(join(root, 'config-composer.jsonc'), JSON.stringify({ ...settings, model: 'overlay/main' }));
+  const overlaid = await loadSnapshot(root);
+  const plan = planChange(overlaid, { kind: 'global', field: 'model', model: 'b/two' });
+  const text =
+    plan.edits.find((edit) => edit.file.path === overlaid.settingsFile.path)?.text ?? overlaid.settingsFile.text;
+  assert.deepEqual(
+    readSettings(parseConfiguration(text)).groups.global.parameters,
+    parameters,
+    'a native edit masked by the Composer default does not change the binding',
+  );
 });

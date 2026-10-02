@@ -208,7 +208,7 @@ test('server references use the effective config and reject unsupported referenc
   await hooks['chat.params']!(override, output);
   const requestVariant = {
     ...invalid,
-    message: { variant: 'low' },
+    message: { model: { variant: 'low' } },
     model: {
       providerID: 'fixture',
       id: 'next',

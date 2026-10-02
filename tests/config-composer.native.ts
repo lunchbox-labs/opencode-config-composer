@@ -122,7 +122,10 @@ test(
       name: 'Synthetic model',
       temperature: true,
       limit: { context: 8192, output: 256 },
-      variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } },
+      variants: {
+        low: { reasoningEffort: 'low' },
+        high: { reasoningEffort: 'high', customSetting: { enabled: false } },
+      },
     };
     const config = {
       plugin: [installed.directory],
@@ -327,6 +330,11 @@ test(
     assert.equal(beforeReload.reasoning_effort, 'low', 'native selected variant overrides custom options');
     await request('worker', { variant: 'high' });
     assert.equal(requests.at(-1)?.reasoning_effort, 'high');
+    assert.deepEqual(
+      requests.at(-1)?.customSetting,
+      { enabled: false, values: ['text', 1, null] },
+      'selected variant-only keys retain native precedence',
+    );
     await request('worker', { model: { providerID: 'fixture', modelID: 'beta' } });
     assert.notEqual(requests.at(-1)?.temperature, 0.35, 'different session model does not receive bound parameters');
     assert.notEqual(requests.at(-1)?.max_tokens, 64);
