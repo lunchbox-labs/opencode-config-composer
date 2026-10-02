@@ -1,15 +1,23 @@
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
-import { type AgentSettings, type EffectiveChoice, SettingsError, record, resolveChoice } from './settings.ts';
+import {
+  type AgentSettings,
+  type EffectiveChoice,
+  type NativeModels,
+  SettingsError,
+  record,
+  resolveChoice,
+} from './settings.ts';
 import { loadConfiguration } from './configuration.ts';
 import { composePrompts, expandIncludes } from './prompts.ts';
+import { resolveNativeDefaults } from './composition/defaults.ts';
 
 function agentConfigurations(value: unknown): value is Record<string, AgentSettings> {
   return record(value) && Object.values(value).every(record);
 }
 
 const ConfigComposerPlugin: Plugin = async (_input, options) => {
-  const { settings } = await loadConfiguration(options);
-  const { groups, modelPresets } = settings;
+  let { settings } = await loadConfiguration(options);
+  const defaults = new WeakMap<object, { native: NativeModels; applied: NativeModels }>();
   let agents: Partial<Record<string, AgentSettings>> = {};
   let choices: Partial<Record<string, EffectiveChoice>> = {};
   const authored = new WeakMap<
@@ -42,7 +50,21 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
       if (!agentConfigurations(configured)) {
         throw new SettingsError('An agent configuration must be an object.');
       }
-      const context = { modelPresets, native: config };
+      const nextSettings = (await loadConfiguration(options)).settings;
+      const { groups, modelPresets } = nextSettings;
+      const previousDefaults = defaults.get(config);
+      const native: NativeModels = {};
+      for (const field of ['model', 'small_model'] as const) {
+        const value =
+          previousDefaults !== undefined && config[field] === previousDefaults.applied[field]
+            ? previousDefaults.native[field]
+            : config[field];
+        if (value !== undefined) {
+          native[field] = value;
+        }
+      }
+      const effective = resolveNativeDefaults(native, nextSettings);
+      const context = { modelPresets, native: effective };
       const staged = Object.fromEntries(
         Object.entries(configured).map(([name, agent]) => {
           const previous = authored.get(agent);
@@ -64,7 +86,20 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
           .filter(([, agent]) => agent.disable !== true)
           .map(([name, agent]) => [name, resolveChoice(agent, groups, context)]),
       );
-      const prompts = await composePrompts(staged, settings);
+      const prompts = await composePrompts(staged, nextSettings);
+      // Commit only after every reference and prompt has validated.
+      if (effective.model === undefined) {
+        delete config.model;
+      } else {
+        config.model = effective.model;
+      }
+      if (effective.small_model === undefined) {
+        delete config.small_model;
+      } else {
+        config.small_model = effective.small_model;
+      }
+      defaults.set(config, { native, applied: effective });
+      settings = nextSettings;
       for (const [name, agent] of Object.entries(configured)) {
         if (agent.disable === true) {
           continue;

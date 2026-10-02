@@ -403,6 +403,55 @@ test(
       assert.equal((await request(name)).info.modelID, 'alpha');
     }
     assert.equal(refreshed.find((agent) => agent.name === 'worker')?.model.modelID, 'beta');
+    // Overlay only Composer settings; native JSONC, project config and Markdown stay byte-identical.
+    const nativePaths = [
+      join(configRoot, 'opencode.jsonc'),
+      join(project, 'opencode.json'),
+      join(configRoot, 'agents/worker.md'),
+    ];
+    const readNative = () => Promise.all(nativePaths.map((path) => readFile(path, 'utf8')));
+    let nativeBytes: string[];
+    const overlaySettings = await readFile(settingsPath, 'utf8');
+    await writeFile(settingsPath, applyEdits(overlaySettings, modify(overlaySettings, ['model'], 'fixture/beta', {})));
+    // Use the existing token reload to invalidate the host's cached global configuration.
+    await reload();
+    nativeBytes = await readNative();
+    let effective = await api<{ model: string; small_model: string }>('/config');
+    assert.equal(effective.model, 'fixture/beta');
+    assert.equal(effective.small_model, 'fixture/alpha');
+    assert.equal((await api<Agent[]>('/agent')).find((agent) => agent.name === 'main-follower')?.model.modelID, 'beta');
+    assert.equal((await request('main-follower')).info.modelID, 'beta');
+    assert.equal((await request('small-follower')).info.modelID, 'alpha');
+    assert.deepEqual(await readNative(), nativeBytes);
+    const mainOnly = await readFile(settingsPath, 'utf8');
+    await writeFile(settingsPath, applyEdits(mainOnly, modify(mainOnly, ['small_model'], 'fixture/beta', {})));
+    // Use the existing token reload to invalidate the host's cached global configuration.
+    await reload();
+    nativeBytes = await readNative();
+    effective = await api('/config');
+    assert.equal(effective.small_model, 'fixture/beta');
+    assert.equal((await request('small-follower')).info.modelID, 'beta');
+    const overlayAgents = await api<Agent[]>('/agent');
+    assert.equal(overlayAgents.find((agent) => agent.name === 'pinned')?.model.modelID, 'alpha');
+    const selectedSession = await api<{ id: string }>('/session', { title: 'Explicit session model' });
+    const selected = await api<Message>(`/session/${selectedSession.id}/message`, {
+      agent: 'main-follower',
+      model: { providerID: 'fixture', modelID: 'alpha' },
+      parts: [{ type: 'text', text: 'Reply with verified.' }],
+    });
+    assert.equal(selected.info.error, undefined);
+    assert.equal(selected.info.modelID, 'alpha');
+    assert.deepEqual(await readNative(), nativeBytes);
+    await writeFile(settingsPath, overlaySettings);
+    // Use the existing token reload to invalidate the host's cached global configuration.
+    await reload();
+    nativeBytes = await readNative();
+    effective = await api('/config');
+    assert.equal(effective.model, 'fixture/alpha');
+    assert.equal(effective.small_model, 'fixture/alpha');
+    assert.equal((await request('main-follower')).info.modelID, 'alpha');
+    assert.equal((await request('small-follower')).info.modelID, 'alpha');
+    assert.deepEqual(await readNative(), nativeBytes);
     assert.ok(requests.some((body) => body.model === 'alpha'));
     assert.ok(requests.some((body) => body.model === 'beta'));
     assert.ok(
