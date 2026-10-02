@@ -188,3 +188,28 @@ test('keeps read-only file metadata and accepts commented JSONC', async (t) => {
   assert.equal(loaded.project?.writable, false);
   assert.equal(loaded.project.path, join(root, '.opencode/config-composer.jsonc'));
 });
+
+test('shared canonical profiles resolve parents from each occurrence alias directory', async (t) => {
+  const { root, put, context } = await fixture(t);
+  const shared = await put('shared.jsonc', { extends: './parent.jsonc', composition: {} });
+  const leftParent = await put('left/parent.jsonc', { composition: {} });
+  const rightParent = await put('right/parent.jsonc', { composition: {} });
+  await symlink(shared, join(root, 'left/alias.jsonc'));
+  await symlink(shared, join(root, 'right/alias.jsonc'));
+  const left = await put('left/active.jsonc', { extends: './alias.jsonc', composition: {} });
+  const right = await put('right/active.jsonc', { extends: './alias.jsonc', composition: {} });
+  for (const reversed of [false, true]) {
+    await put('.opencode/config-composer.jsonc', {
+      activeProfiles: reversed ? [right, left] : [left, right],
+    });
+    const loaded = await loadCompositionSources(context);
+    assert.deepEqual(
+      loaded.orderedProfileIds,
+      reversed
+        ? [rightParent, shared, right, leftParent, shared, left]
+        : [leftParent, shared, left, rightParent, shared, right],
+    );
+    assert.equal(loaded.documents.filter((source) => source.id === shared).length, 1);
+    assert.equal(loaded.documents.length, 6);
+  }
+});

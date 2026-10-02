@@ -55,7 +55,7 @@ function activePaths(source: SourceDocument | undefined): string[] | undefined {
   return active.map((path: unknown) => sourcePath(path, dirname(source.path)));
 }
 
-function profileParent(source: SourceDocument): string | undefined {
+function profileParent(source: SourceDocument, declaringPath: string): string | undefined {
   const value = source.value;
   if (
     Object.keys(value).some((key) => !['extends', 'composition'].includes(key)) ||
@@ -67,7 +67,7 @@ function profileParent(source: SourceDocument): string | undefined {
       'Profiles support only a single extends path and a composition object without activation metadata.',
     );
   }
-  return Object.hasOwn(value, 'extends') ? sourcePath(value.extends, dirname(source.path)) : undefined;
+  return Object.hasOwn(value, 'extends') ? sourcePath(value.extends, dirname(declaringPath)) : undefined;
 }
 
 export async function loadCompositionSources(context: ProjectContext): Promise<LoadedSources> {
@@ -129,18 +129,20 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
   const active = localPaths ?? projectPaths ?? [];
   const orderedProfileIds: string[] = [];
   const activeIds = new Set<string>();
-  async function visit(source: SourceDocument, ancestors: Set<string>): Promise<void> {
+  // A cached snapshot identifies content, but an occurrence's alias path determines
+  // the declaring directory for relative inheritance. Never recover it from the cache.
+  async function visit(source: SourceDocument, declaringPath: string, ancestors: Set<string>): Promise<void> {
     if (ancestors.has(source.id)) {
       throw new SettingsError(`Profile ancestry cycle at ${source.path}`);
     }
     if (ancestors.size >= 32) {
       throw new SettingsError('Profile chains may contain at most 32 levels.');
     }
-    const parent = profileParent(source);
+    const parent = profileParent(source, declaringPath);
     if (parent !== undefined) {
       const parentSource = await load(parent);
       if (parentSource !== undefined) {
-        await visit(parentSource, new Set([...ancestors, source.id]));
+        await visit(parentSource, parent, new Set([...ancestors, source.id]));
       }
     }
     orderedProfileIds.push(source.id);
@@ -154,7 +156,7 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
       throw new SettingsError(`Duplicate active profile identity: ${path}`);
     }
     activeIds.add(source.id);
-    await visit(source, new Set());
+    await visit(source, path, new Set());
   }
   return { documents: [...documents.values()], orderedProfileIds, base, project, local };
 }
