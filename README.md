@@ -127,6 +127,46 @@ Includes accept contained `.md` and `.txt` UTF-8 files. Unsafe paths, escaping s
 and excessive depth or size are rejected. Limits are 64 KiB per snippet, 256 KiB per composed prompt,
 32 include levels, and 256 include expansions. Settings files have a 1 MiB limit.
 
+## Ordered permissions
+
+Set agent-wide defaults in `agent.permission`, reusable policies in
+`agent.groups.<name>.permission`, and explicit overrides in
+`agent.overrides.<name>.permission` in your Composer settings:
+
+```jsonc
+{
+  "agent": {
+    "permission": { "bash": "ask" },
+    "groups": {
+      "restricted": { "permission": { "bash": { "git *": "deny" } } },
+      "trusted": { "permission": { "bash": { "*": "allow" } } }
+    },
+    "overrides": {
+      "build": { "permission": { "task": { "*": "allow" } } }
+    }
+  }
+}
+```
+
+An agent with native `groups: [restricted, trusted]` allows `git status`:
+last matching rules win, even when they grant broader access. For agents with
+Composer contributions, the order is effective native global permissions,
+Composer agent-wide defaults, ordered groups, native agent permissions, then
+Composer agent overrides. Other agents retain native inheritance. Built-in
+agents can receive permission overrides without replacing their prompts.
+
+A later scalar replaces the earlier value. Two pattern maps merge by exact
+key; scalar/map changes replace the entire block. A named tool block moves to
+the end, including its retained patterns. Repeated patterns move to the end of
+that block. A later outer `"*": "allow"` therefore overrides earlier tool
+blocks. Keep authored key order; integer-like keys are rejected because object
+enumeration cannot reliably preserve their order.
+
+These settings overlay runtime configuration without writing native files.
+Configure them in the settings file and reload OpenCode to apply changes.
+Configured-policy explanations exclude host-generated permissions and remembered
+approvals, which remain native OpenCode behavior.
+
 ## Settings editor
 
 Use `/agent-models` for global defaults, presets, groups, and individual overrides.
