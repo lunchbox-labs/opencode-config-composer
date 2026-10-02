@@ -87,7 +87,7 @@ await tui.tui({
 });
 assert.deepEqual(
   commands.map((command) => command.slashName),
-  ['agent-models', 'agent-groups'],
+  ['compose', 'agent-models', 'agent-groups'],
 );
 assert.equal(typeof dispose, 'function');
 console.log('installed package verified');
