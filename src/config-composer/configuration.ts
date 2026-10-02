@@ -1,9 +1,11 @@
 import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { lstat, open } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { type Node as JsonNode, type ParseError, parse, parseTree } from 'jsonc-parser';
 import { type GroupOptions, SettingsError, readSettings, record } from './settings.ts';
+import type { SourceDocument } from './composition/types.ts';
 
 export interface ConfigurationFile {
   path: string;
@@ -13,6 +15,7 @@ export interface ConfigurationFile {
 export interface LoadedConfiguration {
   settings: GroupOptions;
   file: ConfigurationFile;
+  source: SourceDocument;
 }
 
 export const MAX_CONFIGURATION_BYTES = 1024 * 1024;
@@ -113,12 +116,25 @@ export async function loadConfiguration(
   const file = await configurationFile(
     configurationPath(typeof options.configFile === 'string' ? options.configFile : 'config-composer.jsonc', directory),
   );
-  const settings = readSettings(parseConfiguration(file.text));
+  const value = parseConfiguration(file.text);
+  const settings = readSettings(value);
   settings.promptSources = Object.fromEntries(
     Object.entries(settings.promptSources).map(([alias, source]) => [
       alias,
       configurationPath(source, dirname(file.path)),
     ]),
   );
-  return { settings, file };
+  return {
+    settings,
+    file,
+    source: {
+      id: file.path,
+      path: file.path,
+      text: file.text,
+      fingerprint: createHash('sha256').update(file.text).digest('hex'),
+      // Advisory only: storage must still check identity, permissions and mode on save.
+      writable: (file.mode & 0o222) !== 0,
+      value,
+    },
+  };
 }
