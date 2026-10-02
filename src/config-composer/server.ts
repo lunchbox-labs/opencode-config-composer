@@ -149,11 +149,9 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
       // The title hook receives the original user's model/variant, but the host
       // dispatches it with small=true and deliberately skips variant selection.
       const small = input.agent === 'title';
-      const sameRequestModel =
-        (requestModel?.providerID === undefined || requestModel.providerID === model.providerID) &&
-        (requestModel?.modelID === undefined || requestModel.modelID === model.id);
-      const requested =
-        !small && sameRequestModel && typeof requestModel?.variant === 'string' ? requestModel.variant : undefined;
+      // Normal requests (including compaction on another model) retain the
+      // original user variant under OpenCode's request preparation rules.
+      const requested = !small && typeof requestModel?.variant === 'string' ? requestModel.variant : undefined;
       const choice = choices[input.agent];
       // Validate normal variants, plus the explicit legacy fallback materialized below.
       // Never validate the original worker variant for a small title dispatch.

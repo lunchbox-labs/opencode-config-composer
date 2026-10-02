@@ -145,7 +145,7 @@ test(
         pinned: { mode: 'subagent', groups: ['base', 'developers'], model: 'fixture/alpha', variant: 'high' },
         'main-follower': { mode: 'primary', groups: ['primary'], prompt: 'Reply briefly.' },
         'small-follower': { mode: 'primary', groups: ['small'], prompt: 'Reply briefly.' },
-        compaction: { groups: ['base'] },
+        compaction: { groups: ['compact'] },
         title: { groups: ['titles'] },
       },
     };
@@ -170,6 +170,11 @@ test(
           titles: {
             model: 'fixture/gamma',
             parameters: { maxOutputTokens: 64, options: { reasoningEffort: 'medium' } },
+          },
+          compact: {
+            model: 'fixture/beta',
+            variant: 'low',
+            parameters: { options: { customSetting: { enabled: true } } },
           },
           base: { model: 'fixture/beta', variant: 'high' },
           developers: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } },
@@ -361,6 +366,54 @@ test(
       assert.equal(titleRequest.reasoning_effort, 'medium');
       assert.equal(titleRequest.max_tokens, 64);
     }
+
+    const compactSession = await api<{ id: string }>('/session', { title: 'Compaction variant regression' });
+    await api<Message>(`/session/${compactSession.id}/message`, {
+      agent: 'worker',
+      variant: 'high',
+      model: { providerID: 'fixture', modelID: 'alpha' },
+      parts: [{ type: 'text', text: 'Reply with verified.' }],
+    });
+    // Seed a pending compaction on a user message carrying the original variant.
+    // The summarize endpoint creates a new variant-less user message instead.
+    const pending = await api<{ info: { id: string }; parts: { id: string }[] }>(
+      `/session/${compactSession.id}/message`,
+      {
+        agent: 'worker',
+        variant: 'high',
+        model: { providerID: 'fixture', modelID: 'alpha' },
+        noReply: true,
+        parts: [{ type: 'text', text: 'Compact this history.' }],
+      },
+    );
+    const partID = pending.parts[0].id;
+    await api(
+      `/session/${compactSession.id}/message/${pending.info.id}/part/${partID}`,
+      {
+        id: partID,
+        sessionID: compactSession.id,
+        messageID: pending.info.id,
+        type: 'compaction',
+        auto: false,
+      },
+      'PATCH',
+    );
+    const compactStart = requests.length;
+    await api<Message>(`/session/${compactSession.id}/message`, {
+      messageID: pending.info.id,
+      agent: 'worker',
+      variant: 'high',
+      model: { providerID: 'fixture', modelID: 'alpha' },
+      parts: [],
+    });
+    const compactRequest = requests.slice(compactStart).find((body) => body.model === 'beta');
+    assert.ok(compactRequest !== undefined, 'native compaction dispatches to its configured different model');
+    assert.equal(compactRequest.reasoning_effort, 'high');
+    assert.deepEqual(
+      compactRequest.customSetting,
+      { enabled: false },
+      'native compaction retains original high variant precedence over Composer options',
+    );
 
     const nativeConfig = await api<{ references?: Record<string, unknown> }>('/config');
     assert.equal(nativeConfig.references?.['agent-prompts'], undefined, 'sources are not native prompt references');
