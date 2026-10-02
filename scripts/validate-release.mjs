@@ -5,8 +5,8 @@ export function validateRelease(manifest, tag) {
   if (manifest.private !== undefined && manifest.private !== false) {
     throw new Error('Remove the private publication guard only after release setup is approved.');
   }
-  if (manifest.name !== '@lunchbox/opencode-config-composer') {
-    throw new Error('The npm package name must be @lunchbox/opencode-config-composer.');
+  if (manifest.name !== '@lunchbox-labs/opencode-config-composer') {
+    throw new Error('The npm package name must be @lunchbox-labs/opencode-config-composer.');
   }
   if (
     typeof manifest.version !== 'string' ||

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { validateRelease } from '../scripts/validate-release.mjs';
 
 const release = {
-  name: '@lunchbox/opencode-config-composer',
+  name: '@lunchbox-labs/opencode-config-composer',
   version: '1.2.3',
   repository: { url: 'git+https://github.com/lunchbox-labs/opencode-config-composer.git' },
   publishConfig: { access: 'public' },
