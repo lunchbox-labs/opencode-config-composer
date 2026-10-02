@@ -289,7 +289,7 @@ test('dispatch clears inherited variants across ordered direct group model overr
   await hooks['chat.params']!(
     {
       ...input,
-      message: { variant: 'low' },
+      message: { model: { variant: 'low' } },
       model: { providerID: 'fixture', id: 'small', variants: { low: {} } },
     } as unknown as Params[0],
     output,

@@ -369,12 +369,24 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
       patchSettings([...groupPath, name], choice);
       return;
     }
+    const previous = snapshot.groups[name];
+    const sameIdentity = previous.model === choice.model && previous.modelRef === choice.modelRef;
+    if (!sameIdentity || choice.parameters !== undefined) {
+      patchSettings([...groupPath, name, 'parameters'], choice.parameters);
+    }
     for (const field of ['model', 'modelRef', 'variant'] as const) {
       patchSettings([...groupPath, name, field], choice[field]);
     }
     if (choice.prompt !== undefined) {
       patchSettings([...groupPath, name, 'prompt'], choice.prompt);
     }
+  };
+  const patchPreset = (name: string, choice: ModelChoice) => {
+    const previous = Object.hasOwn(snapshot.modelPresets, name) ? snapshot.modelPresets[name] : undefined;
+    const parameters =
+      choice.parameters ??
+      (previous !== undefined && previous.model === choice.model ? previous.parameters : undefined);
+    patchSettings([...presetPath, name], { ...choice, ...(parameters !== undefined ? { parameters } : {}) });
   };
   if (change.kind === 'group') {
     patchGroup(groupName(change.name), change.choice);
@@ -383,7 +395,7 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     if (choice.model === undefined || choice.model === '') {
       throw new SettingsError('A model preset requires a concrete model.');
     }
-    patchSettings([...presetPath, presetName(change.name)], choice);
+    patchPreset(presetName(change.name), choice);
   } else if (change.kind === 'deletePreset') {
     const name = presetName(change.name);
     if (!Object.hasOwn(snapshot.modelPresets, name)) {
@@ -404,7 +416,7 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     patch(['model'], choice.model);
     patch(['small_model'], choice.model);
     for (const name of Object.keys(snapshot.modelPresets)) {
-      patchSettings([...presetPath, name], choice);
+      patchPreset(name, choice);
     }
     for (const name of groupNames(snapshot)) {
       const group = Object.hasOwn(snapshot.groups, name) ? snapshot.groups[name] : undefined;
@@ -414,6 +426,7 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
         modelRef !== undefined && modelRef !== ''
           ? {
               modelRef,
+              ...(choice.parameters !== undefined ? { parameters: choice.parameters } : {}),
               ...(choice.variant !== undefined && choice.variant !== '' ? { variant: choice.variant } : {}),
             }
           : choice,
@@ -476,7 +489,35 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
       }
     }
   }
-  parseConfig(configText);
+  const nextConfig = parseConfig(configText);
+  const nextSettings = readSettings(parseConfig(settingsText));
+  // A referenced target can change without changing the group's modelRef text.
+  // Preserve parameters only while that effective binding still denotes the same model.
+  const target = (ref: string, settings: GroupOptions, config: Record<string, unknown>): unknown => {
+    if (ref.startsWith('preset:')) {
+      return settings.modelPresets[ref.slice(7)].model;
+    }
+    const field = ref === 'opencode:model' ? 'model' : 'small_model';
+    return settings[field] ?? config[field];
+  };
+  for (const [name, previous] of Object.entries(snapshot.groups)) {
+    const next = nextSettings.groups[name];
+    if (
+      previous.modelRef === undefined ||
+      next.modelRef !== previous.modelRef ||
+      next.parameters === undefined ||
+      (change.kind === 'all' && change.choice.parameters !== undefined) ||
+      (change.kind === 'group' && change.name === name && change.choice.parameters !== undefined)
+    ) {
+      continue;
+    }
+    if (
+      target(previous.modelRef, snapshot.settings, snapshot.config) !==
+      target(previous.modelRef, nextSettings, nextConfig)
+    ) {
+      patchSettings([...groupPath, name, 'parameters'], undefined);
+    }
+  }
   readSettings(parseConfig(settingsText));
   if (settingsText !== snapshot.settingsFile.text) {
     edits.push({ file: snapshot.settingsFile, text: settingsText });
