@@ -258,7 +258,7 @@ test('recomposition reloads fragments, removes prior inherited fields, and retai
   assert.equal(inherited.variant, undefined);
 });
 
-test('dispatch validates variants retained across ordered direct group model overrides', async (t) => {
+test('dispatch clears inherited variants across ordered direct group model overrides', async (t) => {
   const root = await directory(t);
   const configFile = join(root, 'config-composer.jsonc');
   await writeFile(
@@ -283,7 +283,8 @@ test('dispatch validates variants retained across ordered direct group model ove
   const output = {
     options: { groups: ['base', 'later'], unrelated: true },
   } as unknown as Params[1];
-  await assert.rejects(hooks['chat.params']!(input, output), /does not support/);
+  await hooks['chat.params']!(input, output);
+  assert.equal(worker.variant, undefined);
   assert.deepEqual(output.options, { unrelated: true });
   await hooks['chat.params']!(
     {

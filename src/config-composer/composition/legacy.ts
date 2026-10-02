@@ -87,9 +87,19 @@ function modelOrigins(
     return;
   }
   Reflect.deleteProperty(provenance, `${pointer}/variant`);
+  let identity: { model?: string; modelRef?: string } = {};
   for (const name of agentGroups(agent, settings.groups)) {
     const group = settings.groups[name];
     const resolved = resolveGroup(group, context);
+    if (resolved.model !== undefined) {
+      if (
+        (resolved.model !== identity.model || resolved.modelRef !== identity.modelRef) &&
+        Object.hasOwn(provenance, `${pointer}/variant`)
+      ) {
+        replace(provenance, `${pointer}/variant`, { ...groupOrigin(source, name, group, 'model'), operation: 'unset' });
+      }
+      identity = resolved;
+    }
     if (
       group.variant !== undefined &&
       group.modelRef?.startsWith('preset:') === true &&

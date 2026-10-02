@@ -109,7 +109,9 @@ Assign ordered groups in an agent's Markdown frontmatter or native agent configu
 groups: [developers, reviewers]
 ```
 
-Later groups override earlier model fields. An explicit agent model remains pinned.
+Later groups override earlier model fields. Changing the model or reference clears inherited variants and
+parameters; the same identity merges explicit parameter fields and custom option objects. Arrays and null values
+replace earlier values. An explicit agent model remains pinned and does not inherit group parameters.
 An explicit agent variant can override an inherited variant. Unsupported referenced variants fail at dispatch.
 Agent membership uses ordered `groups` arrays.
 A group may use a concrete `model`, `preset:NAME`, `opencode:model`, or `opencode:small_model`.
@@ -145,6 +147,47 @@ Command composition is not implemented.
 Includes accept contained `.md` and `.txt` UTF-8 files. Unsafe paths, escaping symlinks, cycles, invalid text,
 and excessive depth or size are rejected. Limits are 64 KiB per snippet, 256 KiB per composed prompt,
 32 include levels, and 256 include expansions. Settings files have a 1 MiB limit.
+
+### Model-bound parameters
+
+Add `parameters` to a model preset or a group with a `model`/`modelRef`:
+
+```json
+{
+  "agent": {
+    "modelPresets": {
+      "balanced": {
+        "model": "provider/model-id",
+        "parameters": {
+          "temperature": 0.7,
+          "topP": 0.9,
+          "topK": 40,
+          "maxOutputTokens": 4096,
+          "options": { "reasoningEffort": "high", "customSetting": { "enabled": true } }
+        }
+      }
+    },
+    "groups": { "developers": { "modelRef": "preset:balanced" } }
+  }
+}
+```
+
+Controls accept temperature 0–2, topP 0–1, and positive safe integers for topK/output tokens.
+Composer supplies these model-bound values through `chat.params` only when the dispatched provider/model matches.
+Native agent temperature/top_p and provider option pins retain precedence, as do selected native variants.
+A different session selection receives no parameters from the previous model. Removing parameters and reloading
+removes their runtime contribution. Title requests follow the host's small-request behavior without normal variant selection.
+
+Custom `options` accept JSON strings, finite numbers, booleans, arrays, objects and null. Null is a value, not deletion.
+Malformed JSON, duplicate keys, unsafe prototype keys, nesting beyond 32 object/array levels, and files over 1 MiB
+are rejected. Unknown options are structurally validated but **provider-unverified**; catalog options and variants
+are observations, not an exhaustive schema. Provider errors remain possible.
+
+The OpenCode 1.18.34 adapter uses catalog temperature capability and output limits at dispatch. Its pinned
+`@ai-sdk/openai-compatible` 2.0.41 chat adapter maps temperature, topP and maxOutputTokens to `temperature`, `top_p`
+and `max_tokens`, and string `reasoningEffort` to `reasoning_effort`. It does not support topK, so that control is
+filtered for this adapter. The reasoning string is not restricted to an observed enumeration. These mappings
+verify adapter transport, not acceptance by every compatible provider. Other custom options remain unverified.
 
 ## Settings editor
 
