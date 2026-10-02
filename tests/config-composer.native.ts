@@ -138,7 +138,7 @@ test(
           name: 'Fixture',
           npm: '@ai-sdk/openai-compatible',
           options: { baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: 'synthetic-test-key' },
-          models: { alpha: model, beta: model },
+          models: { alpha: model, beta: model, gamma: { ...model, variants: { low: { reasoningEffort: 'low' } } } },
         },
       },
       agent: {
@@ -146,7 +146,7 @@ test(
         'main-follower': { mode: 'primary', groups: ['primary'], prompt: 'Reply briefly.' },
         'small-follower': { mode: 'primary', groups: ['small'], prompt: 'Reply briefly.' },
         compaction: { groups: ['base'] },
-        title: { groups: ['developers'] },
+        title: { groups: ['titles'] },
       },
     };
     const composer = {
@@ -167,6 +167,10 @@ test(
         },
         prompts: { defaults: { append: ['{{include:@shared/default.md}}'] } },
         groups: {
+          titles: {
+            model: 'fixture/gamma',
+            parameters: { maxOutputTokens: 64, options: { reasoningEffort: 'medium' } },
+          },
           base: { model: 'fixture/beta', variant: 'high' },
           developers: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } },
           primary: { modelRef: 'opencode:model', variant: 'low' },
@@ -340,18 +344,23 @@ test(
     assert.notEqual(requests.at(-1)?.max_tokens, 64);
     await request('pinned');
     assert.notEqual(requests.at(-1)?.temperature, 0.35, 'explicit same-model agent pin bypasses group parameters');
-    const untitled = await api<{ id: string }>('/session', {});
-    await api<Message>(`/session/${untitled.id}/message`, {
-      agent: 'worker',
-      parts: [{ type: 'text', text: 'Reply with verified.' }],
-    });
-    // Native title generation dispatches with small=true and deliberately skips variants.
-    for (let attempt = 0; attempt < 100 && !requests.some((body) => body.reasoning_effort === 'medium'); attempt++) {
-      await setTimeout(100);
+    for (const variant of ['low', 'high']) {
+      const start = requests.length;
+      const untitled = await api<{ id: string }>('/session', {});
+      await api<Message>(`/session/${untitled.id}/message`, {
+        agent: 'worker',
+        variant,
+        parts: [{ type: 'text', text: 'Reply with verified.' }],
+      });
+      // The original worker variant must not be validated against the small title model.
+      for (let attempt = 0; attempt < 100 && !requests.slice(start).some((body) => body.model === 'gamma'); attempt++) {
+        await setTimeout(100);
+      }
+      const titleRequest = requests.slice(start).find((body) => body.model === 'gamma');
+      assert.ok(titleRequest !== undefined, `small title request dispatches for worker variant ${variant}`);
+      assert.equal(titleRequest.reasoning_effort, 'medium');
+      assert.equal(titleRequest.max_tokens, 64);
     }
-    const titleRequest = requests.find((body) => body.reasoning_effort === 'medium');
-    assert.ok(titleRequest !== undefined, 'small title requests receive explicit options without a normal variant');
-    assert.equal(titleRequest.max_tokens, 64);
 
     const nativeConfig = await api<{ references?: Record<string, unknown> }>('/config');
     assert.equal(nativeConfig.references?.['agent-prompts'], undefined, 'sources are not native prompt references');

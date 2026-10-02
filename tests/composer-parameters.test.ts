@@ -316,3 +316,27 @@ test('existing model editors preserve unchanged bindings and clear changed or re
     'a native edit masked by the Composer default does not change the binding',
   );
 });
+
+test('title dispatch ignores the original worker variant even when the title model has different variants', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-title-variant-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, 'composer.jsonc');
+  await writeFile(
+    file,
+    JSON.stringify({
+      agent: { groups: { title: { model: 'a/small', parameters: { options: { reasoningEffort: 'medium' } } } } },
+    }),
+  );
+  const hooks = await server.server({} as PluginInput, { configFile: file });
+  await hooks.config!({ agent: { title: { groups: ['title'] } } });
+  for (const variant of ['low', 'high']) {
+    const input = {
+      agent: 'title',
+      model: { providerID: 'a', id: 'small', variants: { low: { reasoningEffort: 'low' } } },
+      message: { model: { providerID: 'a', modelID: 'worker', variant } },
+    } as unknown as Parameters<NonNullable<Hooks['chat.params']>>[0];
+    const output = { options: {} } as Parameters<NonNullable<Hooks['chat.params']>>[1];
+    await hooks['chat.params']!(input, output);
+    assert.equal(output.options.reasoningEffort, 'medium');
+  }
+});
