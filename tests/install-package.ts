@@ -52,7 +52,7 @@ export async function installPackage(root: string) {
   );
   const directory = join(root, 'node_modules', manifest.name);
   const metadata = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as Record<string, unknown>;
-  assert.equal(metadata.name, '@lunchbox/opencode-config-composer');
+  assert.equal(metadata.name, '@lunchbox-labs/opencode-config-composer');
   assert.equal(metadata.license, 'MIT');
   const license = await readFile(join(directory, 'LICENSE'), 'utf8');
   assert.equal(license, await readFile(join(repository, 'LICENSE'), 'utf8'));

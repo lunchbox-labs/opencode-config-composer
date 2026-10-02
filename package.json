@@ -1,5 +1,5 @@
 {
-  "name": "@lunchbox/opencode-config-composer",
+  "name": "@lunchbox-labs/opencode-config-composer",
   "version": "0.0.1",
   "description": "Compose OpenCode agent prompts, ordered groups, model presets, and native skill includes",
   "license": "MIT",
