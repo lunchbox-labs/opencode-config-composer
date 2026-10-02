@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenCode Config Composer settings",
+  "description": "Shared source directories, agent groups, model presets, and prompt composition settings. Save as config-composer.jsonc in the OpenCode configuration directory, or select a custom file with the server plugin's configFile option.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "description": "Schema path or URL that editors use to validate this settings file and show configuration hints.",
+      "type": "string"
+    },
+    "sourceDirectories": {
+      "description": "Composer aliases. Paths resolve from the settings file. Independent of OpenCode references.",
+      "type": "object",
+      "propertyNames": {
+        "description": "Source alias used in @source/path references and include directives.",
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "description": "Source directory path. Relative paths resolve from the settings file. A leading ~/ expands to home.",
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S",
+        "not": {
+          "description": "Source directory paths must not contain NUL characters.",
+          "pattern": "\\u0000"
+        }
+      }
+    },
+    "agent": {
+      "description": "Agent group defaults, reusable model choices, and prompt composition policies.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "description": "Named groups selected by agent memberships. Later groups override earlier model and variant fields.",
+          "type": "object",
+          "propertyNames": {
+            "description": "Group name used in an agent's ordered groups array.",
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "description": "Model defaults and prompt layers for agents that belong to this group.",
+            "$ref": "#/$defs/group"
+          }
+        },
+        "modelPresets": {
+          "description": "Named model choices that groups can select with preset:<name> model references.",
+          "type": "object",
+          "propertyNames": {
+            "description": "Preset name used after preset: in a model reference.",
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "description": "Concrete model and optional variant shared by groups that reference this preset.",
+            "$ref": "#/$defs/preset"
+          }
+        },
+        "prompts": {
+          "description": "Prompt layers for enabled agents with authored prompts. Layer order is defaults, groups, then overrides.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "defaults": {
+              "description": "Shared prompt layers applied unless an agent sets inheritDefaults to false.",
+              "$ref": "#/$defs/prompt"
+            },
+            "overrides": {
+              "description": "Prompt layers and inheritance controls keyed by the exact configured agent name.",
+              "type": "object",
+              "propertyNames": {
+                "description": "Exact agent name whose prompt composition settings this entry controls.",
+                "$ref": "#/$defs/agentName"
+              },
+              "additionalProperties": {
+                "description": "Additional prompt layers and inheritance controls for this agent.",
+                "$ref": "#/$defs/agentPrompt"
+              }
+            }
+          }
+        }
+      }
+    },
+    "command": {
+      "description": "Reserved for command settings. Leave empty.",
+      "type": "object",
+      "maxProperties": 0
+    },
+    "skill": {
+      "description": "Reserved; leave empty. Native skill body includes use sourceDirectories.",
+      "type": "object",
+      "maxProperties": 0
+    }
+  },
+  "$defs": {
+    "name": {
+      "description": "Alias, group, or preset name. Use lowercase letters, digits, and single hyphens. Start with a letter.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "not": {
+        "description": "Names must not equal constructor or prototype.",
+        "enum": ["constructor", "prototype"]
+      }
+    },
+    "model": {
+      "description": "Concrete model ID in provider/model format, without whitespace.",
+      "type": "string",
+      "pattern": "^[^\\s/]+/\\S+$"
+    },
+    "agentName": {
+      "description": "Configured agent name, including slash-separated names. Whitespace and backslashes are not allowed.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\s\\\\/]+(?:/[^\\s\\\\/]+)*$",
+      "not": {
+        "description": "Agent name segments must not equal ., .., __proto__, constructor, or prototype.",
+        "pattern": "(?:^|/)(?:\\.{1,2}|__proto__|constructor|prototype)(?:/|$)"
+      }
+    },
+    "variant": {
+      "description": "Variant supported by the model. Use 1 to 64 letters, digits, underscores, periods, or hyphens.",
+      "type": "string",
+      "pattern": "^[\\w.-]{1,64}$"
+    },
+    "modelRef": {
+      "description": "Reference to opencode:model, opencode:small_model, or a configured preset through preset:<name>.",
+      "type": "string",
+      "anyOf": [
+        {
+          "description": "Reference to OpenCode's configured default model or small model.",
+          "enum": ["opencode:model", "opencode:small_model"]
+        },
+        {
+          "description": "Reference to an existing entry in agent.modelPresets, using preset:<name>.",
+          "maxLength": 71,
+          "pattern": "^preset:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "not": {
+            "description": "Preset references must not use constructor or prototype as the preset name.",
+            "enum": ["preset:constructor", "preset:prototype"]
+          }
+        }
+      ]
+    },
+    "promptParts": {
+      "description": "Ordered prompt fragments. Each layer supports up to 256 strings and expands Composer includes.",
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "description": "Literal text, an @source/path.md or .txt reference, or text containing {{include:@source/path.md}}.",
+        "type": "string"
+      }
+    },
+    "prompt": {
+      "description": "Prompt fragments inserted before and after an agent's authored prompt.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prepend": {
+          "description": "Fragments inserted before the authored prompt, preserving array order.",
+          "$ref": "#/$defs/promptParts"
+        },
+        "append": {
+          "description": "Fragments inserted after the authored prompt, preserving array order.",
+          "$ref": "#/$defs/promptParts"
+        }
+      }
+    },
+    "agentPrompt": {
+      "description": "Per-agent prompt layers and controls for inheriting default and group prompt layers.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prepend": {
+          "description": "Agent-specific fragments placed after inherited prepends and before the authored prompt.",
+          "$ref": "#/$defs/promptParts"
+        },
+        "append": {
+          "description": "Agent-specific fragments placed after the authored prompt and inherited appends.",
+          "$ref": "#/$defs/promptParts"
+        },
+        "inheritDefaults": {
+          "description": "Include default prompt layers unless false. Omission enables prompt inheritance. Models are unaffected.",
+          "type": "boolean"
+        },
+        "inheritGroups": {
+          "description": "Include group prompt layers unless false, in membership order. Omission enables prompt inheritance.",
+          "type": "boolean"
+        }
+      }
+    },
+    "preset": {
+      "description": "Reusable concrete model choice with an optional model variant.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": { "description": "Required concrete model selected by this preset.", "$ref": "#/$defs/model" },
+        "variant": {
+          "description": "Optional model variant inherited unless a group or agent specifies its own variant.",
+          "$ref": "#/$defs/variant"
+        }
+      }
+    },
+    "group": {
+      "description": "Model defaults and prompt layers for a named group. Agents with explicit models retain those models.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "description": "Concrete default model for this group. Specify either model or modelRef.",
+          "$ref": "#/$defs/model"
+        },
+        "modelRef": {
+          "description": "Model reference for this group. Specify either modelRef or model.",
+          "$ref": "#/$defs/modelRef"
+        },
+        "variant": {
+          "description": "Model variant that overrides a referenced preset's variant. Requires model or modelRef.",
+          "$ref": "#/$defs/variant"
+        },
+        "prompt": {
+          "description": "Group prompt layers applied in membership order unless an agent sets inheritGroups to false.",
+          "$ref": "#/$defs/prompt"
+        }
+      },
+      "not": {
+        "description": "A group must not specify both a concrete model and a model reference.",
+        "required": ["model", "modelRef"]
+      },
+      "if": { "description": "Detect whether the group specifies a model variant.", "required": ["variant"] },
+      "then": {
+        "description": "A group variant requires either a concrete model or a model reference.",
+        "anyOf": [
+          { "description": "A concrete model supplies the group variant's model.", "required": ["model"] },
+          { "description": "A model reference supplies the group variant's model.", "required": ["modelRef"] }
+        ]
+      }
+    }
+  }
+}

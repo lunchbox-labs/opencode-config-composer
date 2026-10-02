@@ -1,0 +1,815 @@
+import { realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
+import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
+import type { Config, SessionStatus } from '@opencode-ai/sdk/v2';
+import { dialogNavigation } from '../tui/navigation.ts';
+import {
+  type CatalogModel,
+  type GroupChoice,
+  type ModelChoice,
+  type NativeModels,
+  type ResolutionContext,
+  SettingsError,
+  agentGroups,
+  catalogModels,
+  groupName,
+  presetName,
+  record,
+  resolveChoice,
+  resolveGroup,
+  validateChoice,
+} from './settings.ts';
+import {
+  type Change,
+  type Snapshot,
+  type StoredAgent,
+  affectedGroups,
+  groupNames,
+  loadSnapshot,
+  planChange,
+  plannedChoices,
+  reloadConfiguration,
+  savePlan,
+} from './storage.ts';
+import { configurationDirectory } from './configuration.ts';
+import { verifySharedFilesystem } from './connection.ts';
+
+type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
+const label = (choice: ModelChoice) =>
+  typeof choice.model === 'string' && choice.model !== ''
+    ? `${choice.model}${typeof choice.variant === 'string' && choice.variant !== '' ? ` (${choice.variant})` : ''}`
+    : 'OpenCode fallback';
+
+// The directory argument also lets tests exercise the real file editor in an isolated installation.
+export function registerSettings(
+  api: TuiPluginApi,
+  directory = configurationDirectory(),
+  globalDirectory = join(
+    process.env.XDG_CONFIG_HOME !== undefined &&
+      process.env.XDG_CONFIG_HOME !== '' &&
+      isAbsolute(process.env.XDG_CONFIG_HOME)
+      ? process.env.XDG_CONFIG_HOME
+      : join(homedir(), '.config'),
+    'opencode',
+  ),
+): void {
+  const navigation = dialogNavigation(api);
+  let busy = false;
+  const native = new WeakMap<Snapshot, NativeModels>();
+  const context = (snapshot: Snapshot): ResolutionContext => ({
+    modelPresets: snapshot.modelPresets,
+    native: native.get(snapshot) ?? snapshot.config,
+  });
+  const refreshNative = async (snapshot: Snapshot) => {
+    const response: { error?: unknown; data?: Config | null } = await api.client.config.get();
+    if (Boolean(response.error) || response.data === undefined || response.data === null) {
+      throw new SettingsError(
+        'Could not read effective workspace defaults. Reopen the editor after checking the server.',
+      );
+    }
+    native.set(snapshot, { model: response.data.model, small_model: response.data.small_model });
+  };
+  const run = (action: () => void | Promise<void>) => {
+    if (busy || api.lifecycle.signal.aborted) {
+      return;
+    }
+    busy = true;
+    return Promise.resolve()
+      .then(action)
+      .catch((error: unknown) => {
+        if (!api.lifecycle.signal.aborted) {
+          api.ui.toast({
+            variant: 'error',
+            title: 'Agent settings',
+            message:
+              error instanceof SettingsError
+                ? error.message
+                : 'Could not update settings. Check the files and server connection.',
+            duration: 8000,
+          });
+        }
+      })
+      .finally(() => {
+        busy = false;
+      });
+  };
+  const menu = (title: string, options: Action[] | (() => Action[]), current?: string, root = false) => {
+    if (api.lifecycle.signal.aborted) {
+      return;
+    }
+    navigation.menu(
+      {
+        title,
+        placeholder: 'Search…',
+        current,
+        get options() {
+          return typeof options === 'function' ? options() : options;
+        },
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
+        onSelect: (option) =>
+          run(() =>
+            (typeof options === 'function' ? options() : options).find((item) => item.value === option.value)?.run(),
+          ),
+      },
+      root,
+    );
+  };
+  const confirm = (title: string, message: string, action: () => Promise<void>) => {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
+    navigation.confirm({ title, message, onConfirm: () => run(action) });
+  };
+  const connection = async (expectedRoot?: string) => {
+    const serverPath = api.state.path.config;
+    const root = await realpath(directory);
+    if (expectedRoot !== undefined && root !== expectedRoot) {
+      throw new SettingsError('The configuration directory changed. Reopen the settings editor.');
+    }
+    const serverDirectory = await realpath(serverPath).catch(() => undefined);
+    if (root !== serverDirectory) {
+      // V1 reports the global path even when it loads OPENCODE_CONFIG_DIR.
+      const custom = process.env.OPENCODE_CONFIG_DIR;
+      const customDirectory =
+        custom !== undefined && custom !== '' ? await realpath(custom).catch(() => undefined) : undefined;
+      const localGlobal = await realpath(globalDirectory).catch(() => undefined);
+      if (
+        serverDirectory === undefined ||
+        serverDirectory === '' ||
+        serverDirectory !== localGlobal ||
+        root !== customDirectory
+      ) {
+        throw new SettingsError(
+          "Install the editor in this server's global configuration directory or its local " +
+            'OPENCODE_CONFIG_DIR. Remote files are not supported.',
+        );
+      }
+    }
+    const client = await verifySharedFilesystem(api, root, root === serverDirectory ? serverPath : root);
+    const assertCurrent = () => {
+      if (api.client !== client || api.state.path.config !== serverPath || api.lifecycle.signal.aborted) {
+        throw new SettingsError('The server connection changed. Reopen the settings editor.');
+      }
+    };
+    assertCurrent();
+    return { root, client, assertCurrent };
+  };
+  const load = async () => {
+    const { root } = await connection();
+    const snapshot = await loadSnapshot(root);
+    if (Object.values(snapshot.groups).some((choice) => choice.modelRef?.startsWith('opencode:') === true)) {
+      await refreshNative(snapshot);
+    }
+    return snapshot;
+  };
+  const models = async () => {
+    const response: { error?: unknown; data?: { providers: unknown } | null } = await api.client.config.providers();
+    const failed = Boolean(response.error);
+    if (failed) {
+      throw new SettingsError('Could not load provider models. Check your connection and try again.');
+    }
+    const result = catalogModels(response.data?.providers);
+    if (result.length === 0) {
+      throw new SettingsError('No provider models are available. Connect a provider with /connect first.');
+    }
+    return result;
+  };
+  const resolvedLabel = (snapshot: Snapshot, choice: GroupChoice) => {
+    let suffix = '';
+    if (choice.modelRef?.startsWith('opencode:') === true) {
+      const field = choice.modelRef === 'opencode:model' ? 'model' : 'small_model';
+      if (context(snapshot).native?.[field] !== snapshot.config[field]) {
+        suffix = ' · running workspace differs from saved global';
+      }
+    }
+    return `${choice.modelRef !== undefined && choice.modelRef !== '' ? `${choice.modelRef} → ` : ''}${label(choice)}${suffix}`;
+  };
+  const describeGroup = (snapshot: Snapshot, choice: GroupChoice) => {
+    try {
+      return resolvedLabel(snapshot, resolveGroup(choice, context(snapshot)));
+    } catch (error) {
+      if (!(error instanceof SettingsError)) {
+        throw error;
+      }
+      return `${choice.modelRef ?? 'Group'} → Invalid: ${error.message}`;
+    }
+  };
+  const describeAgent = (snapshot: Snapshot, agent: StoredAgent) => {
+    try {
+      const choice = resolveChoice(agent.settings, snapshot.groups, context(snapshot));
+      return `${resolvedLabel(snapshot, choice)} · ${choice.source}`;
+    } catch (error) {
+      if (!(error instanceof SettingsError)) {
+        throw error;
+      }
+      return `Invalid: ${error.message}`;
+    }
+  };
+  const selectModel = async (
+    title: string,
+    current: ModelChoice,
+    selected: (choice: ModelChoice) => void | Promise<void>,
+    variants = true,
+    extra: Action[] = [],
+  ) => {
+    const isCurrent = navigation.checkpoint();
+    const available = await models();
+    if (!isCurrent()) {
+      return;
+    }
+    menu(
+      title,
+      [
+        ...extra,
+        ...available.map((model: CatalogModel) => ({
+          title: model.name,
+          value: model.id,
+          description: model.id,
+          category: model.provider,
+          run: () => {
+            const names = Object.keys(model.variants);
+            if (!variants || names.length === 0) {
+              return selected({ model: model.id });
+            }
+            menu(
+              `${model.name}: variant`,
+              [
+                { title: 'Model default', value: '', run: () => selected({ model: model.id }) },
+                ...names.map((variant) => ({
+                  title: variant,
+                  value: variant,
+                  run: () => selected({ model: model.id, variant }),
+                })),
+              ],
+              current.model === model.id ? (current.variant ?? '') : '',
+            );
+          },
+        })),
+      ],
+      current.model,
+    );
+  };
+  const reload = async () => {
+    const status: { error?: unknown; data?: Record<string, SessionStatus> | null } = await api.client.session.status();
+    if (Boolean(status.error) || status.data === undefined || status.data === null) {
+      throw new SettingsError('Could not check running agents. Settings are saved; restart when idle.');
+    }
+    if (Object.values(status.data).some((item) => item.type !== 'idle')) {
+      throw new SettingsError(
+        'Agents are still running in this workspace. Settings are saved; reload when they finish.',
+      );
+    }
+    const snapshot = await load();
+    if ((await realpath(globalDirectory).catch(() => undefined)) !== snapshot.root) {
+      throw new SettingsError(
+        'Settings are saved. Restart OpenCode to apply edits in a custom configuration directory.',
+      );
+    }
+    if (api.lifecycle.signal.aborted) {
+      return;
+    }
+    // Complete the network proof before reloadConfiguration's final stale-file checks.
+    const { client, assertCurrent } = await connection(snapshot.root);
+    await reloadConfiguration(snapshot, async (plugins) => {
+      const plugin = plugins.map((entry): string | [string, Record<string, unknown>] => {
+        if (typeof entry === 'string') {
+          return entry;
+        }
+        if (Array.isArray(entry) && typeof entry[0] === 'string' && record(entry[1])) {
+          return [entry[0], entry[1]];
+        }
+        throw new SettingsError('Settings were saved, but a plugin entry is invalid. Fix it before reloading.');
+      });
+      assertCurrent();
+      const result = await client.global.config.update({ config: { plugin } });
+      const failed = Boolean(result.error);
+      if (failed) {
+        throw new SettingsError('Settings were saved, but reload failed. Restart OpenCode to apply them.');
+      }
+    });
+    navigation.close();
+    api.ui.toast({
+      variant: 'success',
+      title: 'Settings reloaded',
+      message: 'New agent calls use the saved defaults. A session model selection can still override them.',
+      duration: 8000,
+    });
+  };
+  const offerReload = (root = false) =>
+    menu(
+      'Settings saved',
+      [
+        {
+          title: 'Reload now…',
+          value: 'reload',
+          description: 'Apply saved settings to this OpenCode server',
+          run: () =>
+            confirm(
+              'Reload OpenCode settings?',
+              'This reloads ALL workspaces on this server. Wait for agents in every workspace to finish first.\n\n' +
+                'Existing session model selections remain; use /models to change the current session.',
+              reload,
+            ),
+        },
+        { title: 'Apply on next restart', value: 'later', run: navigation.close },
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Mutually linked menu callbacks run after all handlers initialize.
+        { title: 'Agent groups', value: 'groups', run: groupsMenu },
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Mutually linked menu callbacks run after all handlers initialize.
+        { title: 'Agent models', value: 'models', run: modelsMenu },
+      ],
+      undefined,
+      root,
+    );
+  const propose = (snapshot: Snapshot, change: Change) => {
+    const plan = planChange(snapshot, change);
+    const preview = plannedChoices(plan, context(snapshot).native);
+    const affected = affectedGroups(snapshot, change);
+    const members = snapshot.agents.filter((agent) =>
+      agentGroups(agent.settings).some((group) => affected.includes(group)),
+    );
+    const pinned = members.filter(
+      (agent) => typeof agent.settings.model === 'string' && agent.settings.model !== '',
+    ).length;
+    const impact =
+      affected.length > 0
+        ? `\n${affected.length} linked or selected groups; ` +
+          `${members.length - pinned} agents use inherited settings; ${pinned} explicit model overrides are retained.`
+        : '';
+    const choiceLabel =
+      change.kind === 'group'
+        ? describeGroup(snapshot, change.choice)
+        : change.kind === 'global'
+          ? label({ model: change.model })
+          : change.kind === 'all' || change.kind === 'preset' || change.kind === 'override'
+            ? label(change.choice)
+            : '';
+    const scope =
+      change.kind === 'global' || change.kind === 'all'
+        ? '\nOther native fallback consumers can also change. Workspace overrides and session selections still apply.'
+        : '';
+    confirm(
+      'Save agent settings?',
+      `${plan.description}\n${choiceLabel}${impact}${scope}\n\n` +
+        `${plan.edits.length} file(s) will change. Reload settings after saving to apply them.`,
+      async () => {
+        if (native.has(snapshot)) {
+          await refreshNative(snapshot);
+        }
+        const choices = plannedChoices(plan, context(snapshot).native);
+        if (JSON.stringify(choices) !== JSON.stringify(preview)) {
+          throw new SettingsError(
+            'Effective model defaults changed while the dialog was open. Reopen it and review the new models.',
+          );
+        }
+        if (choices.some((choice) => typeof choice.model === 'string' && choice.model !== '')) {
+          const available = await models();
+          for (const choice of choices) {
+            validateChoice(choice, available);
+          }
+        }
+        if (api.lifecycle.signal.aborted) {
+          return;
+        }
+        await savePlan(plan, async () => {
+          const { assertCurrent } = await connection(snapshot.root);
+          return assertCurrent;
+        });
+        offerReload(true);
+      },
+    );
+  };
+  const selectReference = async (snapshot: Snapshot, name: string, modelRef: string) => {
+    const isCurrent = navigation.checkpoint();
+    if (modelRef.startsWith('opencode:')) {
+      await refreshNative(snapshot);
+    }
+    const resolved = resolveGroup({ modelRef }, context(snapshot));
+    const model = validateChoice({ model: resolved.model }, await models());
+    if (!isCurrent()) {
+      return;
+    }
+    if (model === undefined) {
+      throw new SettingsError('Select a concrete model for the group reference.');
+    }
+    const selected = (variant?: string) =>
+      propose(snapshot, {
+        kind: 'group',
+        name,
+        choice: { modelRef, ...(variant !== undefined && variant !== '' ? { variant } : {}) },
+      });
+    const variants = Object.keys(model.variants);
+    if (variants.length === 0) {
+      selected();
+      return;
+    }
+    menu(
+      `${modelRef} → ${model.id}: variant`,
+      [
+        {
+          title: modelRef.startsWith('preset:')
+            ? `Inherit preset variant (${resolved.variant ?? 'model default'})`
+            : 'Model default',
+          value: '',
+          run: () => selected(),
+        },
+        ...variants.map((variant) => ({ title: variant, value: variant, run: () => selected(variant) })),
+      ],
+      Object.hasOwn(snapshot.groups, name) && snapshot.groups[name].modelRef === modelRef
+        ? (snapshot.groups[name].variant ?? '')
+        : '',
+    );
+  };
+  const selectGroup = (snapshot: Snapshot, name: string) =>
+    selectModel(
+      `Group: ${name} · model source`,
+      snapshot.groups[name] ?? {},
+      (choice) => propose(snapshot, { kind: 'group', name, choice }),
+      true,
+      [
+        {
+          title: 'OpenCode fallback',
+          value: '+fallback',
+          category: 'Model source',
+          description: 'Leave model selection to OpenCode; this is not a main or small reference',
+          run: () => propose(snapshot, { kind: 'group', name, choice: {} }),
+        },
+        {
+          title: 'Main default',
+          value: 'opencode:model',
+          category: 'Model source',
+          description: 'Follow the effective workspace model setting',
+          run: () => selectReference(snapshot, name, 'opencode:model'),
+        },
+        {
+          title: 'Small default',
+          value: 'opencode:small_model',
+          category: 'Model source',
+          description: 'Follow the effective workspace small_model setting',
+          run: () => selectReference(snapshot, name, 'opencode:small_model'),
+        },
+        ...Object.keys(snapshot.modelPresets)
+          .sort()
+          .map((preset) => ({
+            title: preset,
+            value: `preset:${preset}`,
+            category: 'Model presets',
+            description: label(snapshot.modelPresets[preset]),
+            run: () => selectReference(snapshot, name, `preset:${preset}`),
+          })),
+      ],
+    );
+  const newGroup = (snapshot: Snapshot, agent?: StoredAgent) => {
+    navigation.prompt({
+      title: 'New agent group',
+      placeholder: 'e.g. data-engineering',
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
+      onConfirm: (value) =>
+        run(() => {
+          const name = groupName(value.trim());
+          if (groupNames(snapshot).includes(name)) {
+            throw new SettingsError('That group already exists. Choose it from the group list.');
+          }
+          propose(
+            snapshot,
+            agent !== undefined
+              ? { kind: 'membership', agent: agent.name, groups: [...agentGroups(agent.settings), name] }
+              : { kind: 'group', name, choice: {} },
+          );
+        }),
+    });
+  };
+  const presetMenu = (snapshot: Snapshot, name: string) =>
+    menu(`Model preset: ${name}`, [
+      {
+        title: 'Set model and variant',
+        value: 'model',
+        description: label(snapshot.modelPresets[name]),
+        run: () =>
+          selectModel(name, snapshot.modelPresets[name], (choice) =>
+            propose(snapshot, { kind: 'preset', name, choice }),
+          ),
+      },
+      {
+        title: 'Delete unused preset…',
+        value: 'delete',
+        description: 'Reassign dependent groups before deleting',
+        run: () => propose(snapshot, { kind: 'deletePreset', name }),
+      },
+    ]);
+  const presetsMenu = (snapshot: Snapshot) =>
+    menu('Model presets', [
+      ...Object.keys(snapshot.modelPresets)
+        .sort()
+        .map((name) => ({
+          title: name,
+          value: name,
+          description:
+            `${label(snapshot.modelPresets[name])} · ` +
+            `${Object.values(snapshot.groups).filter((choice) => choice.modelRef === `preset:${name}`).length} linked groups`,
+          run: () => presetMenu(snapshot, name),
+        })),
+      {
+        title: 'Create a model preset…',
+        value: '+',
+        run: () => {
+          navigation.prompt({
+            title: 'New model preset',
+            placeholder: 'e.g. balanced',
+            // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
+            onConfirm: (value) =>
+              run(async () => {
+                const name = presetName(value.trim());
+                if (Object.hasOwn(snapshot.modelPresets, name)) {
+                  throw new SettingsError('That model preset already exists.');
+                }
+                await selectModel(name, {}, (choice) => propose(snapshot, { kind: 'preset', name, choice }));
+              }),
+          });
+        },
+      },
+    ]);
+  const membershipMenu = (snapshot: Snapshot, agent: StoredAgent) => {
+    const pending = [...agentGroups(agent.settings)];
+    const options = () => {
+      const settings = {
+        ...agent.settings,
+        groups: pending,
+        options: {
+          ...(record(agent.settings.options) ? agent.settings.options : {}),
+          groups: undefined,
+        },
+      };
+      return [
+        {
+          title: 'Save groups…',
+          value: '+save',
+          description: describeAgent(snapshot, { ...agent, settings }),
+          run: () => propose(snapshot, { kind: 'membership', agent: agent.name, groups: [...pending] }),
+        },
+        ...pending.map((name, index) => ({
+          title: `${index + 1}. ${name}`,
+          value: name,
+          description: 'Later groups override earlier settings',
+          run: () =>
+            menu(`Membership: ${name}`, [
+              {
+                title: 'Remove group',
+                value: 'remove',
+                run: () => {
+                  pending.splice(index, 1);
+                  navigation.back();
+                },
+              },
+              ...(index > 0
+                ? [
+                    {
+                      title: 'Move earlier',
+                      value: 'earlier',
+                      run: () => {
+                        pending.splice(index, 1);
+                        pending.splice(index - 1, 0, name);
+                        navigation.back();
+                      },
+                    },
+                  ]
+                : []),
+              ...(index < pending.length - 1
+                ? [
+                    {
+                      title: 'Move later',
+                      value: 'later',
+                      run: () => {
+                        pending.splice(index, 1);
+                        pending.splice(index + 1, 0, name);
+                        navigation.back();
+                      },
+                    },
+                  ]
+                : []),
+            ]),
+        })),
+        {
+          title: 'Add group',
+          value: '+add',
+          run: () =>
+            menu(
+              'Choose a group',
+              groupNames(snapshot)
+                .filter((name) => !pending.includes(name))
+                .map((name) => ({
+                  title: name,
+                  value: name,
+                  run: () => {
+                    pending.push(name);
+                    navigation.back();
+                  },
+                })),
+            ),
+        },
+        {
+          title: 'Clear all groups',
+          value: '+clear',
+          run: () => {
+            pending.splice(0);
+            navigation.refresh();
+          },
+        },
+      ];
+    };
+    menu(`${agent.name}: ordered groups`, options);
+  };
+  const agentMenu = (snapshot: Snapshot, agent: StoredAgent) => {
+    const groups = agentGroups(agent.settings);
+    menu(`${agent.name} · ${groups.length > 0 ? groups.join(' → ') : 'Ungrouped'}`, [
+      {
+        title: 'Manage ordered groups',
+        value: 'group',
+        description: 'Keep any explicit model override',
+        run: () => membershipMenu(snapshot, agent),
+      },
+      {
+        title: 'Set model override',
+        value: 'override',
+        description: describeAgent(snapshot, agent),
+        run: () =>
+          selectModel(agent.name, agent.settings, (choice) =>
+            propose(snapshot, { kind: 'override', agent: agent.name, choice }),
+          ),
+      },
+      {
+        title: 'Use group defaults',
+        value: 'inherit',
+        description: "Clear this agent's model and variant overrides",
+        run: () => propose(snapshot, { kind: 'override', agent: agent.name, choice: {} }),
+      },
+    ]);
+  };
+  const members = (snapshot: Snapshot, group?: string) =>
+    snapshot.agents.filter((agent) =>
+      group === undefined ? agentGroups(agent.settings).length === 0 : agentGroups(agent.settings).includes(group),
+    );
+  const agentOptions = (snapshot: Snapshot, agents: StoredAgent[]): Action[] =>
+    agents.map((agent) => ({
+      title: agent.name,
+      value: agent.name,
+      description: describeAgent(snapshot, agent),
+      run: () => agentMenu(snapshot, agent),
+    }));
+  const groupMenu = (snapshot: Snapshot, name: string) =>
+    menu(`Group: ${name}`, [
+      {
+        title: 'Set default model or source',
+        value: '+model',
+        description: describeGroup(snapshot, snapshot.groups[name] ?? {}),
+        run: () => selectGroup(snapshot, name),
+      },
+      {
+        title: 'Use OpenCode fallback',
+        value: '+inherit',
+        description: "Clear this group's model, reference, and variant defaults",
+        run: () => propose(snapshot, { kind: 'group', name, choice: {} }),
+      },
+      {
+        title: 'Add an agent to group',
+        value: '+move',
+        run: () =>
+          menu(
+            'Choose an agent',
+            snapshot.agents
+              .filter((agent) => !agentGroups(agent.settings).includes(name))
+              .map((agent) => ({
+                title: agent.name,
+                value: agent.name,
+                description:
+                  agentGroups(agent.settings).length > 0 ? agentGroups(agent.settings).join(' → ') : 'Ungrouped',
+                run: () =>
+                  propose(snapshot, {
+                    kind: 'membership',
+                    agent: agent.name,
+                    groups: [...agentGroups(agent.settings), name],
+                  }),
+              })),
+          ),
+      },
+      ...agentOptions(snapshot, members(snapshot, name)).map((option) => ({ ...option, category: 'Members' })),
+    ]);
+  const groupsMenu = async () => {
+    const snapshot = await load();
+    menu(
+      'Agent groups',
+      [
+        ...groupNames(snapshot).map((name) => ({
+          title: name,
+          value: name,
+          description: `${members(snapshot, name).length} agents · ${describeGroup(snapshot, snapshot.groups[name] ?? {})}`,
+          run: () => groupMenu(snapshot, name),
+        })),
+        {
+          title: 'Ungrouped',
+          value: '',
+          run: () => menu('Ungrouped agents', agentOptions(snapshot, members(snapshot))),
+        },
+        { title: 'Create a new group…', value: '+', run: () => newGroup(snapshot) },
+        { title: 'All agents', value: '+agents', run: () => menu('Agents', agentOptions(snapshot, snapshot.agents)) },
+      ],
+      undefined,
+      true,
+    );
+  };
+  const modelsMenu = async () => {
+    const snapshot = await load();
+    menu(
+      'Agent models: scope',
+      [
+        {
+          title: 'Global defaults',
+          value: '+global',
+          run: () =>
+            menu(
+              'Global defaults',
+              (['model', 'small_model'] as const).map((field) => {
+                const saved = snapshot.config[field];
+                const model = typeof saved === 'string' ? saved : undefined;
+                return {
+                  title: field === 'model' ? 'Main model' : 'Small model',
+                  value: field,
+                  description: model ?? 'OpenCode fallback',
+                  run: () =>
+                    selectModel(
+                      field,
+                      { model },
+                      (choice) => {
+                        if (choice.model === undefined || choice.model === '') {
+                          throw new SettingsError('Select a concrete global model.');
+                        }
+                        propose(snapshot, { kind: 'global', field, model: choice.model });
+                      },
+                      false,
+                    ),
+                };
+              }),
+            ),
+        },
+        {
+          title: 'Model presets',
+          value: '+presets',
+          description: 'Create and edit reusable model choices',
+          run: () => presetsMenu(snapshot),
+        },
+        {
+          title: 'All defaults',
+          value: '+all',
+          description: 'Main, small, presets, and every group; keep references and agent pins',
+          run: () => selectModel('All defaults', {}, (choice) => propose(snapshot, { kind: 'all', choice })),
+        },
+        ...groupNames(snapshot).map((name) => ({
+          title: name,
+          value: name,
+          category: 'Groups',
+          description: describeGroup(snapshot, snapshot.groups[name] ?? {}),
+          run: () => selectGroup(snapshot, name),
+        })),
+        {
+          title: 'Individual agent overrides',
+          value: '+agents',
+          run: () => menu('Agents', agentOptions(snapshot, snapshot.agents)),
+        },
+        { title: 'Reload saved settings…', value: '+reload', run: () => offerReload() },
+      ],
+      undefined,
+      true,
+    );
+  };
+  const unregister = api.keymap.registerLayer({
+    commands: [
+      {
+        name: 'config-composer.models',
+        title: 'Agent models',
+        category: 'Config',
+        namespace: 'palette',
+        slashName: 'agent-models',
+        run: () => {
+          navigation.reset();
+          return run(modelsMenu);
+        },
+      },
+      {
+        name: 'config-composer.membership',
+        title: 'Agent groups',
+        category: 'Config',
+        namespace: 'palette',
+        slashName: 'agent-groups',
+        run: () => {
+          navigation.reset();
+          return run(groupsMenu);
+        },
+      },
+    ],
+  });
+  api.lifecycle.onDispose(unregister);
+}
+
+// eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning TUI initializer.
+const ConfigComposerTui: TuiPlugin = async (api) => {
+  registerSettings(api);
+};
+export default { id: 'config-composer', tui: ConfigComposerTui } satisfies TuiPluginModule;

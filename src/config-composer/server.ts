@@ -1,0 +1,153 @@
+import type { Plugin, PluginModule } from '@opencode-ai/plugin';
+import { type AgentSettings, type EffectiveChoice, SettingsError, record, resolveChoice } from './settings.ts';
+import { loadConfiguration } from './configuration.ts';
+import { composePrompts, expandIncludes } from './prompts.ts';
+
+function agentConfigurations(value: unknown): value is Record<string, AgentSettings> {
+  return record(value) && Object.values(value).every(record);
+}
+
+const ConfigComposerPlugin: Plugin = async (_input, options) => {
+  const { settings } = await loadConfiguration(options);
+  const { groups, modelPresets } = settings;
+  let agents: Partial<Record<string, AgentSettings>> = {};
+  let choices: Partial<Record<string, EffectiveChoice>> = {};
+  const authored = new WeakMap<
+    AgentSettings,
+    {
+      prompt?: string;
+      model?: string;
+      variant?: string;
+      appliedPrompt?: string;
+      appliedModel?: string;
+      appliedVariant?: string;
+    }
+  >();
+  return {
+    'tool.execute.after': async (input, output) => {
+      if (input.tool !== 'skill') {
+        return;
+      }
+      if (record(output.metadata) && output.metadata.truncated === true) {
+        throw new SettingsError(
+          'The skill output was truncated before composition. Reduce its size and load it again.',
+        );
+      }
+      if (output.output.includes('{{include:')) {
+        output.output = await expandIncludes(output.output, settings.promptSources);
+      }
+    },
+    config: async (config) => {
+      const configured: unknown = config.agent ?? {};
+      if (!agentConfigurations(configured)) {
+        throw new SettingsError('An agent configuration must be an object.');
+      }
+      const context = { modelPresets, native: config };
+      const staged = Object.fromEntries(
+        Object.entries(configured).map(([name, agent]) => {
+          const previous = authored.get(agent);
+          return [
+            name,
+            {
+              ...agent,
+              ...(previous !== undefined && agent.prompt === previous.appliedPrompt ? { prompt: previous.prompt } : {}),
+              ...(previous !== undefined && agent.model === previous.appliedModel ? { model: previous.model } : {}),
+              ...(previous !== undefined && agent.variant === previous.appliedVariant
+                ? { variant: previous.variant }
+                : {}),
+            },
+          ];
+        }),
+      );
+      const nextChoices = Object.fromEntries(
+        Object.entries(staged)
+          .filter(([, agent]) => agent.disable !== true)
+          .map(([name, agent]) => [name, resolveChoice(agent, groups, context)]),
+      );
+      const prompts = await composePrompts(staged, settings);
+      for (const [name, agent] of Object.entries(configured)) {
+        if (agent.disable === true) {
+          continue;
+        }
+        if (staged[name].model === undefined) {
+          delete agent.model;
+        } else {
+          agent.model = staged[name].model;
+        }
+        if (staged[name].variant === undefined) {
+          delete agent.variant;
+        } else {
+          agent.variant = staged[name].variant;
+        }
+        const choice = nextChoices[name];
+        if (choice.source === 'group') {
+          agent.model = choice.model;
+          if (choice.variant !== undefined) {
+            agent.variant = choice.variant;
+          }
+        }
+        if (Object.hasOwn(prompts, name)) {
+          agent.prompt = prompts[name];
+        }
+        authored.set(agent, {
+          prompt: typeof staged[name].prompt === 'string' ? staged[name].prompt : undefined,
+          model: staged[name].model,
+          variant: staged[name].variant,
+          appliedPrompt: typeof agent.prompt === 'string' ? agent.prompt : undefined,
+          appliedModel: agent.model,
+          appliedVariant: agent.variant,
+        });
+      }
+      agents = configured;
+      choices = nextChoices;
+    },
+    // eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning parameter hook.
+    'chat.params': async (input, output) => {
+      delete output.options.groups;
+      const model = input.model;
+      const selected = `${model.providerID}/${model.id}`;
+      const modelVariants: unknown = 'variants' in model ? model.variants : undefined;
+      const variants = record(modelVariants) ? modelVariants : {};
+      const message: unknown = input.message;
+      const requested = record(message) && typeof message.variant === 'string' ? message.variant : undefined;
+      const choice = choices[input.agent];
+      // Do not apply a referenced default to a different session-selected model.
+      if (
+        choice !== undefined &&
+        (choice.source === 'group' || (choice.modelRef !== undefined && choice.modelRef !== '')) &&
+        choice.model === selected
+      ) {
+        const key = requested ?? choice.variant;
+        if (key !== undefined && key !== '' && (!record(variants[key]) || variants[key].disabled === true)) {
+          throw new SettingsError(
+            'The group model does not support this reasoning variant. Update the agent or group settings.',
+          );
+        }
+      }
+      // Small title requests skip native variant selection. Align the built-in fallbacks
+      // with the configured model's variant without forwarding stale provider-specific values.
+      if (!['title', 'compaction'].includes(input.agent)) {
+        return;
+      }
+      const agent = agents[input.agent];
+      if (agent === undefined || !Object.hasOwn(agent.options ?? {}, 'reasoningEffort')) {
+        return;
+      }
+      if (typeof agent.model === 'string' && agent.model !== '' && agent.model !== selected) {
+        return;
+      }
+      const key =
+        input.agent === 'compaction' && requested !== undefined && requested !== '' && record(variants[requested])
+          ? requested
+          : agent.variant;
+      const variant = key !== undefined && key !== '' ? variants[key] : undefined;
+      delete output.options.reasoningEffort;
+      if (record(variant)) {
+        Object.assign(output.options, variant);
+      }
+      delete output.options.groups;
+    },
+  };
+};
+
+export default { id: 'config-composer', server: ConfigComposerPlugin } satisfies PluginModule;
