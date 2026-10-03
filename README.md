@@ -17,6 +17,134 @@ Broaden it only after checking another host version. This package does not imple
 Development requires Node 22.18 or newer and npm. Compiled runtime files do not require TypeScript or OpenTUI packages.
 Host types and OpenTUI dependencies are development-only; the host supplies the TUI API.
 
+## Composition concepts
+
+The following vocabulary describes the expanded composition design.
+The setup and configuration examples later in this README describe current behavior.
+
+| Term                 | Meaning                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Component            | An agent, skill, command, or prompt.                                                                                      |
+| Component group      | Related components bundled together with their configuration. Any subset of component types is valid.                     |
+| Configuration preset | Reusable settings, such as model options or permissions. It does not require component membership.                        |
+| Profile              | A named, project-wide active setup combining ordered component groups and configuration presets, plus optional overrides. |
+
+These are logical roles, not mandatory file boundaries. A model choice is configuration, not a component.
+A permissions-only or model-only configuration preset is useful on its own. A component group may contain only
+prompts, only skills, or a deliberate mix of agents, skills, commands, and prompts for a workflow.
+
+A group describes what belongs together; a preset supplies reusable settings; a profile chooses the setup to use.
+Bundling a skill with an agent does **not** automatically inject that skill into the agent's prompt.
+Relationships must be configured explicitly: for example, which command invokes an agent, which guidance is
+included in its prompt, and which skills remain available to load when needed.
+
+### Example: two workflows, reusable presets, two profiles
+
+This example describes the intended design end to end. **It is conceptual, not a runnable configuration or
+a set of shipped resources.** The names below are example definitions. Exact syntax for component membership,
+preset assignment, and agent-to-skill relationships is not finalized.
+
+First, define two component groups:
+
+| Component group | Agents                                                                | Skills                                      | Commands and prompts                                                                                                                         |
+| --------------- | --------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `review`        | `code-reviewer` checks the diff; `test-auditor` checks test coverage. | `review-checklist` and `test-verification`. | `review-diff` invokes `code-reviewer`; `review-tests` invokes `test-auditor`. A review-scope prompt defines what each review should report.  |
+| `programming`   | `implementer` changes code; `test-writer` adds tests.                 | `coding-conventions` and `test-authoring`.  | `implement-change` invokes `implementer`; `write-tests` invokes `test-writer`. An implementation-scope prompt describes the intended change. |
+
+Make the relationships explicit:
+
+- `code-reviewer` uses the review-scope prompt and can load `review-checklist`.
+- `test-auditor` uses the review-scope prompt and can load `test-verification`.
+- `implementer` uses the implementation-scope prompt and can load `coding-conventions`.
+- `test-writer` uses the implementation-scope prompt and can load `test-authoring`.
+
+“Can load” does not mean automatic loading or exclusive access. These relationships describe intended use,
+not a new permission boundary. Each command has one named agent target; membership alone does not create that
+target, run a command, or inject either skill into every agent's prompt.
+
+Next, define configuration presets independently of those groups:
+
+| Configuration preset | Intended settings                                                                 | Applied to in this example          |
+| -------------------- | --------------------------------------------------------------------------------- | ----------------------------------- |
+| `claude-code`        | Claude Sonnet 4.5 model selection; output-token limit 4,096.                      | All four agents.                    |
+| `openai-code`        | GPT-5 model selection; output-token limit 4,096.                                  | All four agents.                    |
+| `review-checks`      | Ask for `bash` commands matching `git *`; deny `bash` commands matching `npm *`.  | `code-reviewer` and `test-auditor`. |
+| `programming-checks` | Allow `bash` commands matching `git *`; ask for `bash` commands matching `npm *`. | `implementer` and `test-writer`.    |
+
+The model names identify intended choices, not a guarantee of provider availability. Select a supported
+provider/model ID from the connected catalog. The output-token limit is a proposed request setting; its
+serialization and provider validation belong to the expanded parameter design. The permission presets contain
+only the rules shown, not a blanket “read-only” or “full access” policy. Other requests use matching contributions
+elsewhere or the native fallback. No preset needs fake agents or skills to exist.
+
+Finally, define profiles that reuse these definitions:
+
+| Profile         | Ordered component groups                      | Ordered preset assignments                                                                                                      | Final profile override                                            |
+| --------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `claude-coding` | `review`, then `programming`.                 | `claude-code` to all four agents; `review-checks` to the two review agents; `programming-checks` to the two programming agents. | For `code-reviewer` only, allow `bash` commands matching `git *`. |
+| `openai-coding` | The same `review`, then `programming` groups. | Replace the model assignment with `openai-code`; keep the same permission assignments.                                          | None.                                                             |
+
+Assume no additional groups, native authored model pins, local overrides, or conflicting contributions.
+The expected configured setup is:
+
+| Agent           | Available skill by explicit relationship | `claude-coding` model / output limit | `openai-coding` model / output limit | `git status`: Claude / OpenAI profile | `npm test`: both profiles |
+| --------------- | ---------------------------------------- | ------------------------------------ | ------------------------------------ | ------------------------------------- | ------------------------- |
+| `code-reviewer` | `review-checklist`                       | Claude Sonnet 4.5 / 4,096            | GPT-5 / 4,096                        | allow / ask                           | deny                      |
+| `test-auditor`  | `test-verification`                      | Claude Sonnet 4.5 / 4,096            | GPT-5 / 4,096                        | ask / ask                             | deny                      |
+| `implementer`   | `coding-conventions`                     | Claude Sonnet 4.5 / 4,096            | GPT-5 / 4,096                        | allow / allow                         | ask                       |
+| `test-writer`   | `test-authoring`                         | Claude Sonnet 4.5 / 4,096            | GPT-5 / 4,096                        | allow / allow                         | ask                       |
+
+For `code-reviewer`, the Claude profile's final `git *` allow overrides the earlier preset's ask.
+It does not affect `test-auditor` or either agent's `npm *` rule. Removing that override restores ask.
+Switching to `openai-coding` changes the model assignment and removes the Claude profile's override; it does
+not duplicate the groups, change command targets, or automatically load skills.
+
+Profile activation is intended to apply project-wide, with a committed selection and an optional higher-priority
+local override. For example, a local selection of `openai-coding` supersedes a committed selection of
+`claude-coding`; clearing the local selection reveals the committed selection. Switching preserves conversation
+history, but does not promise to replace a model already selected in a session or interrupt running work.
+Changes require explicit application when idle, or restart. If an agent becomes unavailable, continuation must
+make the enabled-agent choice visible rather than silently claim the old workflow still applies.
+
+### Ordered composition
+
+Order is part of the setup. Later applicable settings can override earlier settings, including through profile
+overrides. Fields such as prompt fragments retain their own composition rules; this is not a promise that every
+array or object merges in the same way.
+
+For the proposed permission system, the **latest matching Composer contribution wins**, even when it is looser.
+A later contribution that does not match the request does not erase an earlier match or move an older rule
+later in the order. Only when no Composer contribution matches at any level does evaluation fall back to native
+global permissions, then native permission defaults. There is no implicit deny-wins or most-specific-rule preference.
+
+For example, apply these contributions in order:
+
+| Order | Contribution                                              |
+| ----- | --------------------------------------------------------- |
+| 1     | Deny `bash` commands matching `git *`.                    |
+| 2     | Allow all permissions and targets with a global wildcard. |
+| 3     | Ask for `bash` commands matching `npm *`.                 |
+
+`git status` is allowed: contribution 2 is its latest match. `npm test` asks: contribution 3 matches it.
+Contribution 3 does not revive contribution 1 for Git commands. Removing contribution 2 makes `git status`
+denied again; a request matching neither remaining contribution uses the native fallback described above.
+
+### What is available now
+
+The current configuration supports ordered settings groups assigned to agents, model/variant presets, prompt composition,
+and includes in native skill output. Those groups are a narrower case of component grouping: they do not bundle
+skills and commands with agents. The existing `agent.groups`, `agent.modelPresets`, `/agent-groups`, and
+`/agent-models` names remain the current configuration and command interfaces.
+
+Mixed component groups, general configuration presets, profiles, and the permission composition described above
+are proposed capabilities, not released configuration options. Their schema and faithful mapping to native
+permission evaluation still need to be finalized. Directory-based and inline definitions are possible future
+representations; neither discovery rules nor directory-over-inline precedence are specified here as supported behavior.
+Discovering a definition would not itself activate a profile.
+
+See the [composition architecture](docs/architecture.md)
+for the technical design and remaining representation questions.
+
 ## Use a local build
 
 ```sh
@@ -33,7 +161,7 @@ Register its **installed package directory** in each configuration file. Replace
 
 ```jsonc
 {
-  "plugin": ["/absolute/path/to/installed-package"]
+  "plugin": ["/absolute/path/to/installed-package"],
 }
 ```
 
@@ -60,15 +188,15 @@ Create `config-composer.jsonc` in the OpenCode configuration directory:
     "modelPresets": { "balanced": { "model": "provider/model-id", "variant": "medium" } },
     "groups": {
       "developers": { "modelRef": "preset:balanced", "prompt": { "append": ["Check your changes."] } },
-      "reviewers": { "modelRef": "opencode:model" }
+      "reviewers": { "modelRef": "opencode:model" },
     },
     "prompts": {
       "defaults": { "append": ["{{include:@shared/common.md}}"] },
-      "overrides": { "reviewer": { "inheritDefaults": false, "prepend": ["Review carefully."] } }
-    }
+      "overrides": { "reviewer": { "inheritDefaults": false, "prepend": ["Review carefully."] } },
+    },
   },
   "command": {},
-  "skill": {}
+  "skill": {},
 }
 ```
 
@@ -82,7 +210,7 @@ The server loads `config-composer.jsonc` by default. To select another file, use
 
 ```jsonc
 {
-  "plugin": [["/absolute/path/to/installed-package", { "configFile": "settings/custom.jsonc" }]]
+  "plugin": [["/absolute/path/to/installed-package", { "configFile": "settings/custom.jsonc" }]],
 }
 ```
 
@@ -176,11 +304,11 @@ It excludes tests, CI workflows, maintainer tooling, and credentials.
 
 OpenCode loads the plugin through these entrypoints. Server and TUI imports each expose only their default plugin descriptor:
 
-| Export | Purpose |
-| --- | --- |
+| Export                                                                                        | Purpose              |
+| --------------------------------------------------------------------------------------------- | -------------------- |
 | `@lunchbox-labs/opencode-config-composer` or `@lunchbox-labs/opencode-config-composer/server` | Server plugin module |
-| `@lunchbox-labs/opencode-config-composer/tui` | TUI plugin module |
-| `@lunchbox-labs/opencode-config-composer/schema.json` | Settings JSON schema |
+| `@lunchbox-labs/opencode-config-composer/tui`                                                 | TUI plugin module    |
+| `@lunchbox-labs/opencode-config-composer/schema.json`                                         | Settings JSON schema |
 
 The package provides no executable command. `exports` defines the supported import surface.
 Settings, configuration, storage, navigation, and package metadata subpaths are not exported.
