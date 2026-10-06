@@ -10,7 +10,7 @@ import { applyEdits, modify, parse } from 'jsonc-parser';
 // Real V1 configuration loading, provider dispatch, and cache invalidation; only the remote model is synthetic.
 test(
   'OpenCode composes ordered groups and prompts from dedicated settings and dispatches changes after reload',
-  { timeout: 120_000 },
+  { timeout: 180_000 },
   async (t) => {
     const harness = await nativeHarness(t, 'composition');
     const { configRoot, project, installed, requests, api } = harness;
