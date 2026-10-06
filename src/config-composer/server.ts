@@ -97,7 +97,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       const nextSources = await loadCompositionSources(context);
       const resolved = await resolveProfileRuntime(nextSources, { ...nativeGlobals, agent: staged });
       // Staging guard only: OpenCode catches config-hook errors and may continue without Composer.
-      // This is not fail-closed enforcement; do not publish until failure behavior is integrated.
+      // This is not fail-closed enforcement; do not release until failure behavior is integrated.
       if (resolved.permissions.length !== 0) {
         throw new SettingsError(
           'Selected profiles contain permission contributions. This runtime requires the canonical permission compiler before these profiles can be activated.',
