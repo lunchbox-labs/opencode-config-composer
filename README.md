@@ -10,11 +10,20 @@ The npm package name is **`@lunchbox-labs/opencode-config-composer`**.
 
 The canonical composition format is specified in [the schema contract](docs/composition-schema.md).
 `schema.json` describes that format, including components, mixed groups, presets, and named profiles.
-The draft server consumes this format and explicit imports. Canonical TUI editing and native permission
-compilation/failure handling remain incomplete, so this branch is not release-ready. OpenCode can catch
+The draft server and model/membership editors consume this format and explicit imports. Profile/component
+authoring screens and native permission compilation/failure handling remain incomplete, so this branch is not release-ready. OpenCode can catch
 a config-hook error and continue with native settings; rejecting a permission profile is not fail-closed
 enforcement. The setup examples below describe the preceding released format, which the canonical
 server rejects with migration guidance. Use the schema contract for canonical configuration.
+
+The model editor updates only model/reference/variant fields in canonical `componentGroups` and
+`configurationPresets`, retaining their permissions, parameters, prompt settings, and component membership.
+Imported definitions are edited in their declaring file when it is writable inside the configuration directory;
+outside sources and symlink aliases are read-only. All observed sources participate in stale-file checks.
+Previews use the selected profiles and their layer order. Membership changes never activate profiles,
+and reordering a membership list does not change profile precedence. Inline and file-backed component agents
+and native built-ins are available in the membership picker. Native agent files must currently be discoverable
+in the editor's global/custom configuration directory; project-native agent discovery is a separate follow-up.
 
 Supported and tested host: **OpenCode V1 1.18.34**. The `opencode` engine requirement is intentionally exact.
 Broaden it only after checking another host version. This package does not implement a V2 port.
