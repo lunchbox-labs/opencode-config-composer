@@ -39,7 +39,7 @@ import {
 } from './composition/runtime.ts';
 import { parseCompositionDocument } from './composition/document.ts';
 import { editorSettings } from './composition/editor.ts';
-import { resolveGroupAgentNames } from './composition/membership.ts';
+import { MembershipValidationError, resolveGroupAgentNames } from './composition/membership.ts';
 import type { ConfigurationParameters, ConfigurationPreset } from './composition/types.ts';
 import type { EditorNativeBaseline } from './composition/runtime-baseline.ts';
 import { editNativeBaseline, verifyNativeAgents } from './composition/native-baseline.ts';
@@ -75,7 +75,7 @@ export interface StoredAgent {
   component?: boolean;
   project?: boolean;
 }
-export interface Snapshot {
+export interface SourceSnapshot {
   root: string;
   scopeRoot: string;
   configFile: SourceFile;
@@ -89,7 +89,6 @@ export interface Snapshot {
   files: SourceFile[];
   sources: LoadedSources;
   sourceContext: ProjectContext;
-  resolved: ResolvedProfileRuntime;
   nativeAgents: Record<string, AgentSettings>;
   nativeModels: EditorNativeBaseline;
   nativeSourceAgents: Record<string, AgentSettings>;
@@ -97,6 +96,12 @@ export interface Snapshot {
   nativeVariables: NativeVariables;
   nativeDirectory: string;
   nativeWorktree: string;
+}
+export interface Snapshot extends SourceSnapshot {
+  resolved: ResolvedProfileRuntime;
+}
+export interface RepairSnapshot extends SourceSnapshot {
+  diagnostic: MembershipValidationError;
 }
 export type Change =
   | { kind: 'group'; name: string; choice: GroupChoice }
@@ -111,8 +116,8 @@ export interface FileEdit {
   text: string;
   create?: boolean;
 }
-export interface FilePlan {
-  snapshot: Snapshot;
+export interface FilePlan<S extends SourceSnapshot = Snapshot> {
+  snapshot: S;
   edits: FileEdit[];
   description: string;
   /** Extra inputs observed while validating newly authored prompt references. */
@@ -174,7 +179,7 @@ export function collectFileReads(initial: readonly SourceFile[] = []) {
   return { files, read };
 }
 
-function planReadCollector(plan: FilePlan) {
+function planReadCollector(plan: FilePlan<SourceSnapshot>) {
   const reads = collectFileReads(plan.reads);
   plan.reads = reads.files;
   return reads;
@@ -366,13 +371,13 @@ function pluginOptions(config: Record<string, unknown>, index: number): unknown 
   return entry[1];
 }
 
-export async function loadSnapshot(
+export async function loadEditorSnapshot(
   directory: string,
   projectRoot = directory,
   native?: EditorNativeBaseline,
   nativeDirectory = projectRoot,
   nativeWorktree = projectRoot,
-): Promise<Snapshot> {
+): Promise<Snapshot | RepairSnapshot> {
   const root = await realpath(directory);
   const scopeRoot = await realpath(projectRoot);
   const entries = await readdir(root);
@@ -564,7 +569,17 @@ export async function loadSnapshot(
     .sort((a, b) => a.name.localeCompare(b.name));
   enabled.forEach((agent) => agentGroups(agent.settings));
   const reads = collectFileReads(files);
-  const resolved = await resolveProfileRuntime(sources, { ...nativeModels, agent: nativeAgents }, overlays, reads.read);
+  let resolution: { resolved: ResolvedProfileRuntime } | { diagnostic: MembershipValidationError };
+  try {
+    resolution = {
+      resolved: await resolveProfileRuntime(sources, { ...nativeModels, agent: nativeAgents }, overlays, reads.read),
+    };
+  } catch (error) {
+    if (!(error instanceof MembershipValidationError)) {
+      throw error;
+    }
+    resolution = { diagnostic: error };
+  }
   observedNativeVariables(nativeVariables);
   await observedComposition(sources);
   for (const file of reads.files) {
@@ -586,7 +601,7 @@ export async function loadSnapshot(
     files: reads.files,
     sources,
     sourceContext,
-    resolved,
+    ...resolution,
     nativeAgents,
     nativeModels,
     nativeSourceAgents,
@@ -595,6 +610,15 @@ export async function loadSnapshot(
     nativeDirectory,
     nativeWorktree,
   };
+}
+
+/** Runtime/apply consumers must never receive an unresolved inspection snapshot. */
+export async function loadSnapshot(...args: Parameters<typeof loadEditorSnapshot>): Promise<Snapshot> {
+  const snapshot = await loadEditorSnapshot(...args);
+  if ('diagnostic' in snapshot) {
+    throw snapshot.diagnostic;
+  }
+  return snapshot;
 }
 
 export function memberships(snapshot: Snapshot, agent: StoredAgent): string[] {
@@ -960,7 +984,7 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
   return { snapshot, change, edits, description };
 }
 
-async function previewNativeAgents(snapshot: Snapshot, overlays: ReadonlyMap<string, string>) {
+async function previewNativeAgents(snapshot: SourceSnapshot, overlays: ReadonlyMap<string, string>) {
   const edited = Object.fromEntries(
     [...(await nativeAgentsFromLayers(snapshot.nativeLayers, snapshot.nativeVariables, overlays))].map(
       ([name, agent]) => [name, agent.settings],
@@ -1146,9 +1170,9 @@ async function atomicWrite(path: string, text: string, mode: number, create = fa
   }
 }
 
-async function observedSourceList(snapshot: Snapshot): Promise<void> {
+async function observedSourceList(snapshot: SourceSnapshot): Promise<void> {
   observedNativeVariables(snapshot.nativeVariables);
-  const current = await loadSnapshot(
+  const current = await loadEditorSnapshot(
     snapshot.root,
     snapshot.sourceContext.root,
     snapshot.nativeModels,
@@ -1166,7 +1190,7 @@ async function observedSourceList(snapshot: Snapshot): Promise<void> {
 }
 
 export async function previewFilePlan(
-  plan: FilePlan,
+  plan: FilePlan<SourceSnapshot>,
 ): Promise<{ sources: LoadedSources; resolved: ResolvedProfileRuntime; reads: SourceFile[] }> {
   const overlays = new Map<string, string>();
   for (const file of [...plan.snapshot.files, ...(plan.reads ?? [])]) {
@@ -1189,7 +1213,7 @@ export async function previewFilePlan(
 }
 
 export async function saveFilePlan(
-  plan: FilePlan,
+  plan: FilePlan<SourceSnapshot>,
   validate: () => Promise<void>,
   authorize?: () => Promise<() => void>,
 ): Promise<void> {
@@ -1221,6 +1245,10 @@ export async function saveFilePlan(
     }
     // Detect newly added agents before approving a group-wide preview.
     await observedSourceList(plan.snapshot);
+    if ('diagnostic' in plan.snapshot) {
+      // Inspection can remain unresolved; persistence requires a complete valid candidate.
+      await previewFilePlan(plan);
+    }
     await validate();
     // Validation can await remote catalogs or confirmation checks; include sources added during that wait.
     await observedSourceList(plan.snapshot);

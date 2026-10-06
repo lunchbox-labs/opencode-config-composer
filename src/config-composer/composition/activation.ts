@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { SettingsError } from '../settings.ts';
-import { type FilePlan, type Snapshot, type SourceFile, editJson } from '../storage.ts';
+import { type FilePlan, type SourceFile, type SourceSnapshot, editJson } from '../storage.ts';
 
 export type CompositionScope = 'shared' | 'project' | 'local';
 export type ScopeChange = { operation: 'create' } | { operation: 'selection'; profiles?: string[] };
@@ -14,7 +14,7 @@ export interface ScopeDestination {
   writable: boolean;
 }
 
-export function scopeDestinations(snapshot: Snapshot): ScopeDestination[] {
+export function scopeDestinations(snapshot: SourceSnapshot): ScopeDestination[] {
   const paths = [
     ['shared', snapshot.sourceContext.baseFile ?? join(snapshot.root, 'config-composer.jsonc')],
     ['project', join(snapshot.sourceContext.root, '.opencode/config-composer.jsonc')],
@@ -54,7 +54,11 @@ export function scopeDestinations(snapshot: Snapshot): ScopeDestination[] {
   return result;
 }
 
-export function planScope(snapshot: Snapshot, scope: CompositionScope, change: ScopeChange): FilePlan {
+export function planScope<S extends SourceSnapshot>(
+  snapshot: S,
+  scope: CompositionScope,
+  change: ScopeChange,
+): FilePlan<S> {
   const destination = scopeDestinations(snapshot).find((item) => item.scope === scope);
   if (destination?.writable !== true) {
     throw new SettingsError(

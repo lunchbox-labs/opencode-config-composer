@@ -1444,6 +1444,48 @@ test('group member picker repairs unavailable members and keeps component names 
   assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.work.agents, ['+save']);
 });
 
+test('compose accumulates active membership repairs, rejects incomplete drafts, and saves without applying', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  const file = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(file, 'utf8'));
+  const definitions = value.componentGroups as Record<string, { agents?: string[] }>;
+  definitions.developers.agents = ['removed', 'build'];
+  definitions.reviewers.agents = ['also-removed', 'plan'];
+  const before = JSON.stringify(value);
+  await writeFile(file, before);
+  const nativeBefore = await readFile(join(root, 'opencode.jsonc'), 'utf8');
+  await ui.command('config-composer.compose');
+  await ui.select('repair');
+  assert.equal(ui.title(), 'Repair invalid memberships');
+  await ui.select('group:developers');
+  await ui.select('agents');
+  await ui.select('member:removed');
+  await ui.select('+keep');
+  await ui.select('\u0000back');
+  await ui.select('+review');
+  assert.match(ui.toasts.at(-1)!.message, /also-removed/);
+  assert.equal(await readFile(file, 'utf8'), before);
+  await ui.select('group:reviewers');
+  await ui.select('agents');
+  await ui.select('member:also-removed');
+  await ui.select('+keep');
+  await ui.select('\u0000back');
+  await ui.select('+review');
+  assert.equal(ui.title(), 'Save membership repair?');
+  assert.match(ui.message(), /previous saved configuration is invalid/i);
+  assert.match(ui.message(), /config-composer.jsonc/);
+  await ui.cancel();
+  assert.equal(await readFile(file, 'utf8'), before);
+  await ui.select('+review');
+  await ui.confirm();
+  assert.equal(ui.updates, 0);
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.developers.agents, ['build']);
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.reviewers.agents, ['plan']);
+  assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), nativeBefore);
+});
+
 test('new configuration presets choose model settings before saving a valid definition', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);

@@ -24,9 +24,11 @@ import {
   type Change,
   type FilePlan,
   type Snapshot,
+  type SourceSnapshot,
   type StoredAgent,
   affectedGroups,
   groupNames,
+  loadEditorSnapshot,
   loadSnapshot,
   memberships,
   planChange,
@@ -49,6 +51,8 @@ import { openParameters } from './tui/parameters.ts';
 import { planParameter } from './composition/parameter-authoring.ts';
 import { parameterReview, validateParameterChoice } from './composition/parameter-review.ts';
 import { openActivation } from './tui/activation.ts';
+import { openMembershipRepair } from './tui/membership-repair.ts';
+import { planMembershipRepair } from './composition/membership-repair.ts';
 import { openPermissions } from './tui/permissions.ts';
 import { permissionStatus, planPermissions, previewPermission } from './composition/permission-authoring.ts';
 import { openPrompts } from './tui/prompts.ts';
@@ -213,7 +217,7 @@ export function registerSettings(
         : (path.directory ?? root),
     );
   };
-  const authorizePlan = async (plan: FilePlan) => {
+  const authorizePlan = async (plan: FilePlan<SourceSnapshot>) => {
     const { assertCurrent, client } = await connection(plan.snapshot.root);
     const projectWrite = plan.edits.some(
       (edit) => edit.file.writeRoot !== undefined && edit.file.writeRoot !== plan.snapshot.root,
@@ -1002,10 +1006,111 @@ export function registerSettings(
   };
   const proposeDefinition = (snapshot: Snapshot, change: DefinitionChange) =>
     proposeComposition(snapshot, planDefinition(snapshot, change), change);
+  const repairMenu = async () => {
+    const current = navigation.checkpoint();
+    const { root } = await connection();
+    const project = currentProject(root);
+    const path = api.state.path as { directory?: string; worktree?: string };
+    const baseline = await readNative();
+    const snapshot = await loadEditorSnapshot(
+      root,
+      project,
+      baseline,
+      path.directory ?? project,
+      path.worktree ?? project,
+    );
+    if (!current()) {
+      return;
+    }
+    if (!('diagnostic' in snapshot)) {
+      navigation.alert({
+        title: 'Saved membership is valid',
+        message: 'No active membership errors need repair. Use the regular composition editors for other changes.',
+      });
+      return;
+    }
+    const assertBaseline = async () => {
+      if (!isDeepStrictEqual(await readNative(), baseline)) {
+        throw new SettingsError(
+          'Native server inputs changed. Reopen the repair editor and review the candidate again.',
+        );
+      }
+    };
+    openMembershipRepair(snapshot, {
+      menu,
+      back: navigation.back,
+      refresh: navigation.refresh,
+      alert: (title, message) => navigation.alert({ title, message }),
+      prompt: (title, value, confirmed) =>
+        navigation.prompt({
+          title,
+          value,
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run catches asynchronous failures.
+          onConfirm: (value) => run(() => confirmed(value)),
+        }),
+      review: async (draft) => {
+        const current = navigation.checkpoint();
+        const plan = planMembershipRepair(snapshot, draft);
+        if (plan.edits.length === 0) {
+          throw new SettingsError('Choose membership repairs or a scoped profile selection before reviewing.');
+        }
+        const preview = await previewFilePlan(plan);
+        if (!current()) {
+          return;
+        }
+        const projection = JSON.stringify({ sources: preview.sources.activeProfiles, resolved: preview.resolved });
+        const validate = async () => {
+          await assertBaseline();
+          const next = await previewFilePlan(plan);
+          if (JSON.stringify({ sources: next.sources.activeProfiles, resolved: next.resolved }) !== projection) {
+            throw new SettingsError('The repair candidate changed. Reopen the editor and review it again.');
+          }
+          return next;
+        };
+        confirm(
+          'Save membership repair?',
+          `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+            'The previous saved configuration is invalid; no effective before-state is available.\n' +
+            `Validated candidate profiles: ${preview.sources.activeProfiles.length === 0 ? 'none' : preview.sources.activeProfiles.join(' → ')}.\n` +
+            `Selected agents: ${preview.resolved.selectedAgents.length === 0 ? 'none' : preview.resolved.selectedAgents.join(', ')}.\n` +
+            `Commands: ${Object.keys(preview.resolved.commands).length === 0 ? 'none' : Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
+            'Save preserves native files and conversations. Apply remains an explicit reload.',
+          async () => {
+            const next = await validate();
+            const choices = [
+              ...Object.values(next.resolved.choices),
+              ...(['model', 'small_model'] as const).flatMap((field) =>
+                next.resolved[field] === undefined ? [] : [{ model: next.resolved[field] }],
+              ),
+              ...Object.values(next.resolved.commands).flatMap((command) =>
+                command.model === undefined ? [] : [{ model: command.model }],
+              ),
+            ];
+            if (choices.some((choice) => choice.model !== undefined)) {
+              const catalog = await models();
+              choices.forEach((choice) => validateParameterChoice(choice, catalog));
+            }
+            if (api.lifecycle.signal.aborted) {
+              return;
+            }
+            await saveFilePlan(
+              plan,
+              async () => {
+                await validate();
+              },
+              () => authorizePlan(plan),
+            );
+            offerReload(true);
+          },
+        );
+      },
+    });
+  };
   const composeMenu = () =>
     menu(
       'Compose',
       [
+        { title: 'Repair invalid memberships', value: 'repair', run: repairMenu },
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
         {

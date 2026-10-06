@@ -188,6 +188,22 @@ include markers are preserved. New files and directory identities are captured t
 changed content or redirected aliases abort before writes, including inactive definitions. A corrected alias
 path is validated against the proposed directory. Built-in bodies and native skill files are not rewritten.
 
+`/compose` also provides **Repair invalid memberships** when an active group names an unavailable or disabled
+agent, a missing skill/command/prompt member, or a native agent names an undefined group. The repair screen
+retains the saved diagnostic and source locations without presenting an effective configuration for invalid
+input. Accumulate edits to several group member lists, define a missing group in an explicit writable JSONC
+source, or choose a shared/project/local profile selection. Read-only definitions may instead be deactivated
+through an explicit writable selection scope. Native definitions and bodies are retained.
+
+Review validates the complete candidate before any file is saved; an incomplete repair remains in the draft.
+Saving rechecks source freshness, native baseline, catalogs, project authorization, and newly referenced files.
+Apply still requires an explicit reload. This recovery path covers membership resolution in otherwise valid
+sources. Malformed JSONC/frontmatter, missing imports, invalid profile/preset references, and cycles retain their
+specific validation errors and must be corrected in the named source before this editor can inspect them.
+If native inputs disagree after instance-only disposal, restart or fully reload the server before repair.
+The pinned host can retain globally cached agent fields across instance disposal; the editor rejects that
+ambiguous baseline rather than guessing which saved values were native.
+
 The permission editor selects a writable source and configuration target, then adds, edits, removes,
 and reorders `{tool, pattern, action}` rules. Repeated rules remain ordered. A blank pattern matches all
 inputs; actions are `allow`, `ask`, or `deny`. Removing local rules or saving an empty list leaves earlier
