@@ -23,7 +23,9 @@ test('CI suites partition every portable integration file exactly once', async (
       .filter((name) => /\.integration\.(?:ts|mjs)$/.test(name))
       .map((name) => `tests/integration/${name}`),
   ].sort();
-  const files = ['core', 'canonical', 'editor', 'terminal', 'cleanup'].flatMap(integrationFiles);
+  const files = ['core', 'canonical', 'editor', 'terminal', 'cleanup', 'content', 'content-terminal'].flatMap(
+    integrationFiles,
+  );
   assert.equal(new Set(files).size, files.length, 'a portable case belongs to exactly one CI suite');
   assert.deepEqual(files.sort(), expected);
   assert.deepEqual(integrationFiles().sort(), expected);

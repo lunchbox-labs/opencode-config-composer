@@ -425,7 +425,9 @@ test(
         const activeBefore = await agent();
         await writeFile(bodyPath, '{{include:@shared/../outside.md}}');
         await assert.rejects(globalSnapshot(), /include|source|path/i);
-        await assert.rejects(reload(snapshot), /include|source|path/i);
+        // Included prompt files are captured in the reviewed snapshot. A changed
+        // input is rejected before the reload reaches include validation.
+        await assert.rejects(reload(snapshot), /Settings changed.*Reopen the editor/);
         assert.deepEqual(await agent(), activeBefore, 'editor rejection preserves the running configuration');
         // Native reload can still load externally edited files independently of the editor.
         await nativeReload();

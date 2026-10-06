@@ -16,11 +16,12 @@ preparation runs before the next explicit reload. Cancelled creation still leave
 source absent. Native plugin loading and composition run normally.
 
 The **Integration** workflow runs the same functional cases on `ubuntu-latest` and
-`windows-latest` for pull requests and pushes to `main`. Each platform runs five suites
-(`core`, `canonical`, `editor`, `terminal` and `cleanup`) so fresh Windows package installations fit the job limits.
+`windows-latest` for pull requests and pushes to `main`. Each platform runs seven suites
+(`core`, `canonical`, `editor`, `terminal`, `content`, `content-terminal` and `cleanup`) so fresh Windows package installations fit the job limits.
 A partition check ensures every portable test file runs exactly once per platform.
 Run one suite locally with `npm run test:integration -- --suite core`, `--suite canonical`,
-`--suite editor`, `--suite terminal` or `--suite cleanup`; the default command runs all five. Manual dispatch is also
+`--suite editor`, `--suite terminal`, `--suite content`, `--suite content-terminal` or
+`--suite cleanup`; the default command runs all seven. Manual dispatch is also
 available after the workflow reaches the default branch. All matrix jobs finish
 independently. New pushes cancel obsolete integration runs for that pull request.
 The existing **Check** workflow remains unchanged.
@@ -84,7 +85,11 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | Source-addition race | A native Markdown agent appears inside asynchronous validation; save rejects and the proposed local selection file remains absent | Both platforms |
 | Composer permission compilation and failure policy | Actual tool decisions for ordered canonical rules, invalid/unsupported configuration and host hook errors | Pending compiler integration; required before final acceptance |
 | Compose hub and provenance | Real terminal inspection of selected/replayed profiles, resolved field value, origin and overwritten contributions, writable/read-only files; no file changes or provider requests from inspection | Enabled on both platforms; real filesystem and ancestor-boundary checks gate acceptance |
-| Broader configuration editors | Parameter, permission and prompt/source authoring through the terminal, with apply and error flows | Pending implementation and final acceptance |
+| Parameter authoring | Real native catalog rejects unsupported top-k and invalid output limits/options; installed and terminal edits persist temperature/options; cancel and stale writes preserve bytes; explicit reload changes captured requests; reset restores inheritance and removes stale options | Enabled on both platforms |
+| Configured permission editor | Ordered add/edit/reorder/remove/reset with exact match/no-match and overwritten provenance; invalid and stale proposals preserve bytes; real terminal edits save with the visible configured-only limitation | Enabled on both platforms; these cases do not establish native permission compilation |
+| Prompt operation editor | Real terminal multiline paste/save/reload; installed prepend/append order, inheritance toggles and resets; native requests preserve blank lines and remove stale operations; retained conversations | Enabled on both platforms |
+| Prompt components and aliases | Declaring-file paths, repeated/reordered/removed/reset references, reusable inline/file bodies, alias rename and reference review, comments and escaped markers; actual native prompts after reload | Enabled on both platforms; real terminal drives alias rename and repeated references |
+| Prompt source atomicity | Referenced snippet/body edits and directory redirection reject stale plans; external read-only import consumers and declared Markdown consumers block renames before any JSONC write | Enabled on both platforms |
 | Native project discovery | Native JSONC and Markdown sources, ancestor paths outside Git, environment/file substitutions, duplicate detection, native pins and unchanged declaring bytes | Both platforms |
 | Automatic Composer bundle discovery | Discovery boundaries and precedence for optional bundles | Deferred; Composer bundles use explicit imports |
 
@@ -98,6 +103,10 @@ Native discovery and the terminal authoring/activation scenarios additionally de
 [#43](https://github.com/lunchbox-labs/opencode-config-composer/pull/43),
 [#44](https://github.com/lunchbox-labs/opencode-config-composer/pull/44) and
 [#45](https://github.com/lunchbox-labs/opencode-config-composer/pull/45).
+Content editor acceptance additionally depends on [#46](https://github.com/lunchbox-labs/opencode-config-composer/pull/46),
+[#48](https://github.com/lunchbox-labs/opencode-config-composer/pull/48),
+[#49](https://github.com/lunchbox-labs/opencode-config-composer/pull/49) and
+[#50](https://github.com/lunchbox-labs/opencode-config-composer/pull/50).
 
 Terminal acceptance requires the real shared-filesystem proof before opening the editor
 and the separate project proof before project writes. The proof uses a location-relative
@@ -110,10 +119,13 @@ to the native boundary without treating Bun's Windows `realpath('/')` result as 
 drive-relative path. The installed-editor adapter passes the original native worktree value
 unchanged, and the real terminal cases require the same source implementation to accept it.
 
-Final feature acceptance must complete the pending permission and broader-editor rows against
-real implementations. Permission acceptance must include actual tool decisions after
-invalid or unsupported configuration, ordered presets and overlays across native built-in
-JSONC and custom frontmatter memberships, while preserving unspecified native behavior.
+Final feature acceptance must complete the pending permission compilation row against its
+real implementation. It must verify chronological valid-rule precedence across canonical
+presets, groups and profiles, native built-in JSONC and custom frontmatter memberships.
+Unsupported policies must leave independent valid policies unchanged, visibly warn the user,
+and fall back to the remaining native rules, including native allow, deny and ask outcomes.
+Recovery must clear stale diagnostics and restore the corrected policy without session
+permission overlays. These runtime cases are pending canonical compiler integration.
 No skipped placeholder test stands in for those missing capabilities.
 
 OpenCode 1.18.34 catches plugin configuration-hook errors and can continue with native

@@ -30,6 +30,12 @@ const suites = {
   terminal: ['tests/integration/terminal.integration.ts'],
   editor: ['tests/integration/activation.integration.ts', 'tests/integration/authoring.integration.ts'],
   cleanup: ['tests/integration/cleanup.integration.mjs'],
+  'content-terminal': ['tests/integration/content-terminal.integration.ts'],
+  content: [
+    'tests/integration/parameters.integration.ts',
+    'tests/integration/permission-editor.integration.ts',
+    'tests/integration/prompt-editor.integration.ts',
+  ],
 };
 
 export function integrationFiles(suite = 'all') {
@@ -156,7 +162,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup]',
+    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup|content|content-terminal]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);
