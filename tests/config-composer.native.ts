@@ -789,6 +789,44 @@ test(
     const childMessages = await api(`/session/${childSession.id}/message`);
     const retried = await applyInstance(repaired);
     assert.deepEqual(await applyInstance(repaired), retried, 'repeated apply is idempotent');
+    const reviewedPath = join(configRoot, 'config-composer.jsonc');
+    const reviewedText = await readFile(reviewedPath, 'utf8');
+    const reviewedRunning = await api('/config');
+    let staleDisposals = 0;
+    try {
+      await assert.rejects(
+        applySavedComposition(
+          repaired,
+          readRuntimeRevision(reviewedRunning, { root: project, directory: project }, configRoot),
+          {
+            assertCurrent: () => {},
+            activity: async () => {
+              const status = await api<Record<string, { type: string }>>('/session/status');
+              await writeFile(
+                reviewedPath,
+                applyEdits(reviewedText, modify(reviewedText, ['defaults', 'model'], 'fixture/unreviewed', {})),
+              );
+              return status;
+            },
+            dispose: async () => {
+              staleDisposals++;
+              await api('/instance/dispose', undefined, 'POST');
+            },
+            refresh: async () =>
+              readRuntimeRevision(await api('/config'), { root: project, directory: project }, configRoot),
+          },
+        ),
+        /changed/i,
+      );
+      assert.equal(
+        staleDisposals,
+        0,
+        'a change during the native activity request cannot dispose the reviewed instance',
+      );
+      assert.deepEqual(await api('/config'), reviewedRunning, 'the running publication remains exactly unchanged');
+    } finally {
+      await writeFile(reviewedPath, reviewedText);
+    }
     assert.deepEqual(
       await api(`/session/${childSession.id}/message`),
       childMessages,

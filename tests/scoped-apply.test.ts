@@ -109,6 +109,17 @@ test('connection changes at the final activity boundary prevent disposal', async
   assert.deepEqual(f.calls, []);
 });
 
+test('a saved-source edit during the activity request prevents disposal and refresh', async (t) => {
+  const f = await fixture(t);
+  f.port.activity = async () => {
+    await writeFile(f.source, JSON.stringify({ defaults: { model: 'fixture/unreviewed' } }));
+    return {};
+  };
+  await assert.rejects(applySavedComposition(f.snapshot, f.previous, f.port), /changed/i);
+  assert.deepEqual(f.calls, [], 'unreviewed input must never trigger rebootstrap');
+  assert.match(await readFile(f.source, 'utf8'), /fixture\/unreviewed/);
+});
+
 test('connection changes during final input verification prevent success after disposal', async (t) => {
   const f = await fixture(t);
   let current = true;
