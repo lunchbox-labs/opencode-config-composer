@@ -155,15 +155,24 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
     path: string,
     ancestors: Set<string>,
     imported: boolean,
+    reference?: Pick<FieldOrigin, 'sourceId' | 'pointer'>,
   ): Promise<void> {
     if (ancestors.has(source.id)) {
-      fail(`Import cycle through ${path}.`, source.id, '/imports');
+      fail(`Import cycle through ${path}.`, reference?.sourceId ?? source.id, reference?.pointer ?? '/imports');
     }
     if (ancestors.size >= 32) {
-      fail('Import chains may contain at most 32 documents.', source.id, '/imports');
+      fail(
+        'Import chains may contain at most 32 documents.',
+        reference?.sourceId ?? source.id,
+        reference?.pointer ?? '/imports',
+      );
     }
     if (visited.has(source.id)) {
-      fail(`Duplicate canonical import identity ${path}; already imported from ${source.path}.`, source.id, '/imports');
+      fail(
+        `Duplicate canonical import identity ${path}; already imported from ${source.path}.`,
+        reference?.sourceId ?? source.id,
+        reference?.pointer ?? '/imports',
+      );
     }
     if (imported && ['activeProfiles', 'defaults', 'overrides'].some((key) => Object.hasOwn(source.value, key))) {
       fail(
@@ -178,7 +187,10 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
       if (next === undefined) {
         fail(`Could not read import ${reference}.`, source.id, `/imports/${index}`);
       }
-      await visit(next, nextPath, new Set([...ancestors, source.id]), true);
+      await visit(next, nextPath, new Set([...ancestors, source.id]), true, {
+        sourceId: source.id,
+        pointer: `/imports/${index}`,
+      });
     }
     const value = source.value;
     register(registry.sourceDirectories, value.sourceDirectories, '/sourceDirectories', source, (item) =>
@@ -211,15 +223,22 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
   ];
   for (const entry of roots) {
     const source = await load(entry.path, entry.optional);
-    if (source === undefined || scopes.some((scope) => scope.id === source.id)) {
+    if (source === undefined) {
       continue;
     }
-    await visit(source, entry.path, new Set(), false);
+    const previous = scopes.findIndex((scope) => scope.id === source.id);
+    if (previous >= 0) {
+      // Definitions load once, while the highest-precedence scope occurrence owns selection/defaults.
+      scopes.splice(previous, 1);
+    } else {
+      await visit(source, entry.path, new Set(), false);
+    }
     scopes.push(source);
   }
   if (scopes.length === 0) {
     fail('No Config Composer configuration source was found.');
   }
+  freeze(provenance);
   let activeProfiles: string[] = [];
   let activeSource: CompositionSourceDocument | undefined;
   for (const source of scopes) {
@@ -283,7 +302,7 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
             sourceId: origin.sourceId,
             pointer: `${origin.pointer}/extends`,
           });
-    return [...parent, { name, profile, origin }];
+    return [...parent, { name, profile, origin: structuredClone(origin) }];
   }
   // Reject broken inactive definitions too; activation never hides invalid input.
   for (const name of Object.keys(registry.profiles)) {
