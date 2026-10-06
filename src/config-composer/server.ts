@@ -1,5 +1,6 @@
 import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
+import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { type AgentSettings, type EffectiveChoice, SettingsError, record } from './settings.ts';
 import { permissionNotifications } from './composition/permission-warnings.ts';
@@ -31,7 +32,8 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     // An optional empty installation must expose native state so the editor can create its first source.
     allowEmpty: true,
   };
-  let sources = await loadCompositionSources(context);
+  await validateBundledSkills();
+  let sources: Awaited<ReturnType<typeof loadCompositionSources>> | undefined;
   const notifications = permissionNotifications(input.client);
   let agents: Partial<Record<string, AgentSettings>> = {};
   let choices: Partial<Record<string, EffectiveChoice & ResolvedModelSettings>> = {};
@@ -111,10 +113,16 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         );
       }
       if (output.output.includes('{{include:')) {
+        sources ??= await loadCompositionSources(context);
         output.output = await expandIncludes(output.output, sources.registry.sourceDirectories ?? {});
       }
     },
     config: async (config: Config & Pick<NativeConfig, 'skills'>) => {
+      // Packaged help stays discoverable even when a source requires migration or repair.
+      config.skills = {
+        ...config.skills,
+        paths: [...new Set([...(config.skills?.paths ?? []), bundledSkillDirectory])],
+      };
       const configured: unknown = config.agent ?? {};
       if (!agentConfigurations(configured)) {
         throw new SettingsError('An agent configuration must be an object.');
@@ -176,7 +184,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       const nativePaths = (nativeSkills.paths ?? []).filter((path) => previousResources?.addedPaths.has(path) !== true);
       const nextSkills = {
         ...nativeSkills,
-        paths: [...new Set([...nativePaths, ...resolved.skillPaths])],
+        paths: [...new Set([...nativePaths, bundledSkillDirectory, ...resolved.skillPaths])],
       };
       // Validate the complete candidate before mutating host objects.
       for (const key of ['model', 'small_model'] as const) {
@@ -236,7 +244,9 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       config.skills = nextSkills;
       resources.set(config, {
         commands: { native: structuredClone(nativeCommands), applied: structuredClone(nextCommands) },
-        addedPaths: new Set(resolved.skillPaths.filter((path) => !nativePaths.includes(path))),
+        addedPaths: new Set(
+          [bundledSkillDirectory, ...resolved.skillPaths].filter((path) => !nativePaths.includes(path)),
+        ),
       });
       sources = nextSources;
       publishRuntimeBaseline(

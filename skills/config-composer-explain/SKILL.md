@@ -1,0 +1,26 @@
+---
+name: config-composer-explain
+description: Use when a user asks about OpenCode Config Composer profiles, groups, presets, selection order, permission fallback, prompt fragments, or why saved settings differ from a running conversation.
+---
+
+# Explain Config Composer
+
+Explain the saved composition using the user's actual JSONC and the packaged [schema reference](references/schema.md).
+Keep native OpenCode settings, Composer contributions, and session selections distinct.
+
+Read the shared configuration, its explicit `imports`, project `.opencode/config-composer.jsonc`, and local
+`.opencode/config-composer.local.jsonc` when available. Resolve relative paths from the declaring file.
+The `/compose` saved preview shows source paths, ordered profiles, compiled permissions, and field origins.
+
+State the active selection, replay order, matching contribution, and native fallback. Local `activeProfiles`
+replaces the shared/project list; an absent key inherits and `[]` selects none. Definitions alone activate nothing.
+A later matching permission rule wins even if looser. An unsupported scope skips its Composer permissions,
+warns, and can become more permissive. Session approvals are outside configured previews.
+
+Saved edits require explicit reload or restart. Current reload affects all workspaces on that server; existing session
+model selections remain. Native defaults and explicit agent model pins can survive profile changes.
+If evidence is missing, identify the missing source or native state instead of inventing an effective result.
+
+Common mistakes: treating groups as presets, merging profile-selection lists, assuming a deny always wins,
+or claiming a saved preview is an applied revision. Automatic Composer profile/component discovery and a custom lazy-loading engine
+are not implemented. Native skills remain on-demand and subject to native permissions.

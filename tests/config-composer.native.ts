@@ -46,6 +46,7 @@ test(
     const installed = await installPackage(configRoot);
 
     const requests: Record<string, unknown>[] = [];
+    const guidanceRequests = new Set<Record<string, unknown>>();
     const provider = createServer((request, response) => {
       const reply = async () => {
         const chunks: Buffer[] = [];
@@ -57,7 +58,11 @@ test(
         assert.ok(parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed));
         const body = parsed as Record<string, unknown>;
         requests.push(body);
-        const skillRequested = JSON.stringify(body.messages).includes('Load included-skill now.');
+        if (JSON.stringify(body.messages).includes('Load config-composer-')) {
+          guidanceRequests.add(body);
+        }
+        const requestedSkill = /Load ([a-z-]+) now\./.exec(JSON.stringify(body.messages))?.[1];
+        const skillRequested = requestedSkill !== undefined;
         const toolReturned =
           Array.isArray(body.messages) &&
           body.messages.some(
@@ -84,7 +89,7 @@ test(
                             index: 0,
                             id: 'fixture-skill',
                             type: 'function',
-                            function: { name: 'skill', arguments: JSON.stringify({ name: 'included-skill' }) },
+                            function: { name: 'skill', arguments: JSON.stringify({ name: requestedSkill }) },
                           },
                         ],
                       }
@@ -148,6 +153,11 @@ test(
         },
       },
       agent: {
+        'guidance-denied': {
+          mode: 'primary',
+          prompt: 'Reply briefly.',
+          permission: { skill: { '*': 'allow', 'config-composer-*': 'deny' } },
+        },
         pinned: { mode: 'subagent', groups: ['base', 'developers'], model: 'fixture/alpha', variant: 'high' },
         'main-follower': { mode: 'primary', groups: ['primary'], prompt: 'Reply briefly.' },
         'small-follower': { mode: 'primary', groups: ['small'], prompt: 'Reply briefly.' },
@@ -285,6 +295,7 @@ test(
         tool?: string;
         state?: {
           status: string;
+          error?: string;
           title?: string;
           output?: string;
           metadata?: { name?: string; dir?: string; truncated?: boolean };
@@ -364,6 +375,35 @@ test(
     assert.ok(!JSON.stringify(skillRequest).includes('{{include:'), 'never send raw skill directives to the provider');
     assert.equal((await request('main-follower')).info.modelID, 'beta');
     assert.equal((await request('small-follower')).info.modelID, 'beta');
+    for (const name of ['config-composer-explain', 'config-composer-create', 'config-composer-migrate']) {
+      const session = await api<{ id: string }>('/session', { title: `Bundled guidance ${name}` });
+      await api(`/session/${session.id}/message`, {
+        agent: 'worker',
+        parts: [{ type: 'text', text: `Load ${name} now.` }],
+      });
+      const messages = await api<Message[]>(`/session/${session.id}/message`);
+      const loaded = messages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
+      assert.equal(loaded?.state?.status, 'completed', `native bundled skill ${name}`);
+      assert.equal(loaded.state.metadata?.dir, join(installed.directory, 'skills', name));
+      assert.equal(loaded.state.metadata.name, name);
+      assert.match(loaded.state.output ?? '', /references|examples/);
+      const resource = await readFile(join(installed.directory, 'skills', name, 'SKILL.md'), 'utf8');
+      const body = resource.slice(resource.indexOf('\n---\n') + 5).trim();
+      assert.equal(loaded.state.output?.includes(body), true, `packaged guidance body: ${name}`);
+      assert.ok(
+        requests.some((request) => JSON.stringify(request).includes(body.split('\n')[0])),
+        `provider receives loaded guidance: ${name}`,
+      );
+    }
+    const deniedSession = await api<{ id: string }>('/session', { title: 'Native bundled guidance denial' });
+    await api(`/session/${deniedSession.id}/message`, {
+      agent: 'guidance-denied',
+      parts: [{ type: 'text', text: 'Load config-composer-explain now.' }],
+    });
+    const deniedMessages = await api<Message[]>(`/session/${deniedSession.id}/message`);
+    const deniedSkill = deniedMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
+    assert.equal(deniedSkill?.state?.status, 'error', 'bundled registration cannot bypass native skill denial');
+    assert.match(deniedSkill.state.error ?? '', /rule which prevents you from using this specific tool call/);
     const settingsPath = join(configRoot, 'config-composer.jsonc');
     const settingsBefore = await readFile(settingsPath, 'utf8');
     await writeFile(
@@ -675,12 +715,45 @@ test(
       'repair and explicit reload retain previous conversation records',
     );
     assert.ok(
-      requests.every(
-        (body) =>
-          !/agent_group|modelRef|modelPresets|configFile|promptSources|sourceDirectories/.test(JSON.stringify(body)),
-      ),
+      requests
+        .filter((body) => !guidanceRequests.has(body))
+        .every(
+          (body) =>
+            !/agent_group|modelRef|modelPresets|configFile|promptSources|sourceDirectories/.test(JSON.stringify(body)),
+        ),
     );
     assert.match(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), /^\/\/ Native integration fixture/);
     assert.match(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8'), /^\/\/ Dedicated settings/);
+    // Migration help must load through the native host while the source is rejected.
+    const legacy = await readFile(
+      join(installed.directory, 'skills/config-composer-migrate/examples/before.jsonc'),
+      'utf8',
+    );
+    await writeFile(settingsPath, legacy);
+    await reload();
+    const rejected = await api<{ agent?: Record<string, unknown>; skills?: { paths?: string[] } }>('/config');
+    assert.equal(rejected.agent?.['prompt-consumer'], undefined, 'legacy rejection applies no component agents');
+    assert.ok(
+      rejected.skills?.paths?.some((path) => path.replace(/[/\\]$/, '') === join(installed.directory, 'skills')) ===
+        true,
+    );
+    const migration = await api<{ id: string }>('/session', { title: 'Migration from rejected Composer source' });
+    await api(`/session/${migration.id}/message`, {
+      agent: 'main-follower',
+      parts: [{ type: 'text', text: 'Load config-composer-migrate now.' }],
+    });
+    const migrationMessages = await api<Message[]>(`/session/${migration.id}/message`);
+    assert.equal(
+      migrationMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill')?.state?.status,
+      'completed',
+    );
+    assert.match(output, /Legacy composition keys are not supported/);
+    for (const body of requests) {
+      const { messages: _messages, tools: _tools, ...parameters } = body;
+      assert.doesNotMatch(
+        JSON.stringify(parameters),
+        /agent_group|modelRef|modelPresets|configFile|promptSources|sourceDirectories/,
+      );
+    }
   },
 );

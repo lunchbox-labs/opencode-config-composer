@@ -333,6 +333,35 @@ test(
     await activate(['edited-profile', 'work']);
     await api('/instance/dispose', 'POST');
     const activated = await api<Agent[]>('/agent');
+    const bundledPatterns = ['config-composer-explain', 'config-composer-create', 'config-composer-migrate'].map(
+      (name) => `${join(installed.directory, 'skills', name)}/*`,
+    );
+    const normalizeBundled = (rules: Agent['permission']) => {
+      const positions = rules.flatMap((rule, index) => (bundledPatterns.includes(rule.pattern) ? [index] : []));
+      assert.ok(positions.length >= bundledPatterns.length);
+      assert.equal(positions.length % bundledPatterns.length, 0);
+      const normalized = [...rules];
+      // The native explore agent repeats the grants in its readonly external-directory block.
+      // Normalize only each complete contiguous block of disjoint same-action package grants.
+      for (let offset = 0; offset < positions.length; offset += bundledPatterns.length) {
+        const block = positions.slice(offset, offset + bundledPatterns.length);
+        assert.equal(block.at(-1)! - block[0], bundledPatterns.length - 1);
+        const grants = block.map((index) => rules[index]);
+        for (const pattern of bundledPatterns) {
+          assert.deepEqual(
+            grants.filter((rule) => rule.pattern === pattern),
+            [{ permission: 'external_directory', pattern, action: 'allow' }],
+          );
+        }
+        const sorted = grants.toSorted((left, right) => left.pattern.localeCompare(right.pattern));
+        for (const [index, position] of block.entries()) {
+          normalized[position] = sorted[index];
+        }
+      }
+      return normalized;
+    };
+    const normalizeRegistry = (agents: Agent[]) =>
+      agents.map((agent) => ({ ...agent, permission: normalizeBundled(agent.permission) }));
     for (const before of baseline.filter((item) => item.native)) {
       const after = activated.find((item) => item.name === before.name);
       assert.ok(after !== undefined, before.name);
@@ -348,8 +377,8 @@ test(
       };
       assert.ok(after.permission.some((rule) => JSON.stringify(rule) === JSON.stringify(skillRule)));
       assert.deepEqual(
-        after.permission.filter((rule) => rule.pattern !== skillRule.pattern),
-        before.permission,
+        normalizeBundled(after.permission.filter((rule) => rule.pattern !== skillRule.pattern)),
+        normalizeBundled(before.permission),
       );
       assert.deepEqual(after.model, {
         providerID: 'fixture',
@@ -379,10 +408,18 @@ test(
     await activate([]);
     await api('/instance/dispose', 'POST');
     const cleared = await api<Agent[]>('/agent');
-    assert.deepEqual(cleared, baseline, 'empty local selection restores the exact native registry');
+    assert.deepEqual(
+      normalizeRegistry(cleared),
+      normalizeRegistry(baseline),
+      'empty local selection restores the native registry with equivalent bundled directory grants',
+    );
     await activate();
     await api('/instance/dispose', 'POST');
-    assert.deepEqual(await api<Agent[]>('/agent'), baseline, 'absent local selection inherits empty shared selection');
+    assert.deepEqual(
+      normalizeRegistry(await api<Agent[]>('/agent')),
+      normalizeRegistry(baseline),
+      'absent local selection inherits empty shared selection',
+    );
     const retained = await api<{ id: string; title: string }>(`/session/${conversation.id}`);
     assert.equal(retained.id, conversation.id);
     assert.equal(retained.title, conversation.title);
