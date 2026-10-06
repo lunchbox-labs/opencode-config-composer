@@ -841,10 +841,22 @@ export function registerSettings(
         model: value.resolved.model,
         small_model: value.resolved.small_model,
         choices: value.resolved.choices,
+        commands: value.resolved.commands,
         profiles: value.sources.activeProfiles,
       });
     const changed = Object.entries(preview.resolved.choices).filter(
       ([name, choice]) => JSON.stringify(choice) !== JSON.stringify(snapshot.resolved.choices[name]),
+    );
+    const globals = (['model', 'small_model'] as const).flatMap((field) =>
+      preview.resolved[field] === snapshot.resolved[field] || preview.resolved[field] === undefined
+        ? []
+        : [{ field, model: preview.resolved[field] }],
+    );
+    const commands = Object.entries(preview.resolved.commands).flatMap(([name, command]) =>
+      command.model === undefined ||
+      (Object.hasOwn(snapshot.resolved.commands, name) && command.model === snapshot.resolved.commands[name].model)
+        ? []
+        : [{ name, model: command.model }],
     );
     const affected = [
       ...new Set([...Object.keys(snapshot.resolved.agent), ...Object.keys(preview.resolved.agent)]),
@@ -853,6 +865,8 @@ export function registerSettings(
       'Save composition definition?',
       `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
         `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
+        `Changed global models: ${globals.length === 0 ? 'none' : globals.map(({ field, model }) => `${field}: ${model}`).join(', ')}.\n` +
+        `Changed command models: ${commands.length === 0 ? 'none' : commands.map(({ name, model }) => `${name}: ${model}`).join(', ')}.\n` +
         `Commands: ${Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
         `Active profiles: ${preview.sources.activeProfiles.join(' → ')}.\n` +
         'Save preserves conversations. Reload saved settings to apply changes.',
@@ -862,7 +876,7 @@ export function registerSettings(
         if (projection(latest) !== projection(preview)) {
           throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
         }
-        const choices: ModelChoice[] = changed.map(([, choice]) => choice);
+        const choices: ModelChoice[] = [...changed.map(([, choice]) => choice), ...globals, ...commands];
         if (
           change.registry === 'configurationPresets' &&
           (change.operation === 'create' || change.operation === 'patch')

@@ -1434,3 +1434,47 @@ test('inactive preset creation rechecks provider availability before saving', as
   assert.equal(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), before);
   assert.equal(ui.updates, 0);
 });
+
+for (const field of ['model', 'small_model'] as const) {
+  test(`profile parent edits revalidate changed ${field} even without agent model changes`, async (t) => {
+    const root = await fixture(t);
+    const path = join(root, 'config-composer.jsonc');
+    const value = parseConfig(await readFile(path, 'utf8'));
+    (value.profiles as Record<string, unknown>).unavailable = { overrides: { [field]: 'missing/unavailable' } };
+    await writeFile(path, JSON.stringify(value));
+    const before = await readFile(path, 'utf8');
+    const ui = uiHarness(root);
+    await ui.command('config-composer.compose');
+    await ui.select('registry');
+    await ui.select('profiles');
+    await ui.select('work');
+    await ui.select('parent');
+    await ui.select('unavailable');
+    assert.match(ui.message(), /missing\/unavailable/);
+    await ui.confirm();
+    assert.match(ui.toasts.at(-1)!.message, /not available|unavailable|provider/i);
+    assert.equal(await readFile(path, 'utf8'), before);
+  });
+}
+
+test('newly selected commands revalidate their authored model before saving membership', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(path, 'utf8'));
+  value.components = { commands: { check: { file: './check.md' } } };
+  await writeFile(join(root, 'check.md'), '---\nmodel: missing/unavailable\n---\nCheck this.');
+  await writeFile(path, JSON.stringify(value));
+  const before = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('componentGroups');
+  await ui.select('developers');
+  await ui.select('commands');
+  await ui.select('member:check');
+  await ui.select('+save');
+  assert.match(ui.message(), /missing\/unavailable/);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /not available|unavailable|provider/i);
+  assert.equal(await readFile(path, 'utf8'), before);
+});
