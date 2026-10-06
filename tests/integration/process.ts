@@ -1,5 +1,51 @@
 import { type ChildProcess, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { readFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
+
+export async function processIsRunning(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') {
+      return false;
+    }
+    throw error;
+  }
+  if (process.platform === 'linux') {
+    const status = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => '');
+    return status !== '' && !/^\d+ \(.*\) Z /.test(status);
+  }
+  return true;
+}
+
+// Fallback for detached hosts whose test worker exited before its after hook ran.
+export async function killProcessTree(pid: number): Promise<void> {
+  if (process.platform === 'win32') {
+    await promisify(execFile)('taskkill', ['/PID', String(pid), '/T', '/F'], { timeout: 5000 }).catch(
+      async (error: unknown) => {
+        if (await processIsRunning(pid)) {
+          throw error;
+        }
+      },
+    );
+  } else {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) {
+        throw error;
+      }
+    }
+  }
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (!(await processIsRunning(pid))) {
+      return;
+    }
+    await delay(100);
+  }
+  throw new Error(`Native process ${pid} survived forced termination`);
+}
 
 // POSIX callers spawn a separate process group; Windows uses taskkill's tree mode.
 export async function stopProcess(child: ChildProcess, exited: Promise<unknown>): Promise<void> {
