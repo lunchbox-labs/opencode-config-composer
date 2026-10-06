@@ -35,7 +35,7 @@ test(
     await fixture.host.start();
     const original = await fixture.send();
     const terminal = await nativeTerminal(fixture.host, original.session.id);
-    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p commands']);
+    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
     await terminal.command('/compose', 'Compose', 'Effective configuration and sources');
     await terminal.choose('Effective configuration and sources', 'Saved composition preview');
     await terminal.choose('Profiles and layer order', 'Active profiles: none', 'Existing conversations are retained');
@@ -49,7 +49,7 @@ test(
     await terminal.choose('Create empty composition source', 'Save profile selection?');
     await terminal.press('\r', 'Settings saved');
     assert.deepEqual(await fixture.document(fixture.paths.shared), {});
-    await terminal.choose('Apply on next restart', 'ctrl+p commands');
+    await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
     await terminal.command('/compose', 'Compose');
     await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
     await terminal.choose('Component groups', 'Create definition');
@@ -58,7 +58,7 @@ test(
     await terminal.press('\r', 'Save composition definition?');
     await terminal.press('\r', 'Settings saved');
     assert.deepEqual((await fixture.document(fixture.paths.shared)).componentGroups?.team, {});
-    await terminal.choose('Apply on next restart', 'ctrl+p commands');
+    await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
     const registry = async (kind: string) => {
       await terminal.command('/compose', 'Compose');
       await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
@@ -66,7 +66,7 @@ test(
     };
     const saved = async () => {
       await terminal.press('\r', 'Settings saved');
-      await terminal.choose('Apply on next restart', 'ctrl+p commands');
+      await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
     };
     const create = async (kind: string, name: string) => {
       await registry(kind);
@@ -163,7 +163,7 @@ test(
     const original = await f.send();
     const before = await readFile(f.paths.shared, 'utf8');
     const terminal = await nativeTerminal(f.host, original.session.id, 'compose-terminal-selection');
-    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p commands']);
+    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
     await terminal.command('/compose', 'Compose');
     await terminal.choose('Effective configuration and sources', 'Saved composition preview');
     await terminal.choose(
@@ -194,7 +194,7 @@ test(
     assert.equal(f.host.requests.length, 1, 'inspection sends no model request');
     await terminal.press('\x1b', 'Saved composition preview');
     await terminal.press('\x1b', 'Compose');
-    await terminal.press('\x1b', 'ctrl+p commands');
+    await terminal.press('\x1b', 'ctrl+p', 'commands');
     const scope = async (name: string) => {
       await terminal.command('/compose', 'Compose');
       await terminal.choose('Profile activation and scope files', 'shared', 'project', 'local');
