@@ -1,0 +1,43 @@
+name: Integration
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  native:
+    name: Native integration (${{ matrix.os }}, ${{ matrix.suite }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        suite: [core, canonical, editor, terminal, cleanup, content, content-terminal]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci
+        timeout-minutes: 3
+      - name: Test the installed package in native OpenCode
+        run: npm run test:integration -- --suite ${{ matrix.suite }}
+        timeout-minutes: 10
+      - name: Upload compact failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: integration-${{ matrix.os }}-${{ matrix.suite }}-${{ github.run_attempt }}
+          path: integration-results/
+          if-no-files-found: ignore
+          retention-days: 3
+          compression-level: 9
