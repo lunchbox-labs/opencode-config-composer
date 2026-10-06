@@ -14,8 +14,12 @@ them separately keeps cold Windows dependency installation outside request deadl
 Native plugin loading and composition still run normally.
 
 The **Integration** workflow runs the same functional cases on `ubuntu-latest` and
-`windows-latest` for pull requests and pushes to `main`. Manual dispatch is also
-available after the workflow reaches the default branch. Both matrix jobs finish
+`windows-latest` for pull requests and pushes to `main`. Each platform runs three suites
+(`core`, `canonical` and `cleanup`) so fresh Windows package installations fit the job limits.
+A partition check ensures every portable test file runs exactly once per platform.
+Run one suite locally with `npm run test:integration -- --suite core`, `--suite canonical`
+or `--suite cleanup`; the default command runs all three. Manual dispatch is also
+available after the workflow reaches the default branch. All matrix jobs finish
 independently. New pushes cancel obsolete integration runs for that pull request.
 The existing **Check** workflow remains unchanged.
 
@@ -102,7 +106,12 @@ trees and caches are excluded. CI uploads these files only on failure with three
 retention. Successful runs upload nothing. No Actions cache is configured.
 
 Jobs use standard public runners, `contents: read`, and a 15-minute job timeout, with
-shorter install, request, test and process limits. This workflow adds no required-check
+a 10-minute test step and an eight-minute per-suite runner deadline. The full local
+test-runner phase has a 15-minute deadline, excluding build, host-binary download and
+ripgrep preparation.
+Install, request, individual test and process limits
+are shorter. TAP output records failures immediately, including before an outer timeout.
+This workflow adds no required-check
 or branch-protection rules. Linux verification locally cannot substitute for the Windows
 CI result. The terminal smoke test uses POSIX pseudo-terminal APIs and is deliberately
 outside this portable functional suite; no Linux command is presented as Windows coverage.

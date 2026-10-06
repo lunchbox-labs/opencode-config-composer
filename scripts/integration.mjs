@@ -20,6 +20,21 @@ export function nativePackage(platform = process.platform, arch = process.arch) 
   };
 }
 
+const suites = {
+  core: [
+    'tests/config-composer.native.ts',
+    'tests/composition-profiles.native.ts',
+    'tests/integration/lifecycle.integration.ts',
+  ],
+  canonical: ['tests/integration/canonical.integration.ts', 'tests/integration/canonical-regressions.integration.ts'],
+  cleanup: ['tests/integration/cleanup.integration.mjs'],
+};
+
+export function integrationFiles(suite = 'all') {
+  assert.ok(suite === 'all' || Object.hasOwn(suites, suite), `Unknown integration suite: ${suite}`);
+  return suite === 'all' ? Object.values(suites).flat() : [...suites[suite]];
+}
+
 // Match OpenCode 1.18.34's native ripgrep dependency, with release checksums.
 // Preinstallation avoids an instance reload interrupting the host's cached download.
 const ripgrepVersion = '15.1.0';
@@ -111,7 +126,14 @@ export async function runNativeTests({ files, env = process.env, signal, timeout
   try {
     await runCommand(
       process.execPath,
-      ['--experimental-strip-types', '--test', '--test-concurrency=1', '--test-timeout=300000', ...files],
+      [
+        '--experimental-strip-types',
+        '--test',
+        '--test-reporter=tap',
+        '--test-concurrency=1',
+        '--test-timeout=300000',
+        ...files,
+      ],
       { env: childEnv, signal: cancellation.signal, timeout },
       capture,
     );
@@ -129,6 +151,13 @@ export async function runNativeTests({ files, env = process.env, signal, timeout
 }
 
 async function main() {
+  const args = process.argv.slice(2);
+  assert.ok(
+    args.length === 0 || (args.length === 2 && args[0] === '--suite'),
+    'Usage: npm run test:integration -- [--suite all|core|canonical|cleanup]',
+  );
+  const suite = args[1] ?? 'all';
+  const files = integrationFiles(suite);
   const repository = fileURLToPath(new URL('../', import.meta.url));
   const artifacts = join(repository, 'integration-results');
   await rm(artifacts, { recursive: true, force: true });
@@ -211,13 +240,14 @@ async function main() {
     });
     validateCliVersion(stdout, version);
     console.log(
-      `Native integration: ${process.platform}/${process.arch}, OpenCode ${version}, Node ${process.version}`,
+      `Native integration (${suite}): ${process.platform}/${process.arch}, OpenCode ${version}, Node ${process.version}`,
     );
     await writeFile(
       join(artifacts, 'versions.json'),
       JSON.stringify(
         {
           platform: process.platform,
+          suite,
           arch: process.arch,
           opencode: version,
           node: process.version,
@@ -229,14 +259,8 @@ async function main() {
       ),
     );
     await runNativeTests({
-      files: [
-        'tests/config-composer.native.ts',
-        'tests/composition-profiles.native.ts',
-        'tests/integration/lifecycle.integration.ts',
-        'tests/integration/canonical.integration.ts',
-        'tests/integration/canonical-regressions.integration.ts',
-        'tests/integration/cleanup.integration.mjs',
-      ],
+      files,
+      timeout: suite === 'all' ? 900_000 : 480_000,
       env: { ...testEnvironment, INTEGRATION_FIXTURE_ROOT: root },
       signal: cancellation.signal,
       capture,

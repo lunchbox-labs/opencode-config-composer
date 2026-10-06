@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { nativePackage, ripgrepPackage } from '../scripts/integration.mjs';
+import { integrationFiles, nativePackage, ripgrepPackage } from '../scripts/integration.mjs';
 import { isolatedEnvironment } from './integration/harness.ts';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { stopProcess } from './integration/process.ts';
 
 test('integration runner selects native Linux and Windows binaries and rejects untested platforms', () => {
@@ -13,6 +13,21 @@ test('integration runner selects native Linux and Windows binaries and rejects u
   assert.deepEqual(nativePackage('win32', 'x64'), { name: 'opencode-windows-x64', executable: 'opencode.exe' });
   assert.throws(() => nativePackage('darwin', 'x64'), /Linux and Windows/);
   assert.throws(() => nativePackage('linux', 'arm64'), /x64/);
+});
+
+test('CI suites partition every portable integration file exactly once', async () => {
+  const expected = [
+    'tests/config-composer.native.ts',
+    'tests/composition-profiles.native.ts',
+    ...(await readdir(new URL('./integration/', import.meta.url)))
+      .filter((name) => /\.integration\.(?:ts|mjs)$/.test(name))
+      .map((name) => `tests/integration/${name}`),
+  ].sort();
+  const files = [...integrationFiles('core'), ...integrationFiles('canonical'), ...integrationFiles('cleanup')];
+  assert.equal(new Set(files).size, files.length, 'a portable case belongs to exactly one CI suite');
+  assert.deepEqual(files.sort(), expected);
+  assert.deepEqual(integrationFiles().sort(), expected);
+  assert.throws(() => integrationFiles('missing'), /Unknown integration suite/);
 });
 
 test('native ripgrep prerequisites use pinned platform binaries and release checksums', () => {
