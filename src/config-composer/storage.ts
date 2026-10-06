@@ -1028,6 +1028,8 @@ export async function saveFilePlan(
     // Detect newly added agents before approving a group-wide preview.
     await observedSourceList(plan.snapshot);
     await validate();
+    // Validation can await remote catalogs or confirmation checks; include sources added during that wait.
+    await observedSourceList(plan.snapshot);
     observedNativeVariables(plan.snapshot.nativeVariables);
     await observedComposition(plan.snapshot.sources);
     for (const original of plan.snapshot.files) {

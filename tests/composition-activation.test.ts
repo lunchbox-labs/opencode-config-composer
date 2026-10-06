@@ -148,6 +148,26 @@ test('deleting a captured import during validation aborts without creating a sco
   await assert.rejects(readFile(join(f.project, '.opencode/config-composer.local.jsonc')), /ENOENT/);
 });
 
+for (const scope of ['shared', 'local'] as const) {
+  test(`a native agent added during validation aborts ${scope} activation before writing`, async (t) => {
+    const f = await fixture(t);
+    const shared = join(f.root, 'config-composer.jsonc');
+    const original = await readFile(shared, 'utf8');
+    const plan = planScope(await f.snapshot(), scope, { operation: 'selection', profiles: ['last'] });
+    const preview = await previewFilePlan(plan);
+    assert.deepEqual(preview.resolved.selectedAgents, ['build']);
+    await assert.rejects(
+      saveFilePlan(plan, async () => {
+        await mkdir(join(f.project, '.opencode/agents'), { recursive: true });
+        await writeFile(join(f.project, '.opencode/agents/late.md'), '---\ngroups: [last]\n---\nLate agent');
+      }),
+      /source list changed|native.*changed/i,
+    );
+    assert.equal(await readFile(shared, 'utf8'), original);
+    await assert.rejects(readFile(join(f.project, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+  });
+}
+
 test('the editor can explicitly create its first optional scope but still rejects explicit missing sources', async (t) => {
   const f = await fixture(t);
   await rm(join(f.root, 'config-composer.jsonc'));
