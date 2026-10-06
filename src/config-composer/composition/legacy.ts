@@ -233,12 +233,13 @@ function applyPermissionOrigins(
   pointer: string,
   layers: PermissionLayer[],
 ): void {
+  const origins = permissionOrigins(layers);
   for (const key of Object.keys(provenance)) {
     if (key === pointer || key.startsWith(`${pointer}/`)) {
       Reflect.deleteProperty(provenance, key);
     }
   }
-  for (const [suffix, value] of permissionOrigins(layers)) {
+  for (const [suffix, value] of origins) {
     provenance[`${pointer}${suffix}`] = value;
   }
 }

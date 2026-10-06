@@ -166,6 +166,7 @@ const ConfigComposerPlugin: Plugin = async (pluginInput, options) => {
         Object.entries(staged)
           .filter(([, agent]) => agent.disable !== true)
           .map(([name, agent]) => {
+            const namePointer = name.replaceAll('~', '~0').replaceAll('/', '~1');
             const membership = agentGroups(agent, groups);
             const layers = membership.flatMap((group) =>
               groups[group].permission === undefined ? [] : [groups[group].permission],
@@ -179,12 +180,12 @@ const ConfigComposerPlugin: Plugin = async (pluginInput, options) => {
                     `agent:${name}`,
                     [
                       'effective global /permission',
-                      `native /agent/${name}/permission`,
+                      `native /agent/${namePointer}/permission`,
                       ...membership.map(
                         (group) =>
                           `${file.path}#/agent/groups/${group.replaceAll('~', '~0').replaceAll('/', '~1')}/permission`,
                       ),
-                      ...(override === undefined ? [] : [`${file.path}#/agent/overrides/${name}/permission`]),
+                      ...(override === undefined ? [] : [`${file.path}#/agent/overrides/${namePointer}/permission`]),
                     ],
                     [globalPolicy, explicit, ...layers, ...(override === undefined ? [] : [override])],
                   ) ?? agent.permission)

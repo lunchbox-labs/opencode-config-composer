@@ -546,3 +546,75 @@ test('unsupported global contribution preserves native fallback and independent 
     resolveLegacy(source, { permission: config.permission, agent: { worker: { groups: ['good'] } } }),
   );
 });
+
+test('unsupported global composition retains native permission provenance', () => {
+  const value = { agent: { permission: { webfetch: 'allow', 'webfetc?': { b: 'deny' } } } };
+  const source = {
+    id: 'composer',
+    path: '/config/composer.jsonc',
+    text: JSON.stringify(value),
+    fingerprint: 'fixture',
+    writable: true,
+    value,
+  };
+  const native = { permission: { bash: 'ask', 'webfetc?': { a: 'deny' } } };
+  const result = resolveLegacy(source, native);
+  assert.deepEqual(result.provenance['/permission/bash'], {
+    pointer: '/permission/bash',
+    layer: 'native',
+    operation: 'native',
+    references: [],
+    overwritten: [],
+  });
+});
+
+test('unsupported agent composition retains native permission provenance', () => {
+  const value = {
+    agent: {
+      groups: {
+        first: { permission: { 'webfetc?': { a: 'deny' } } },
+        middle: { permission: { webfetch: 'allow' } },
+        last: { permission: { 'webfetc?': { b: 'deny' } } },
+      },
+    },
+  };
+  const source = {
+    id: 'composer',
+    path: '/config/composer.jsonc',
+    text: JSON.stringify(value),
+    fingerprint: 'fixture',
+    writable: true,
+    value,
+  };
+  const result = resolveLegacy(source, {
+    agent: { worker: { groups: ['first', 'middle', 'last'], permission: { skill: 'allow' } } },
+  });
+  assert.deepEqual(result.provenance['/agent/worker/permission/skill'], {
+    pointer: '/agent/worker/permission/skill',
+    layer: 'native',
+    operation: 'native',
+    references: [],
+    overwritten: [],
+  });
+});
+
+test('permission warnings escape slash and tilde in native and Composer agent pointers', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-pointer-warning-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stderr = t.mock.method(console, 'error', () => undefined);
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(
+    path,
+    JSON.stringify({
+      agent: {
+        groups: { first: { permission: { 'webfetc?': { a: 'deny' } } }, middle: { permission: { webfetch: 'allow' } } },
+        overrides: { 'team/worker~one': { permission: { 'webfetc?': { b: 'deny' } } } },
+      },
+    }),
+  );
+  const hooks = await server.server({} as PluginInput, { configFile: path });
+  await hooks.config!({ agent: { 'team/worker~one': { groups: ['first', 'middle'] } } });
+  const warning = String(stderr.mock.calls[0]?.arguments[0]);
+  assert.ok(warning.includes('native /agent/team~1worker~0one/permission'));
+  assert.ok(warning.includes(`${path}#/agent/overrides/team~1worker~0one/permission`));
+});
