@@ -9,6 +9,7 @@ import { setTimeout } from 'node:timers/promises';
 import type { TestContext } from 'node:test';
 import { installPackage } from '../install-package.ts';
 import { stopProcess } from './process.ts';
+import { registerProcess } from './resources.ts';
 
 // Only OS launch settings and network transport for host dependency installation are inherited.
 // Provider credentials and personal OpenCode configuration are never inherited.
@@ -58,7 +59,7 @@ export function isolatedEnvironment(root: string): NodeJS.ProcessEnv {
 
 export async function nativeHarness(t: TestContext, name: string) {
   // Spaces exercise executable arguments and package/config paths on both platforms.
-  const root = await mkdtemp(join(tmpdir(), 'composer integration '));
+  const root = await mkdtemp(join(process.env.INTEGRATION_FIXTURE_ROOT ?? tmpdir(), 'composer integration '));
   const project = join(root, 'project');
   const configRoot = join(root, 'config', 'opencode');
   const requests: Record<string, unknown>[] = [];
@@ -66,6 +67,7 @@ export async function nativeHarness(t: TestContext, name: string) {
   let child: ChildProcess | undefined;
   let exited: Promise<unknown> | undefined;
   let baseURL: string | undefined;
+  let unregister: (() => void) | undefined;
   const provider = createServer((request, response) => {
     const reply = async () => {
       assert.equal(request.url, '/v1/chat/completions');
@@ -139,6 +141,7 @@ export async function nativeHarness(t: TestContext, name: string) {
   const stop = async () => {
     if (child !== undefined && exited !== undefined) {
       await stopProcess(child, exited);
+      unregister?.();
     }
     child = undefined;
     baseURL = undefined;
@@ -192,6 +195,9 @@ export async function nativeHarness(t: TestContext, name: string) {
         detached: process.platform !== 'win32',
       },
     );
+    if (child.pid !== undefined) {
+      unregister = registerProcess(child.pid, root);
+    }
     let launchError: Error | undefined;
     child.on('error', (error) => {
       launchError = error;
@@ -233,6 +239,9 @@ export async function nativeHarness(t: TestContext, name: string) {
     return (await result.json()) as T;
   };
   return {
+    get pid() {
+      return child?.pid;
+    },
     root,
     project,
     configRoot,

@@ -29,7 +29,9 @@ paths. Temporary paths contain spaces. Only OS launch variables and network tran
 credentials and personal OpenCode configuration are excluded. File watchers are disabled;
 tests distinguish saved settings from settings applied by an explicit reload and wait
 for the new token to be visible before dispatching a request. Fixtures
-are deleted after the host stops, including on failures.
+are deleted after the host stops, including on failures. The outer runner owns a
+separate fixture root and tracks detached test runners and native hosts so its deadline or cancellation
+can clean up even when test hooks never run.
 
 The persistence tests import the **installed** editor implementation and connect its
 reload callback to the real OpenCode API. They exercise the storage used by the TUI;
@@ -51,6 +53,7 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | Save and apply | Installed editor saves, unchanged active cache before reload, actual reload API, repeated reload without duplicate prompts | Both platforms |
 | Removed contributions | Ordered membership replacement, empty membership removal, explicit pin/clear and captured dispatch | Both platforms |
 | Persistence | Multi-file save, process restart, retained session messages and settings | Both platforms |
+| Interrupted runs | Outer numeric timeout and SIGINT/SIGTERM handlers terminate a real native host and a blocked nested test runner, removing their fixtures without test hooks | Both platforms; the Windows regression emits Node signal events because `process.kill()` terminates directly on Windows |
 | Invalid/concurrent edits | Rejected referenced-preset deletion, malformed preset, lock collision, stale snapshot, malformed JSONC; byte comparisons and lock cleanup; failed prompt composition leaves native settings unmodified | Both platforms; exhaustive rollback/fault combinations remain covered by focused unit tests |
 | Terminal menus | Packaged entrypoint and both existing menus render through a real pseudo-terminal | Existing Linux Check only; Windows terminal driving and complete interaction/save/reload flows remain open |
 | Composer model defaults | Native overrides, fallback removal and session interactions | Await integration of [#31](https://github.com/lunchbox-labs/opencode-config-composer/pull/31) |
@@ -86,3 +89,9 @@ shorter install, request, test and process limits. This workflow adds no require
 or branch-protection rules. Linux verification locally cannot substitute for the Windows
 CI result. The terminal smoke test uses POSIX pseudo-terminal APIs and is deliberately
 outside this portable functional suite; no Linux command is presented as Windows coverage.
+
+Timeout and cancellation cleanup stops the test process tree before terminating any
+registered detached test runners and native hosts and deleting their fixture roots. SIGINT and SIGTERM
+received by the runner follow the same cleanup path. An uncatchable kill of the outer
+runner cannot execute JavaScript cleanup; CI runner teardown remains responsible for
+that case.

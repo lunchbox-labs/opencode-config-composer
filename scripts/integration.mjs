@@ -8,6 +8,8 @@ import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { validateBaseline, validateCliVersion } from './opencode.mjs';
 import { isolatedEnvironment } from '../tests/integration/harness.ts';
+import { stopProcess } from '../tests/integration/process.ts';
+import { cleanupProcesses, registerProcess } from '../tests/integration/resources.ts';
 
 export function nativePackage(platform = process.platform, arch = process.arch) {
   assert.equal(arch, 'x64', 'the integration installer supports x64 runners');
@@ -38,29 +40,109 @@ export function ripgrepPackage(platform = process.platform) {
       };
 }
 
+function cancellationSignals(signal) {
+  const controller = new AbortController();
+  const handlers = ['SIGINT', 'SIGTERM'].map((name) => {
+    const handler = () => controller.abort(new Error(`Integration cancelled by ${name}`));
+    process.on(name, handler);
+    return [name, handler];
+  });
+  return {
+    signal: signal === undefined ? controller.signal : AbortSignal.any([controller.signal, signal]),
+    dispose: () => handlers.forEach(([name, handler]) => process.off(name, handler)),
+  };
+}
+
+async function runCommand(command, args, options = {}, capture = (data) => process.stdout.write(data)) {
+  const { signal, timeout, ...spawnOptions } = options;
+  const deadline = AbortSignal.timeout(timeout);
+  const cancellation = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
+  cancellation.throwIfAborted();
+  const child = spawn(command, args, {
+    cwd: fileURLToPath(new URL('../', import.meta.url)),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+    ...spawnOptions,
+  });
+  const env = spawnOptions.env ?? process.env;
+  const unregister =
+    child.pid !== undefined && env.INTEGRATION_FIXTURE_ROOT !== undefined
+      ? registerProcess(child.pid, env.INTEGRATION_FIXTURE_ROOT, env.INTEGRATION_PROCESS_REGISTRY)
+      : () => {};
+  child.stdout.on('data', capture);
+  child.stderr.on('data', capture);
+  const exited = new Promise((resolve) => {
+    child.once('error', resolve);
+    child.once('exit', resolve);
+  });
+  let onAbort;
+  try {
+    await Promise.race([
+      new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code, signal) =>
+          code === 0 ? resolve() : reject(new Error(`Command failed (${signal ?? code})`)),
+        );
+      }),
+      new Promise((_resolve, reject) => {
+        onAbort = () => reject(cancellation.reason);
+        cancellation.addEventListener('abort', onAbort, { once: true });
+        if (cancellation.aborted) {
+          onAbort();
+        }
+      }),
+    ]);
+  } finally {
+    cancellation.removeEventListener('abort', onAbort);
+    // Explicit tree termination must happen before Node discards the parent PID.
+    // Passing spawn's timeout/signal would kill only that parent first.
+    await stopProcess(child, exited);
+    unregister();
+  }
+}
+
+export async function runNativeTests({ files, env = process.env, signal, timeout = 480_000, capture } = {}) {
+  const cancellation = cancellationSignals(signal);
+  const root = await mkdtemp(join(env.INTEGRATION_FIXTURE_ROOT ?? tmpdir(), 'composer test runner '));
+  const registry = env.INTEGRATION_PROCESS_REGISTRY ?? join(root, 'processes');
+  await mkdir(registry, { recursive: true });
+  const childEnv = { ...env, INTEGRATION_FIXTURE_ROOT: root, INTEGRATION_PROCESS_REGISTRY: registry };
+  delete childEnv.NODE_TEST_CONTEXT;
+  try {
+    await runCommand(
+      process.execPath,
+      ['--experimental-strip-types', '--test', '--test-concurrency=1', '--test-timeout=300000', ...files],
+      { env: childEnv, signal: cancellation.signal, timeout },
+      capture,
+    );
+  } finally {
+    try {
+      await cleanupProcesses(registry, root);
+    } finally {
+      try {
+        await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } finally {
+        cancellation.dispose();
+      }
+    }
+  }
+}
+
 async function main() {
   const repository = fileURLToPath(new URL('../', import.meta.url));
   const artifacts = join(repository, 'integration-results');
   await rm(artifacts, { recursive: true, force: true });
   await mkdir(artifacts);
   const root = await mkdtemp(join(tmpdir(), 'composer runner '));
+  const cancellation = cancellationSignals();
   let transcript = '';
-  const run = async (command, args, options = {}) => {
-    const child = spawn(command, args, { cwd: repository, stdio: ['ignore', 'pipe', 'pipe'], ...options });
-    const capture = (data) => {
-      const text = data.toString();
-      process.stdout.write(text);
-      transcript = (transcript + text).slice(-65_536);
-    };
-    child.stdout.on('data', capture);
-    child.stderr.on('data', capture);
-    await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) =>
-        code === 0 ? resolve() : reject(new Error(`Command failed (${signal ?? code})`)),
-      );
-    });
+  const capture = (data) => {
+    const text = data.toString();
+    process.stdout.write(text);
+    transcript = (transcript + text).slice(-65_536);
   };
+  const run = (command, args, options = {}) =>
+    runCommand(command, args, { ...options, signal: cancellation.signal }, capture);
   try {
     const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8'));
     const lock = JSON.parse(await readFile(join(repository, 'package-lock.json'), 'utf8'));
@@ -116,6 +198,7 @@ async function main() {
     const ripgrepDirectory = join(root, `ripgrep-${ripgrepVersion}-${ripgrep.target}`);
     const verifiedRipgrep = await promisify(execFile)(join(ripgrepDirectory, ripgrep.executable), ['--version'], {
       timeout: 10_000,
+      signal: cancellation.signal,
     });
     assert.equal(verifiedRipgrep.stdout.split(/\s+/)[1], ripgrepVersion, verifiedRipgrep.stdout);
     const testEnvironment = { ...process.env, OPENCODE_BIN: binary, INTEGRATION_ARTIFACT_DIR: artifacts };
@@ -124,6 +207,7 @@ async function main() {
     const { stdout } = await promisify(execFile)(binary, ['--version'], {
       env: isolatedEnvironment(root),
       timeout: 30_000,
+      signal: cancellation.signal,
     });
     validateCliVersion(stdout, version);
     console.log(
@@ -144,24 +228,26 @@ async function main() {
         2,
       ),
     );
-    await run(
-      process.execPath,
-      [
-        '--experimental-strip-types',
-        '--test',
-        '--test-concurrency=1',
-        '--test-timeout=300000',
+    await runNativeTests({
+      files: [
         'tests/config-composer.native.ts',
         'tests/integration/lifecycle.integration.ts',
+        'tests/integration/cleanup.integration.mjs',
       ],
-      {
-        env: testEnvironment,
-        timeout: 480_000,
-      },
-    );
+      env: { ...testEnvironment, INTEGRATION_FIXTURE_ROOT: root },
+      signal: cancellation.signal,
+      capture,
+    });
   } finally {
-    await writeFile(join(artifacts, 'runner.log'), Buffer.from(transcript).subarray(-65_536));
-    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    try {
+      await writeFile(join(artifacts, 'runner.log'), Buffer.from(transcript).subarray(-65_536));
+    } finally {
+      try {
+        await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } finally {
+        cancellation.dispose();
+      }
+    }
   }
 }
 
