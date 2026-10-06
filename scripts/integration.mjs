@@ -231,7 +231,10 @@ async function main() {
     await runNativeTests({
       files: [
         'tests/config-composer.native.ts',
+        'tests/composition-profiles.native.ts',
         'tests/integration/lifecycle.integration.ts',
+        'tests/integration/canonical.integration.ts',
+        'tests/integration/canonical-regressions.integration.ts',
         'tests/integration/cleanup.integration.mjs',
       ],
       env: { ...testEnvironment, INTEGRATION_FIXTURE_ROOT: root },

@@ -3,8 +3,9 @@ import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
-import { pathToFileURL } from 'node:url';
+import { installedEditor } from './editor.ts';
 import { nativeHarness } from './harness.ts';
+import { applyEdits, modify } from 'jsonc-parser';
 import type * as Storage from '../../src/config-composer/storage.ts';
 
 interface Agent {
@@ -24,10 +25,7 @@ test(
   async (t) => {
     const host = await nativeHarness(t, 'lifecycle');
     const { configRoot, project, installed, api, requests } = host;
-    // Exercise the actual installed editor implementation; the source import above is type-only.
-    const storage = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
-    )) as typeof Storage;
+    const { storage, reload } = await installedEditor(host);
     await mkdir(join(configRoot, 'settings', 'prompts'), { recursive: true });
     await mkdir(join(configRoot, 'agents'), { recursive: true });
     await mkdir(join(configRoot, 'skills', 'included-skill'), { recursive: true });
@@ -87,18 +85,17 @@ test(
     );
     const composer = {
       sourceDirectories: { shared: './prompts' },
-      agent: {
-        modelPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
-        groups: {
-          workers: { modelRef: 'preset:balanced', prompt: { prepend: ['GROUP_START'], append: ['GROUP_END'] } },
+      configurationPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
+      defaults: { agents: { prompt: { prepend: ['DEFAULT_START'], append: ['DEFAULT_END'] } } },
+      overrides: { agents: { pinned: { prompt: { inheritDefaults: false, append: ['PINNED_END'] } } } },
+      componentGroups: {
+        workers: {
+          configuration: { modelRef: 'preset:balanced', prompt: { prepend: ['GROUP_START'], append: ['GROUP_END'] } },
         },
-        prompts: {
-          defaults: { prepend: ['DEFAULT_START'], append: ['DEFAULT_END'] },
-          overrides: { pinned: { inheritDefaults: false, append: ['PINNED_END'] } },
-        },
+        alternate: { configuration: { model: 'fixture/alpha' } },
       },
-      command: {},
-      skill: {},
+      profiles: { work: { layers: [{ componentGroup: 'workers' }, { componentGroup: 'alternate' }] } },
+      activeProfiles: ['work'],
     };
     const settingsText = '// Dedicated custom settings\n' + JSON.stringify(composer, null, 2);
     await writeFile(settingsPath, settingsText);
@@ -118,26 +115,6 @@ test(
       const found = (await api<Agent[]>('/agent')).find((item) => item.name === name);
       assert.ok(found !== undefined);
       return found;
-    };
-    const reload = async () => {
-      let token: string | undefined;
-      await storage.reloadConfiguration(await storage.loadSnapshot(configRoot), async (plugins) => {
-        const entry = plugins[0] as [string, { reloadToken: string }];
-        token = entry[1].reloadToken;
-        await api('/global/config', { plugin: plugins }, 'PATCH');
-      });
-      assert.ok(token !== undefined);
-      // PATCH schedules instance disposal. Wait for the new configuration to be
-      // visible before dispatch; do not retry a model/tool request to conceal failure.
-      for (let attempt = 0; attempt < 200; attempt++) {
-        const current = await api<{ plugin?: unknown[] }>('/config');
-        if (JSON.stringify(current.plugin).includes(token)) {
-          await api('/agent');
-          return;
-        }
-        await setTimeout(50);
-      }
-      assert.fail('Reload token did not become visible in the native instance');
     };
     const send = async (
       agentName = 'worker',
@@ -243,37 +220,60 @@ test(
         assert.equal((await send()).message.info.modelID, 'beta');
       },
     );
-    await t.test('ordered membership edits and explicit pins change actual model dispatch', async () => {
-      const change = async (value: Storage.Change) => {
-        await storage.savePlan(storage.planChange(await storage.loadSnapshot(configRoot), value));
+    await t.test(
+      'profile layer order governs edited memberships while explicit pins retain native authority',
+      async () => {
+        const change = async (value: Storage.Change) => {
+          await storage.savePlan(storage.planChange(await storage.loadSnapshot(configRoot), value));
+          await reload();
+        };
+        await change({
+          kind: 'group',
+          name: 'alternate',
+          choice: { model: 'fixture/alpha', variant: 'low', prompt: { append: ['ALTERNATE_GROUP'] } },
+        });
+        await change({ kind: 'membership', agent: 'worker', groups: ['workers', 'alternate'] });
+        assert.equal((await send()).message.info.modelID, 'alpha');
+        assert.equal(requests.at(-1)?.reasoning_effort, 'low');
+        assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('ALTERNATE_GROUP'));
+        await change({ kind: 'membership', agent: 'build', groups: ['workers', 'alternate'] });
+        assert.equal((await send('build')).message.info.modelID, 'alpha');
+        await change({ kind: 'membership', agent: 'worker', groups: ['alternate', 'workers'] });
+        await change({ kind: 'membership', agent: 'build', groups: ['alternate', 'workers'] });
+        assert.equal(
+          (await send('build')).message.info.modelID,
+          'alpha',
+          'membership order cannot override profile order',
+        );
+        assert.equal((await send()).message.info.modelID, 'alpha');
+        const before = await readFile(settingsPath, 'utf8');
+        await writeFile(
+          settingsPath,
+          applyEdits(
+            before,
+            modify(
+              before,
+              ['profiles', 'work', 'layers'],
+              [{ componentGroup: 'alternate' }, { componentGroup: 'workers' }],
+              {},
+            ),
+          ),
+        );
         await reload();
-      };
-      await change({
-        kind: 'group',
-        name: 'alternate',
-        choice: { model: 'fixture/alpha', variant: 'low', prompt: { append: ['ALTERNATE_GROUP'] } },
-      });
-      await change({ kind: 'membership', agent: 'worker', groups: ['workers', 'alternate'] });
-      assert.equal((await send()).message.info.modelID, 'alpha');
-      assert.equal(requests.at(-1)?.reasoning_effort, 'low');
-      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('ALTERNATE_GROUP'));
-      await change({ kind: 'membership', agent: 'build', groups: ['workers', 'alternate'] });
-      assert.equal((await send('build')).message.info.modelID, 'alpha');
-      await change({ kind: 'membership', agent: 'worker', groups: ['alternate', 'workers'] });
-      await change({ kind: 'membership', agent: 'build', groups: ['alternate', 'workers'] });
-      assert.equal((await send('build')).message.info.modelID, 'beta');
-      assert.equal((await send()).message.info.modelID, 'beta');
-      assert.equal(requests.at(-1)?.reasoning_effort, 'high');
-      await change({ kind: 'override', agent: 'worker', choice: { model: 'fixture/alpha', variant: 'low' } });
-      assert.equal((await send()).message.info.modelID, 'alpha');
-      assert.equal(requests.at(-1)?.reasoning_effort, 'low');
-      await change({ kind: 'override', agent: 'worker', choice: {} });
-      assert.equal((await send()).message.info.modelID, 'beta');
-      await change({ kind: 'membership', agent: 'worker', groups: ['workers'] });
-      assert.ok((await agent()).prompt?.includes('ALTERNATE_GROUP') !== true);
-      assert.equal((await send('pinned')).message.info.modelID, 'alpha');
-      assert.equal(requests.at(-1)?.reasoning_effort, 'low');
-    });
+        assert.equal((await send('build')).message.info.modelID, 'beta');
+        assert.equal((await send()).message.info.modelID, 'beta');
+        assert.equal(requests.at(-1)?.reasoning_effort, 'high');
+        await change({ kind: 'override', agent: 'worker', choice: { model: 'fixture/alpha', variant: 'low' } });
+        assert.equal((await send()).message.info.modelID, 'alpha');
+        assert.equal(requests.at(-1)?.reasoning_effort, 'low');
+        await change({ kind: 'override', agent: 'worker', choice: {} });
+        assert.equal((await send()).message.info.modelID, 'beta');
+        await change({ kind: 'membership', agent: 'worker', groups: ['workers'] });
+        assert.ok((await agent()).prompt?.includes('ALTERNATE_GROUP') !== true);
+        assert.equal((await send('pinned')).message.info.modelID, 'alpha');
+        assert.equal(requests.at(-1)?.reasoning_effort, 'low');
+      },
+    );
     await t.test('native skill allow, deny and interactive ask decisions affect actual tool results', async () => {
       for (const action of ['allow', 'deny', 'ask']) {
         const session = await api<{ id: string }>('/session', { title: `Skill ${action}` });
@@ -397,8 +397,10 @@ test(
         const bodyPath = join(configRoot, 'settings', 'prompts', 'body.md');
         const goodBody = await readFile(bodyPath, 'utf8');
         const before = requests.length;
+        const snapshot = await storage.loadSnapshot(configRoot);
         await writeFile(bodyPath, '{{include:@shared/../outside.md}}');
-        await reload();
+        await assert.rejects(storage.loadSnapshot(configRoot), /include|source|path/i);
+        await reload(snapshot);
         // OpenCode catches config-hook errors. Verify transactional composition rather
         // than claiming that the host prevents later requests with native settings.
         const rejected = await agent();
@@ -418,9 +420,9 @@ test(
         const good = await readFile(settingsPath, 'utf8');
         const nativeBefore = await readFile(nativePath, 'utf8');
         const activeBefore = await agent();
-        await writeFile(settingsPath, '{ "agent": { "groups": ');
+        await writeFile(settingsPath, '{ "componentGroups": ');
         await assert.rejects(reload(), /invalid Config Composer JSONC/);
-        assert.equal(await readFile(settingsPath, 'utf8'), '{ "agent": { "groups": ');
+        assert.equal(await readFile(settingsPath, 'utf8'), '{ "componentGroups": ');
         assert.equal(await readFile(nativePath, 'utf8'), nativeBefore);
         assert.deepEqual(await agent(), activeBefore);
         assert.equal((await send()).message.info.modelID, 'alpha');

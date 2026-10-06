@@ -44,31 +44,42 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | --- | --- | --- |
 | Built package and pinned host | Installed tarball, native version check, separate consumer dependency tree | Both platforms; package/declaration checks also run in Check |
 | Dedicated/custom settings | Custom plugin options, settings-relative source paths, preserved JSONC comments | Both platforms |
-| Agent model presets and ordered groups | Effective native agents and captured model/variant requests; explicit agent pins; project model/small-model references | Both platforms |
-| Built-in/custom membership | JSONC membership on native build/plan/explore; custom frontmatter; shared ordered model groups, no shadow agent files, unchanged native fields/permissions | Both platforms for implemented model groups; Composer permission overlays and final presets require #33 and canonical-schema integration |
-| Session model selection | Captured explicit model and variant override | Both platforms |
-| Prompt composition | Authored Markdown, group/default order, per-agent inheritance, nested includes, provider-visible text | Both platforms |
-| Native skills | Expanded native tool result and following provider request; metadata and companion files | Both platforms |
-| Native permissions | Actual allow, deny and interactive ask decisions; denied content never reaches provider | Both platforms; Composer permission-group composition is separate work in [#33](https://github.com/lunchbox-labs/opencode-config-composer/pull/33) |
+| Components and explicit imports | Installed runtime activates imported agents, commands, skills and named prompts; paths resolve from their declaring files; unimported files stay inactive | Both platforms; automatic discovery remains deferred |
+| Canonical profiles | Ordered `activeProfiles` replay parent chains; local selection replaces shared selection, absence inherits, and `[]` disables; profile overrides and targeted presets affect actual requests | Both platforms |
+| Model presets and ordered groups | Captured model/variant requests; preset-reference chains; native agent pins; profile order wins over membership order | Both platforms |
+| Built-in/custom membership | Native build/plan/explore JSONC membership, inline components and custom frontmatter; installed membership editor; unchanged native fields/permissions and no shadow agent files | Both platforms; Composer permission overlays remain pending |
+| Global model defaults | Shared/project/local precedence for `model` and `small_model`; late-bound references; removal restores inherited defaults | Both platforms |
+| Session model selection | Captured explicit model and variant selection compared with a native pinned agent | Both platforms |
+| Typed model parameters | Captured temperature, top-p, output-token limit and generic options; native variant precedence; model changes clear previous-model parameters | Both platforms |
+| Utility dispatch | Automatic title updates and persisted compaction summaries, with captured model and parameter values | Both platforms; these exercise the host's utility paths |
+| Prompt composition | Authored Markdown, inline and file prompt references, group/default order, per-agent inheritance, nested includes, provider-visible text | Both platforms |
+| Commands and native skills | Real imported command execution; expanded native skill tool result and following provider request; metadata and companion files | Both platforms |
+| Native permissions | Actual allow, deny and interactive ask decisions; denied content never reaches provider | Both platforms; Composer permission-group compilation is separate work in [#33](https://github.com/lunchbox-labs/opencode-config-composer/pull/33) |
+| Canonical editors | Imported preset edits reach their declaring writable JSONC; mixed bundles, comments, parameters and inactive permission data survive model-only changes; membership edits do not activate profiles | Both platforms; preservation of inactive permission data does not establish enforcement |
 | Save and apply | Installed editor saves, unchanged active cache before reload, actual reload API, repeated reload without duplicate prompts | Both platforms |
-| Removed contributions | Ordered membership replacement, empty membership removal, explicit pin/clear and captured dispatch | Both platforms |
-| Persistence | Multi-file save, process restart, retained session messages and settings | Both platforms |
+| Removed contributions | Membership replacement, explicit pin/clear, profile deselection restores the complete native agent registry and removes imported commands/skills | Both platforms |
+| Persistence | Multi-file save, process restart, retained session messages, profile activation and imported settings | Both platforms |
+| Generated-agent ownership | The installed hook is replayed on the same native config objects after an external description edit; a completed replay, new prompt/model and captured request exclude stale state | Both platforms; fixture-controlled hook replay inside the real host, distinct from an API reload |
+| Optional shared configuration | Project-only composition opens and reloads without creating the absent optional shared default | Both platforms |
+| Import alias identity | Retargeting a directory symlink/junction rejects stale reload before its token is written; reopening applies the new source and leaves the previous target untouched | Both platforms |
 | Interrupted runs | Outer numeric timeout and SIGINT/SIGTERM handlers terminate a real native host and a blocked nested test runner, removing their fixtures without test hooks | Both platforms; the Windows regression emits Node signal events because `process.kill()` terminates directly on Windows |
-| Invalid/concurrent edits | Rejected referenced-preset deletion, malformed preset, lock collision, stale snapshot, malformed JSONC; byte comparisons and lock cleanup; failed prompt composition leaves native settings unmodified | Both platforms; exhaustive rollback/fault combinations remain covered by focused unit tests |
-| Terminal menus | Packaged entrypoint and both existing menus render through a real pseudo-terminal | Existing Linux Check only; Windows terminal driving and complete interaction/save/reload flows remain open |
-| Composer model defaults | Native overrides, fallback removal and session interactions | Await integration of [#31](https://github.com/lunchbox-labs/opencode-config-composer/pull/31) |
-| Typed model parameters | Provider request mapping, variant precedence, title/compaction parameters and removal | Await integration of [#34](https://github.com/lunchbox-labs/opencode-config-composer/pull/34); its existing native request assertions supply regression cases |
-| Components, component groups, configuration presets | Canonical schema, explicit imports, resolution and validation | Schema contract in [#36](https://github.com/lunchbox-labs/opencode-config-composer/pull/36); runtime/import assembly pending |
-| Profiles and ordered `activeProfiles` | Local replacement; absent inherits; empty disables; ordering, reload and persistence | Schema contract in [#36](https://github.com/lunchbox-labs/opencode-config-composer/pull/36); runtime integration pending; [#30](https://github.com/lunchbox-labs/opencode-config-composer/pull/30) is earlier source/profile work |
-| Compose TUI and provenance | Real terminal navigation, inspection, selection, save/apply and error flows | Await integration of [#32](https://github.com/lunchbox-labs/opencode-config-composer/pull/32) and the final profile UI |
-| Automatic source discovery | Discovery boundaries and precedence | Deferred; explicit imports come first |
+| Invalid/concurrent edits | Read-only import edits, referenced-preset deletion, invalid model input, missing imports, lock collisions, stale snapshots and malformed JSONC reject; file bytes and locks are checked; failed prompt composition leaves native settings unmodified | Both platforms; exhaustive rollback/fault combinations remain focused unit tests |
+| Terminal menus | Packaged entrypoint and existing menus render through a real pseudo-terminal | Existing Linux Check only; Windows terminal driving and complete interaction/save/reload flows remain open |
+| Composer permission compilation and failure policy | Actual tool decisions for ordered canonical rules, invalid/unsupported configuration and host hook errors | Pending compiler integration; required before final acceptance |
+| Compose TUI and provenance | Real terminal navigation, inspection, profile/component/permission authoring, selection, save/apply and error flows | Pending [#32](https://github.com/lunchbox-labs/opencode-config-composer/pull/32) and final canonical UI |
+| Automatic source discovery | Discovery boundaries and precedence | Deferred; explicit imports are the implemented contract |
 
-Final acceptance must cover actual tool decisions after invalid or unsupported configuration (including swallowed host hook errors), group presets, Composer permission/model overlays and deterministic ordering across both built-in JSONC and custom frontmatter membership, while preserving unspecified native behavior.
+The canonical scenarios depend on the schema, source loader, runtime and editor stack
+in [#36](https://github.com/lunchbox-labs/opencode-config-composer/pull/36),
+[#38](https://github.com/lunchbox-labs/opencode-config-composer/pull/38),
+[#39](https://github.com/lunchbox-labs/opencode-config-composer/pull/39) and
+[#40](https://github.com/lunchbox-labs/opencode-config-composer/pull/40).
 
-The final feature integration PR must complete the applicable pending rows against
-real implementations before claiming full feature coverage. This infrastructure PR
-does not claim profiles, future schema behavior, Composer permission groups or complete
-TUI coverage.
+Final feature acceptance must complete the pending permission and TUI rows against
+real implementations. Permission acceptance must include actual tool decisions after
+invalid or unsupported configuration, ordered presets and overlays across native built-in
+JSONC and custom frontmatter memberships, while preserving unspecified native behavior.
+No skipped placeholder test stands in for those missing capabilities.
 
 OpenCode 1.18.34 catches plugin configuration-hook errors and can continue with native
 settings. The invalid-include case verifies that Composer applies no partial prompt or
@@ -80,7 +91,8 @@ the editor before reload leaves the previous active settings in effect.
 
 Failure artifacts contain only bounded runner/host logs, synthetic request captures,
 and version metadata in `integration-results/`. Each log/capture is capped at 64 KiB;
-the current suite produces less than 400 KiB before compression. Databases, dependency
+the seven native fixtures plus runner log and version metadata produce less than 1 MiB
+before compression. Databases, dependency
 trees and caches are excluded. CI uploads these files only on failure with three-day
 retention. Successful runs upload nothing. No Actions cache is configured.
 
