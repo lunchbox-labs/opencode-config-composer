@@ -616,6 +616,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
         dialog = props;
       },
       dialog: {
+        setSize: () => {},
         get open() {
           return dialog !== undefined;
         },
@@ -1578,6 +1579,7 @@ test('membership repair confirmation exposes permission fallback before saving a
   assert.match(ui.message(), /All Composer.*agent.*not applied/);
   assert.match(ui.message(), /builtin/);
   assert.match(ui.message(), /more permissive/i);
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf(file));
   assert.equal(await readFile(file, 'utf8'), before, 'warning is visible before any write');
   await ui.cancel();
   assert.equal(await readFile(file, 'utf8'), before);
@@ -1923,6 +1925,31 @@ test('permission UI creates an inactive permission-only preset without choosing 
   const snapshot = await loadSnapshot(root);
   assert.deepEqual(snapshot.sources.registry.configurationPresets?.checks, { permissions: [] });
   assert.deepEqual(snapshot.sources.activeProfiles, ['work']);
+  assert.equal(ui.updates, 0);
+});
+
+test('permission save puts candidate fallback before long source paths and ordered rule details', async (t) => {
+  const root = await fixture(t);
+  const file = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(file, 'utf8'));
+  const definitions = value.componentGroups as Record<string, Record<string, unknown>>;
+  definitions.developers.configuration = {
+    permissions: [
+      { tool: 'webfetc?', pattern: 'a', action: 'deny' },
+      { tool: 'webfetch', action: 'allow' },
+      { tool: 'webfetc?', pattern: 'b', action: 'deny' },
+    ],
+  };
+  await writeFile(file, JSON.stringify(value));
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(file);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('+save');
+  assert.match(ui.message(), /^Agent builtin:/);
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf(file));
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf('webfetc?'));
   assert.equal(ui.updates, 0);
 });
 

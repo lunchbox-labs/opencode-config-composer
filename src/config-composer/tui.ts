@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
 import type { Config } from '@opencode-ai/sdk/v2';
 import { dialogNavigation } from '../tui/navigation.ts';
+import { permissionReview } from './tui/permission-review.ts';
 import {
   type CatalogModel,
   type GroupChoice,
@@ -184,6 +185,7 @@ export function registerSettings(
   const confirm = (title: string, message: string, action: () => Promise<void>) => {
     // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
     navigation.confirm({ title, message, onConfirm: () => run(action) });
+    api.ui.dialog.setSize('xlarge');
   };
   const connection = async (expectedRoot?: string) => {
     const serverPath = api.state.path.config;
@@ -1059,14 +1061,14 @@ export function registerSettings(
     ].filter((name) => JSON.stringify(snapshot.resolved.agent[name]) !== JSON.stringify(preview.resolved.agent[name]));
     confirm(
       review?.title ?? (change === undefined ? 'Save profile selection?' : 'Save composition definition?'),
-      `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+      permissionReview(preview.resolved.permissionWarnings) +
+        `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
         (review === undefined ? '' : `${review.details}\n\n`) +
         `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
         `Changed global models: ${globals.length === 0 ? 'none' : globals.map(({ field, model }) => `${field}: ${model}`).join(', ')}.\n` +
         `Changed command models: ${commands.length === 0 ? 'none' : commands.map(({ name, model }) => `${name}: ${model}`).join(', ')}.\n` +
         `Commands: ${Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
         `Active profiles: ${preview.sources.activeProfiles.join(' → ')}.\n` +
-        `${preview.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}\n` +
         'Save preserves conversations. Reload saved settings to apply changes.',
       async () => {
         await refreshNative(snapshot);
@@ -1174,12 +1176,12 @@ export function registerSettings(
         };
         confirm(
           'Save membership repair?',
-          `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+          permissionReview(preview.resolved.permissionWarnings) +
+            `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
             'The previous saved configuration is invalid; no effective before-state is available.\n' +
             `Validated candidate profiles: ${preview.sources.activeProfiles.length === 0 ? 'none' : preview.sources.activeProfiles.join(' → ')}.\n` +
             `Selected agents: ${preview.resolved.selectedAgents.length === 0 ? 'none' : preview.resolved.selectedAgents.join(', ')}.\n` +
             `Commands: ${Object.keys(preview.resolved.commands).length === 0 ? 'none' : Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
-            `${preview.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}\n` +
             'Save preserves native files and conversations. Apply remains an explicit reload.',
           async () => {
             const next = await validate();
