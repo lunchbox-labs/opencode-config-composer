@@ -29,8 +29,24 @@ export function terminalSearch(screen: Terminal) {
       /^Search(?: fields)?…/.test(buffer.getLine(buffer.cursorY)?.translateToString(false, buffer.cursorX) ?? '')
     );
   };
+  const pending = () =>
+    !visible &&
+    Array.from({ length: screen.rows }, (_, row) => screen.buffer.active.getLine(row)?.translateToString() ?? '').some(
+      (line) => /^\s+Search(?: fields)?…\s*$/.test(line),
+    );
+  const promptFocused = () => {
+    const buffer = screen.buffer.active;
+    return (
+      visible &&
+      buffer.cursorX === 5 &&
+      buffer.cursorY >= screen.rows - 9 &&
+      buffer.getLine(buffer.cursorY)?.translateToString(false, 0, 5) === '  ┃  '
+    );
+  };
   return {
     focused,
     echoed,
+    pending,
+    promptFocused,
   };
 }

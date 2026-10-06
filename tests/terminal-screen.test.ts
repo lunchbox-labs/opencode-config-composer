@@ -14,9 +14,11 @@ test('native select readiness waits beyond autocomplete and first paint for focu
   await write('\x1b[?25l\x1b[16;65HCompose\x1b[18;65HSearch…\x1b[22;65HPrompt operations and inheritance\x1b[55;180H');
   assert.ok(screen.buffer.active.getLine(21)!.translateToString().includes('Prompt operations and inheritance'));
   assert.equal(search.focused(), false, 'first dialog paint precedes native input focus');
+  assert.equal(search.pending(), true, 'another Escape must wait for the menu key handler');
   assert.equal(search.echoed('Prompt operations and inheritance'), false, 'an option title does not prove typed input');
   await write('\x1b[18;65H\x1b[?25h');
   assert.equal(search.focused(), true);
+  assert.equal(search.pending(), false);
   assert.equal(
     search.echoed('Prompt operations and inheritance'),
     false,
@@ -33,4 +35,11 @@ test('native select readiness waits beyond autocomplete and first paint for focu
   );
   await write('\x1b[18;65H\x1b[KSearch fields…\x1b[18;65H\x1b[?25h');
   assert.equal(search.focused(), true, 'the saved composition inspector has a distinct search placeholder');
+  assert.equal(search.promptFocused(), false, 'a menu cannot receive a conversation command');
+  await write('\x1b[?25l\x1b[49;1H  ┃  \x1b[49;6H');
+  assert.equal(search.promptFocused(), false, 'the restored main input must regain focus');
+  await write('\x1b[?25h');
+  assert.equal(search.promptFocused(), true);
+  await write('/compose');
+  assert.equal(search.echoed('/compose'), true);
 });
