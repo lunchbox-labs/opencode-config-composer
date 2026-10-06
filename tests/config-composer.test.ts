@@ -631,13 +631,16 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
     },
     client: {
       file: {
-        read: async (input: { path: string }) => {
+        read: async (input: { path: string; directory: string }) => {
           await proofGate?.();
-          if (projectProofError && input.path.startsWith(api.state.path.directory)) {
+          if (projectProofError && input.directory === api.state.path.directory) {
             throw new Error('Project proof failed');
           }
           return {
-            data: { type: 'text', content: await readFile(join(serverRoot, relative(root, input.path)), 'utf8') },
+            data: {
+              type: 'text',
+              content: await readFile(join(serverRoot, relative(root, input.directory), input.path), 'utf8'),
+            },
           };
         },
       },
