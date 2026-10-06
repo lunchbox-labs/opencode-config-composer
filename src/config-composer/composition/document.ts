@@ -126,7 +126,11 @@ export function readCompositionDocument(value: unknown, sourceId?: string): Comp
   }
   if (!validate(copied)) {
     const error = diagnosticError(copied, validate.errors ?? []);
-    const extra: unknown = error?.params.additionalProperty;
+    // propertyNames reports its key on a sibling wrapper error, not on the selected leaf error.
+    const propertyName: unknown = validate.errors?.find(
+      (item) => item.keyword === 'propertyNames' && item.instancePath === error?.instancePath,
+    )?.params.propertyName;
+    const extra: unknown = error?.params.additionalProperty ?? propertyName;
     const pointer = `${error?.instancePath ?? ''}${typeof extra === 'string' ? `/${pointerPart(extra)}` : ''}`;
     if (pointer.startsWith('/activeProfiles') || /^\/profiles\/[^/]+\/extends$/.test(pointer)) {
       fail(
