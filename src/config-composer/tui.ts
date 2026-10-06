@@ -671,9 +671,12 @@ export function registerSettings(
           ),
       },
       {
-        title: 'Use group defaults',
+        title: agent.component === true ? 'Use component source defaults' : 'Use group defaults',
         value: 'inherit',
-        description: "Clear this agent's model and variant overrides",
+        description:
+          agent.component === true
+            ? "Clear this component's JSONC model and variant overrides"
+            : "Clear this agent's model and variant overrides",
         run: () => propose(snapshot, { kind: 'override', agent: agent.name, choice: {} }),
       },
     ]);

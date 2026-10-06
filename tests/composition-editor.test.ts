@@ -293,36 +293,39 @@ test('read-only component aliases allow unrelated edits but detect identity chan
   await assert.rejects(savePlan(plan), /identity changed/);
 });
 
-test('concrete component overrides preserve shared read-only Markdown and other component variants', async (t) => {
-  const root = await fixture(t);
-  const path = join(root, 'shared-agent.md');
-  const original = '---\nmodel: fixture/old\nvariant: low\ngroups: [work]\n---\nShared body';
-  await writeFile(path, original);
-  await chmod(path, 0o444);
-  await writeFile(
-    join(root, 'config-composer.jsonc'),
-    JSON.stringify({
-      components: { agents: { one: { file: './shared-agent.md' }, two: { file: './shared-agent.md' } } },
-      componentGroups: { work: { agents: ['one', 'two'] } },
-      profiles: { work: { layers: [{ componentGroup: 'work' }] } },
-      activeProfiles: ['work'],
-    }),
-  );
-  const snapshot = await loadSnapshot(root);
-  const plan = planChange(snapshot, { kind: 'override', agent: 'one', choice: { model: 'fixture/new' } });
-  assert.deepEqual(
-    plan.edits.map((edit) => edit.file.path),
-    [snapshot.settingsFile.path],
-  );
-  await savePlan(plan);
-  const current = await loadSnapshot(root);
-  assert.equal(current.resolved.agent.one.model, 'fixture/new');
-  assert.equal(current.resolved.agent.one.variant, undefined);
-  assert.equal(current.resolved.agent.two.model, 'fixture/old');
-  assert.equal(current.resolved.agent.two.variant, 'low');
-  assert.equal(await readFile(path, 'utf8'), original);
-  assert.throws(() => planChange(current, { kind: 'override', agent: 'one', choice: {} }), /shared by multiple agents/);
-});
+for (const pinned of [false, true]) {
+  test(`setting, changing and clearing a shared component override preserves Markdown (${pinned ? 'native pin' : 'group inheritance'})`, async (t) => {
+    const root = await fixture(t);
+    const path = join(root, 'shared-agent.md');
+    const original = `---\n${pinned ? 'model: fixture/old\nvariant: low\n' : ''}groups: [work]\n---\nShared body`;
+    await writeFile(path, original);
+    await chmod(path, 0o444);
+    await writeFile(
+      join(root, 'config-composer.jsonc'),
+      JSON.stringify({
+        components: { agents: { one: { file: './shared-agent.md' }, two: { file: './shared-agent.md' } } },
+        componentGroups: { work: { agents: ['one', 'two'], configuration: { model: 'fixture/group' } } },
+        profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+        activeProfiles: ['work'],
+      }),
+    );
+    for (const choice of [{ model: 'fixture/new' }, { model: 'fixture/changed', variant: 'medium' }, {}]) {
+      const snapshot = await loadSnapshot(root);
+      const plan = planChange(snapshot, { kind: 'override', agent: 'one', choice });
+      assert.deepEqual(
+        plan.edits.map((edit) => edit.file.path),
+        [snapshot.settingsFile.path],
+      );
+      await savePlan(plan);
+      const current = await loadSnapshot(root);
+      assert.equal(current.resolved.agent.one.model, choice.model ?? (pinned ? 'fixture/old' : 'fixture/group'));
+      assert.equal(current.resolved.agent.one.variant, choice.model === undefined && pinned ? 'low' : choice.variant);
+      assert.equal(current.resolved.agent.two.model, pinned ? 'fixture/old' : 'fixture/group');
+      assert.equal(current.resolved.agent.two.variant, pinned ? 'low' : undefined);
+      assert.equal(await readFile(path, 'utf8'), original);
+    }
+  });
+}
 
 for (const kind of ['composition', 'component'] as const) {
   test(`snapshot rejects a concurrent ${kind} edit between filesystem reads`, async (t) => {
