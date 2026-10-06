@@ -38,11 +38,12 @@ export async function applySavedComposition(
     );
   }
   const result = await withSavedSnapshot(snapshot, async (verify) => {
-    // The public API has no conditional dispose transaction. Check activity at the final asynchronous boundary.
+    // The public API has no conditional dispose transaction. Recheck inputs after the asynchronous idle check.
     const activity = await port.activity();
     if (Object.values(activity).some((status) => status.type !== 'idle')) {
       throw new SettingsError('Agents are still running in this instance. Settings are saved; retry apply when idle.');
     }
+    await verify();
     port.assertCurrent();
     await port.dispose();
     port.assertCurrent();
