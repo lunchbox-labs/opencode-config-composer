@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import * as pty from 'node-pty';
@@ -13,6 +13,18 @@ export async function nativeTerminal(
   sessionID?: string,
   name = 'compose-terminal',
 ) {
+  const diagnosticModule = join(host.root, 'native-path-diagnostics.mjs');
+  const diagnosticFile = join(host.root, `${name}-paths.json`);
+  await copyFile(new URL('./fixtures/native-path-diagnostics.mjs', import.meta.url), diagnosticModule);
+  const tuiFile = join(host.configRoot, 'tui.jsonc');
+  const tuiConfig = JSON.parse(await readFile(tuiFile, 'utf8')) as { plugin?: unknown[] };
+  await writeFile(
+    tuiFile,
+    JSON.stringify({
+      ...tuiConfig,
+      plugin: [...(tuiConfig.plugin ?? []), [diagnosticModule, { file: diagnosticFile }]],
+    }),
+  );
   const screen = new headless.Terminal({ cols: 180, rows: 55, scrollback: 0, allowProposedApi: true });
   const child = pty.spawn(
     process.env.OPENCODE_BIN ?? 'opencode',
@@ -55,6 +67,10 @@ export async function nativeTerminal(
         await mkdir(diagnostics, { recursive: true });
         await writeFile(join(diagnostics, `${name}.txt`), Buffer.from(text()).subarray(-65_536));
         await writeFile(join(diagnostics, `${name}-vt.txt`), Buffer.from(transcript).subarray(-65_536));
+        const paths = await readFile(diagnosticFile).catch(() => undefined);
+        if (paths !== undefined) {
+          await writeFile(join(diagnostics, `${name}-paths.json`), paths.subarray(-65_536));
+        }
       }
     } finally {
       try {
