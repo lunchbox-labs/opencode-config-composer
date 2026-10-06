@@ -19,13 +19,21 @@ test('CI suites partition every portable integration file exactly once', async (
   const expected = [
     'tests/config-composer.native.ts',
     'tests/composition-profiles.native.ts',
+    'tests/canonical-permissions.native.ts',
     ...(await readdir(new URL('./integration/', import.meta.url)))
       .filter((name) => /\.integration\.(?:ts|mjs)$/.test(name))
       .map((name) => `tests/integration/${name}`),
   ].sort();
-  const files = ['core', 'canonical', 'editor', 'terminal', 'cleanup', 'content', 'content-terminal'].flatMap(
-    integrationFiles,
-  );
+  const files = [
+    'core',
+    'canonical',
+    'editor',
+    'terminal',
+    'cleanup',
+    'content',
+    'content-terminal',
+    'permissions',
+  ].flatMap(integrationFiles);
   assert.equal(new Set(files).size, files.length, 'a portable case belongs to exactly one CI suite');
   assert.deepEqual(files.sort(), expected);
   assert.deepEqual(integrationFiles().sort(), expected);

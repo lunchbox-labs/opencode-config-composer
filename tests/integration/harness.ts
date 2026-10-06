@@ -86,7 +86,10 @@ export async function nativeHarness(t: TestContext, name: string) {
       assert.ok(requests.length <= 200, 'unexpected provider request loop');
       const toolReturned =
         Array.isArray(body.messages) && body.messages.some((message: { role?: string }) => message.role === 'tool');
-      const callSkill = JSON.stringify(body.messages).includes('Load included-skill now.') && !toolReturned;
+      const defaultProbe = /Probe native (allow|ask)\./.exec(JSON.stringify(body.messages))?.[1];
+      const callSkill =
+        (JSON.stringify(body.messages).includes('Load included-skill now.') || defaultProbe !== undefined) &&
+        !toolReturned;
       const base = { id: 'synthetic-response', model: body.model, created: 1 };
       if (body.stream === true) {
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -105,7 +108,10 @@ export async function nativeHarness(t: TestContext, name: string) {
                           index: 0,
                           id: 'fixture-skill',
                           type: 'function',
-                          function: { name: 'skill', arguments: JSON.stringify({ name: 'included-skill' }) },
+                          function: {
+                            name: defaultProbe === undefined ? 'skill' : `permission_default_${defaultProbe}`,
+                            arguments: defaultProbe === undefined ? JSON.stringify({ name: 'included-skill' }) : '{}',
+                          },
                         },
                       ],
                     }
