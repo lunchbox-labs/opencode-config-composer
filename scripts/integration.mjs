@@ -168,7 +168,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup|content|content-terminal]',
+    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup|content|content-terminal|permissions|runtime-terminal]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);
