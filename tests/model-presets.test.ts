@@ -386,6 +386,7 @@ function uiHarness(root: string) {
         dialog = props;
       },
       dialog: {
+        setSize: () => {},
         get open() {
           return dialog !== undefined;
         },
