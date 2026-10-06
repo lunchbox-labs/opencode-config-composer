@@ -1,3 +1,5 @@
+import { verifyNativeAgents } from './composition/native-baseline.ts';
+import { isDeepStrictEqual } from 'node:util';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -34,6 +36,7 @@ import {
 } from './storage.ts';
 import { configurationDirectory } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
+import { type EditorNativeBaseline, readRuntimeBaseline } from './composition/runtime-baseline.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveProfileRuntime } from './composition/runtime.ts';
 import { openEffective } from './tui/compose.ts';
@@ -66,17 +69,31 @@ export function registerSettings(
     modelPresets: snapshot.modelPresets,
     native: native.get(snapshot) ?? { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model },
   });
-  const readNative = async (): Promise<NativeModels> => {
+  const readNative = async (): Promise<EditorNativeBaseline> => {
     const response: { error?: unknown; data?: Config | null } = await api.client.config.get();
     if (Boolean(response.error) || response.data === undefined || response.data === null) {
       throw new SettingsError(
         'Could not read effective workspace defaults. Reopen the editor after checking the server.',
       );
     }
-    return { model: response.data.model, small_model: response.data.small_model };
+    const path = api.state.path as { worktree?: string; directory?: string };
+    const root =
+      typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
+        ? path.worktree
+        : (path.directory ?? directory);
+    return readRuntimeBaseline(response.data, { root, directory: path.directory ?? root }, directory);
   };
   const refreshNative = async (snapshot: Snapshot) => {
     const models = await readNative();
+    if (!isDeepStrictEqual(snapshot.nativeModels.agent, models.agent)) {
+      throw new SettingsError(
+        'Native agent settings changed on the server. Reopen the editor and review the new preview.',
+      );
+    }
+    if (models.agent !== undefined) {
+      verifyNativeAgents(snapshot.nativeSourceAgents, models.agent);
+      snapshot.nativeAgents = models.agent;
+    }
     snapshot.nativeModels = models;
     snapshot.settings = editorSettings(snapshot.sources, models);
     snapshot.modelPresets = snapshot.settings.modelPresets;
@@ -170,17 +187,18 @@ export function registerSettings(
     assertCurrent();
     return { root, client, assertCurrent };
   };
-  const load = async () => {
+  const load = async (reloading = false) => {
     const { root } = await connection();
     const path = api.state.path as { worktree?: string; directory?: string };
     const project =
       typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
         ? path.worktree
         : (path.directory ?? root);
+    const baseline = await readNative();
     const snapshot = await loadSnapshot(
       root,
       project,
-      await readNative(),
+      reloading ? { model: baseline.model, small_model: baseline.small_model } : baseline,
       path.directory ?? project,
       typeof path.worktree === 'string' && path.worktree !== '' ? path.worktree : project,
     );
@@ -295,7 +313,8 @@ export function registerSettings(
         'Agents are still running in this workspace. Settings are saved; reload when they finish.',
       );
     }
-    const snapshot = await load();
+    // Saved native edits legitimately differ from the still-running server until this reload.
+    const snapshot = await load(true);
     if ((await realpath(globalDirectory).catch(() => undefined)) !== snapshot.root) {
       throw new SettingsError(
         'Settings are saved. Restart OpenCode to apply edits in a custom configuration directory.',
@@ -841,6 +860,9 @@ export function registerSettings(
         model: value.resolved.model,
         small_model: value.resolved.small_model,
         choices: value.resolved.choices,
+        agent: value.resolved.agent,
+        permissions: value.resolved.permissions,
+        skillPaths: value.resolved.skillPaths,
         commands: value.resolved.commands,
         profiles: value.sources.activeProfiles,
       });
@@ -894,7 +916,10 @@ export function registerSettings(
         await saveFilePlan(
           plan,
           async () => {
-            await previewDefinition(plan);
+            await refreshNative(snapshot);
+            if (projection(await previewDefinition(plan)) !== projection(preview)) {
+              throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
+            }
           },
           async () => {
             const { assertCurrent } = await connection(snapshot.root);

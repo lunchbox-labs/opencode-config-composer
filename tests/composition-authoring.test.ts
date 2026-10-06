@@ -260,3 +260,75 @@ test('mixed bundle membership patches retain configuration and reusable prompts 
   assert.deepEqual(current.sources.registry.componentGroups.work.prompts, ['guidance']);
   assert.deepEqual(current.sources.registry.components?.prompts?.guidance, { text: 'Extra guidance' });
 });
+
+for (const kind of ['env', 'file'] as const) {
+  test(`group rename rejects indirect native ${kind} memberships before writing`, async (t) => {
+    const root = await fixture(t);
+    const variable = 'COMPOSER_AUTHORING_NATIVE_GROUP';
+    const previous = process.env[variable];
+    process.env[variable] = 'work';
+    t.after(() => {
+      if (previous === undefined) {
+        Reflect.deleteProperty(process.env, variable);
+      } else {
+        process.env[variable] = previous;
+      }
+    });
+    await writeFile(join(root, 'native-group.txt'), 'work');
+    const config = join(root, 'opencode.jsonc');
+    await writeFile(
+      config,
+      JSON.stringify({
+        plugin: [packageName],
+        agent: { worker: { groups: [kind === 'env' ? `{env:${variable}}` : '{file:./native-group.txt}'] } },
+      }),
+    );
+    const before = await readFile(config, 'utf8');
+    const definitions = await readFile(join(root, 'definitions.jsonc'), 'utf8');
+    const snapshot = await loadSnapshot(root);
+    for (const change of [
+      { operation: 'rename', registry: 'componentGroups', name: 'work', nextName: 'coding' },
+      { operation: 'delete', registry: 'componentGroups', name: 'work' },
+    ] as const) {
+      assert.throws(
+        () => planDefinition(snapshot, change),
+        /Indirect native reference.*opencode\.jsonc.*agent\/worker\/groups\/0/s,
+      );
+    }
+    assert.equal(await readFile(config, 'utf8'), before);
+    assert.equal(await readFile(join(root, 'definitions.jsonc'), 'utf8'), definitions);
+  });
+}
+
+test('clearing a parent global override previews the original native baseline and native model references', async (t) => {
+  const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      configurationPresets: { native: { modelRef: 'opencode:model' } },
+      componentGroups: { work: { agents: ['build'] } },
+      profiles: {
+        parent: { overrides: { model: 'fixture/composer' } },
+        child: {
+          extends: 'parent',
+          layers: [{ componentGroup: 'work' }, { configurationPreset: 'native', target: { agents: ['build'] } }],
+        },
+      },
+      activeProfiles: ['child'],
+    }),
+  );
+  const snapshot = await loadSnapshot(root, root, { model: 'fixture/native' });
+  assert.equal(snapshot.resolved.model, 'fixture/composer');
+  assert.equal(snapshot.resolved.agent.build.model, 'fixture/composer');
+  const preview = await previewDefinition(
+    planDefinition(snapshot, {
+      operation: 'patch',
+      registry: 'profiles',
+      name: 'child',
+      path: ['extends'],
+      value: undefined,
+    }),
+  );
+  assert.equal(preview.resolved.model, 'fixture/native');
+  assert.equal(preview.resolved.agent.build.model, 'fixture/native');
+});

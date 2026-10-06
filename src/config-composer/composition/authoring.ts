@@ -39,8 +39,13 @@ export function definitionDestinations(snapshot: Snapshot): SourceFile[] {
 
 function references(snapshot: Snapshot, registry: DefinitionRegistry, name: string): Reference[] {
   const result: Reference[] = [];
-  const add = (file: SourceFile, path: (string | number)[], value: unknown, markdown = false) => {
+  const add = (file: SourceFile, path: (string | number)[], value: unknown, markdown = false, indirect = false) => {
     if (value === name || (registry === 'configurationPresets' && value === `preset:${name}`)) {
+      if (indirect) {
+        throw new SettingsError(
+          `Indirect native reference in ${file.path} at /${path.join('/')}. Replace its env/file substitution in the declaring source before renaming or deleting ${name}.`,
+        );
+      }
       result.push({ file, path, value, markdown });
     }
   };
@@ -110,7 +115,9 @@ function references(snapshot: Snapshot, registry: DefinitionRegistry, name: stri
       }
     }
     for (const { file, markdown } of nativeFiles.values()) {
-      const value: unknown = markdown ? parseAgent(file).document.toJS({ maxAliasCount: 0 }) : parseConfig(file.text);
+      const value: unknown = markdown
+        ? parseAgent(file).document.toJS({ maxAliasCount: 0 })
+        : parseConfig(snapshot.nativeVariables.documents.get(file.path) ?? file.text);
       const entries = markdown
         ? [[[] as (string | number)[], value] as const]
         : record(value) && record(value.agent)
@@ -126,7 +133,10 @@ function references(snapshot: Snapshot, registry: DefinitionRegistry, name: stri
         ] as const) {
           if (Array.isArray(groups)) {
             for (const [index, group] of groups.entries()) {
-              add(file, [...path, ...at, index], group, markdown);
+              const pointer = [...path, ...at, index];
+              const tree = markdown ? undefined : parseTree(file.text);
+              const raw = tree === undefined ? undefined : (findNodeAtLocation(tree, pointer)?.value as unknown);
+              add(file, pointer, group, markdown, !markdown && raw !== group);
             }
           }
         }

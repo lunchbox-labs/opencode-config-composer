@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { editorServerConfig } from './editor-server-config.ts';
 import { type TestContext, test } from 'node:test';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -564,6 +565,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
     onClose = undefined;
     dialog = undefined;
   };
+  let frozenConfig: unknown;
   let providerError = false;
   let providerGate: (() => Promise<void>) | undefined;
   let proofGate: (() => Promise<void>) | undefined;
@@ -630,7 +632,25 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
         },
       },
       config: {
-        get: async () => ({ data: { model: 'example/fast' } }),
+        get: async () => {
+          if (frozenConfig !== undefined) {
+            return { data: frozenConfig };
+          }
+          const path = api.state.path as { worktree?: string; directory?: string };
+          const workspace =
+            typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
+              ? path.worktree
+              : (path.directory ?? root);
+          return {
+            data: await editorServerConfig(
+              root,
+              { model: 'example/fast' },
+              workspace,
+              path.directory ?? workspace,
+              path.worktree ?? workspace,
+            ),
+          };
+        },
         providers: async () => {
           await providerGate?.();
           return providerError
@@ -656,6 +676,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
         config: {
           update: async (input: { config: { plugin: unknown[] } }) => {
             updates++;
+            frozenConfig = undefined;
             const path = join(serverRoot, 'opencode.jsonc');
             const before = await readFile(path, 'utf8');
             await writeFile(
@@ -677,6 +698,9 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   return {
     api,
     commands,
+    async freezeServer() {
+      frozenConfig = (await api.client.config.get()).data;
+    },
     controller,
     delayProofAfter(skip: number) {
       const requested = Promise.withResolvers<undefined>();
@@ -1477,4 +1501,46 @@ test('newly selected commands revalidate their authored model before saving memb
   await ui.confirm();
   assert.match(ui.toasts.at(-1)!.message, /not available|unavailable|provider/i);
   assert.equal(await readFile(path, 'utf8'), before);
+});
+
+test('removing a profile parent previews native fallback from the server baseline, not the composed response', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(path, 'utf8'));
+  const profiles = value.profiles as Record<string, Record<string, unknown>>;
+  profiles.parent = { overrides: { model: 'example/deep' } };
+  profiles.work.extends = 'parent';
+  await writeFile(path, JSON.stringify(value));
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('work');
+  await ui.select('parent');
+  await ui.select('');
+  assert.match(ui.message(), /Changed global models: model: example\/fast/);
+  await ui.confirm();
+  assert.equal((await loadSnapshot(root)).sources.registry.profiles?.work.extends, undefined);
+  assert.ok(!(await readFile(join(root, 'opencode.jsonc'), 'utf8')).includes('__configComposerRuntime'));
+});
+
+test('reload accepts saved native edits while normal preview rejects the stale running baseline', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  const path = join(root, 'opencode.jsonc');
+  const before = await readFile(path, 'utf8');
+  await writeFile(path, applyEdits(before, modify(before, ['agent', 'builtin', 'model'], 'example/next', {})));
+  await ui.command();
+  assert.match(ui.toasts.at(-1)!.message, /Native agent inputs differ/);
+  await ui.command('config-composer.compose');
+  await ui.select('reload');
+  await ui.select('reload');
+  await ui.confirm();
+  assert.equal(ui.updates, 1);
+  assert.match(ui.toasts.at(-1)!.message, /New agent calls/);
+  assert.equal(
+    (parseConfig(await readFile(path, 'utf8')).agent as Record<string, { model: string }>).builtin.model,
+    'example/next',
+  );
 });

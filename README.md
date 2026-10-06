@@ -165,7 +165,15 @@ New definitions require an explicit existing writable JSONC destination and do n
 Group member pickers cover agents, skills, commands, and prompt fragments; profile editors manage parent
 profiles and ordered group/preset layers. Renames update schema references and native JSON/frontmatter
 group memberships, retaining source comments and Markdown bodies. Referenced deletion and renames that
-would change read-only sources are rejected before writes. Model controls reuse the existing picker.
+would change read-only sources are rejected before writes. Native memberships supplied through environment
+or file substitutions must be changed at their declaring source before rename or deletion. Model controls
+reuse the existing picker.
+
+Previews use the server's uncomposed native model and agent baseline, including native config-content inputs.
+Clearing a profile override therefore restores the native fallback, including `opencode:model` references.
+The matching Composer server plugin must be loaded. Different client/server native agent inputs or later
+plugin changes block editing with reload guidance. Runtime baseline metadata is never written to source files;
+reload accepts saved native edits that have not yet reached the running server.
 Project/local source creation and profile activation controls are separate follow-ups.
 
 

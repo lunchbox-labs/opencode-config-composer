@@ -2,6 +2,7 @@ import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
 import { isDeepStrictEqual } from 'node:util';
 import { type AgentSettings, type EffectiveChoice, SettingsError, record } from './settings.ts';
+import { publishRuntimeBaseline } from './composition/runtime-baseline.ts';
 import { expandIncludes } from './prompts.ts';
 import { loadCompositionSources } from './composition/sources.ts';
 import { type ResolvedModelSettings, resolveProfileRuntime } from './composition/runtime.ts';
@@ -206,6 +207,13 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         addedPaths: new Set(resolved.skillPaths.filter((path) => !nativePaths.includes(path))),
       });
       sources = nextSources;
+      publishRuntimeBaseline(
+        config,
+        options,
+        { root: context.root, directory: input.directory },
+        nativeGlobals,
+        staged,
+      );
     },
     // eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning parameter hook.
     'chat.params': async (input, output) => {

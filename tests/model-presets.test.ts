@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { editorServerConfig } from './editor-server-config.ts';
 import { type TestContext, test } from 'node:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -406,7 +407,12 @@ function uiHarness(root: string) {
         }),
       },
       config: {
-        get: async () => ({ data: workspace ?? parseConfig(await readFile(join(root, 'opencode.jsonc'), 'utf8')) }),
+        get: async () => ({
+          data: await editorServerConfig(
+            root,
+            workspace ?? parseConfig(await readFile(join(root, 'opencode.jsonc'), 'utf8')),
+          ),
+        }),
         providers: async () => (providerError ? { error: {} } : { data: { providers } }),
       },
     },
