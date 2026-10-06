@@ -1892,7 +1892,8 @@ test('permission save puts candidate fallback before long source paths and order
   await ui.select(file);
   await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
   await ui.select('+save');
-  assert.match(ui.message(), /^Agent builtin:/);
+  assert.match(ui.message(), /^Fallback may be more permissive/);
+  assert.match(ui.message(), /Agent builtin:/);
   assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf(file));
   assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf('webfetc?'));
   assert.equal(ui.updates, 0);
