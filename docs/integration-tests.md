@@ -78,12 +78,12 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | Import alias identity | Retargeting a directory symlink/junction rejects stale reload before its token is written; reopening applies the new source and leaves the previous target untouched | Both platforms |
 | Interrupted runs | Outer numeric timeout and SIGINT/SIGTERM handlers terminate a real native host and a blocked nested test runner, removing their fixtures without test hooks | Both platforms; the Windows regression emits Node signal events because `process.kill()` terminates directly on Windows |
 | Invalid/concurrent edits | Read-only import edits, referenced-preset deletion, invalid model input, missing imports, lock collisions, stale snapshots and malformed JSONC reject; file bytes and locks are checked; failed prompt composition leaves native settings unmodified | Both platforms; exhaustive rollback/fault combinations remain focused unit tests |
-| Terminal authoring and apply | Real keyboard navigation creates the first shared source, a group, a preset and a profile; edits membership and ordered layers; saves without applying, then reloads and captures the changed model in the retained conversation | Both platforms; existing Linux Check smoke tests remain |
+| Terminal authoring and apply | Real keyboard navigation creates the first shared source, a group, a preset and a profile; edits membership and ordered layers; saves without applying, then reloads and captures the changed model in the retained conversation | Linux passes; Windows blocked by shared-filesystem verification (see below) |
 | Registry authoring | Installed create/patch/rename/delete operations across imported JSONC and Markdown; reference rewrites, read-only references, stale snapshots, original native baseline fallback and retained messages | Both platforms; API coverage is distinct from terminal confirmation/catalog/authorization |
-| Activation and source creation | Empty installation, cancelled first-source preview, create-only publication, shared/project/local ordered replacement, absence inheritance, explicit empty selection, add/reorder/remove in the terminal | Both platforms |
+| Activation and source creation | Empty installation, cancelled first-source preview, create-only publication, shared/project/local ordered replacement, absence inheritance, explicit empty selection, add/reorder/remove in the terminal | API coverage on both platforms; terminal selection passes on Linux |
 | Source-addition race | A native Markdown agent appears inside asynchronous validation; save rejects and the proposed local selection file remains absent | Both platforms |
 | Composer permission compilation and failure policy | Actual tool decisions for ordered canonical rules, invalid/unsupported configuration and host hook errors | Pending compiler integration; required before final acceptance |
-| Compose hub and provenance | Real terminal inspection of selected/replayed profiles, resolved field value, origin and overwritten contributions, writable/read-only files; no file changes or provider requests from inspection | Both platforms |
+| Compose hub and provenance | Real terminal inspection of selected/replayed profiles, resolved field value, origin and overwritten contributions, writable/read-only files; no file changes or provider requests from inspection | Linux passes; Windows blocked by shared-filesystem verification |
 | Broader configuration editors | Parameter, permission and prompt/source authoring through the terminal, with apply and error flows | Pending implementation and final acceptance |
 | Native project discovery | Native JSONC and Markdown sources, ancestor paths outside Git, environment/file substitutions, duplicate detection, native pins and unchanged declaring bytes | Both platforms |
 | Automatic Composer bundle discovery | Discovery boundaries and precedence for optional bundles | Deferred; Composer bundles use explicit imports |
@@ -98,6 +98,12 @@ Native discovery and the terminal authoring/activation scenarios additionally de
 [#43](https://github.com/lunchbox-labs/opencode-config-composer/pull/43),
 [#44](https://github.com/lunchbox-labs/opencode-config-composer/pull/44) and
 [#45](https://github.com/lunchbox-labs/opencode-config-composer/pull/45).
+
+Windows terminal acceptance currently exposes a shared-filesystem verification failure:
+OpenCode 1.18.34 rejects the absolute proof path with `Path escapes the location`.
+The [native reproduction and diagnostics](https://github.com/lunchbox-labs/opencode-config-composer/pull/45#issuecomment-6024066994)
+cover both an empty installation and an existing composition. These tests remain enabled;
+Windows terminal acceptance requires a correction in the filesystem guard.
 
 Final feature acceptance must complete the pending permission and broader-editor rows against
 real implementations. Permission acceptance must include actual tool decisions after

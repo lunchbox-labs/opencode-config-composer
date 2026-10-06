@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
@@ -27,6 +27,8 @@ test(
     const host = await nativeHarness(t, 'lifecycle');
     const { configRoot, project, installed, api, requests } = host;
     const { storage, reload } = await installedEditor(host);
+    // Direct global-only editor calls use the same canonical root as the TUI.
+    const globalSnapshot = async () => storage.loadSnapshot(await realpath(configRoot));
     await mkdir(join(configRoot, 'settings', 'prompts'), { recursive: true });
     await mkdir(join(configRoot, 'agents'), { recursive: true });
     await mkdir(join(configRoot, 'skills', 'included-skill'), { recursive: true });
@@ -153,7 +155,7 @@ test(
     });
     await t.test('save waits for explicit reload and reload removes stale content without duplication', async () => {
       await storage.savePlan(
-        storage.planChange(await storage.loadSnapshot(configRoot), {
+        storage.planChange(await globalSnapshot(), {
           kind: 'preset',
           name: 'balanced',
           choice: { model: 'fixture/beta', variant: 'high' },
@@ -188,7 +190,7 @@ test(
           const original = baseline.find((item) => item.name === name);
           assert.ok(original?.native === true, `${name} must be native in the pinned host`);
           await storage.savePlan(
-            storage.planChange(await storage.loadSnapshot(configRoot), {
+            storage.planChange(await globalSnapshot(), {
               kind: 'membership',
               agent: name,
               groups: ['workers'],
@@ -213,7 +215,7 @@ test(
           ['worker.md'],
           'built-ins have no shadow Markdown definitions',
         );
-        const snapshot = await storage.loadSnapshot(configRoot);
+        const snapshot = await globalSnapshot();
         for (const name of ['build', 'plan', 'explore']) {
           assert.equal(snapshot.agents.find((item) => item.name === name)?.markdown, undefined);
         }
@@ -225,7 +227,7 @@ test(
       'profile layer order governs edited memberships while explicit pins retain native authority',
       async () => {
         const change = async (value: Storage.Change) => {
-          await storage.savePlan(storage.planChange(await storage.loadSnapshot(configRoot), value));
+          await storage.savePlan(storage.planChange(await globalSnapshot(), value));
           await reload();
         };
         await change({
@@ -326,7 +328,7 @@ test(
     await t.test(
       'invalid and concurrent edits preserve all original files and leave no lock or temporary writes',
       async () => {
-        const snapshot = await storage.loadSnapshot(configRoot);
+        const snapshot = await globalSnapshot();
         const bytes = await Promise.all(snapshot.files.map((file) => readFile(file.path, 'utf8')));
         assert.throws(() => storage.planChange(snapshot, { kind: 'deletePreset', name: 'balanced' }), /referenced/);
         assert.throws(
@@ -355,13 +357,13 @@ test(
     );
     await t.test('membership replacement and removal clear group contributions on reload', async () => {
       await storage.savePlan(
-        storage.planChange(await storage.loadSnapshot(configRoot), { kind: 'membership', agent: 'worker', groups: [] }),
+        storage.planChange(await globalSnapshot(), { kind: 'membership', agent: 'worker', groups: [] }),
       );
       await reload();
       assert.ok((await agent()).prompt?.includes('GROUP_START') !== true);
       assert.equal((await send()).message.info.modelID, 'alpha');
       await storage.savePlan(
-        storage.planChange(await storage.loadSnapshot(configRoot), {
+        storage.planChange(await globalSnapshot(), {
           kind: 'membership',
           agent: 'worker',
           groups: ['workers'],
@@ -372,14 +374,14 @@ test(
     });
     await t.test('multi-file save and restart retain settings and sessions without stale process state', async () => {
       await storage.savePlan(
-        storage.planChange(await storage.loadSnapshot(configRoot), {
+        storage.planChange(await globalSnapshot(), {
           kind: 'all',
           choice: { model: 'fixture/alpha', variant: 'low' },
         }),
       );
       await reload();
       const saved = await send();
-      const snapshot = await storage.loadSnapshot(configRoot);
+      const snapshot = await globalSnapshot();
       assert.equal(snapshot.config.model, 'fixture/alpha');
       assert.equal(snapshot.config.small_model, 'fixture/alpha');
       assert.equal(snapshot.modelPresets.balanced.model, 'fixture/alpha');
@@ -397,7 +399,7 @@ test(
       async (t) => {
         const bodyPath = join(configRoot, 'settings', 'prompts', 'body.md');
         const goodBody = await readFile(bodyPath, 'utf8');
-        const snapshot = await storage.loadSnapshot(configRoot);
+        const snapshot = await globalSnapshot();
         const nativeReload = async () => {
           const config = storage.parseConfig(await readFile(nativePath, 'utf8'));
           const plugins = config.plugin as [string, Record<string, unknown>][];
@@ -422,7 +424,7 @@ test(
         const before = requests.length;
         const activeBefore = await agent();
         await writeFile(bodyPath, '{{include:@shared/../outside.md}}');
-        await assert.rejects(storage.loadSnapshot(configRoot), /include|source|path/i);
+        await assert.rejects(globalSnapshot(), /include|source|path/i);
         await assert.rejects(reload(snapshot), /include|source|path/i);
         assert.deepEqual(await agent(), activeBefore, 'editor rejection preserves the running configuration');
         // Native reload can still load externally edited files independently of the editor.
