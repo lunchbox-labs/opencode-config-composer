@@ -226,8 +226,16 @@ test(
       assert.equal(loaded.state.metadata.name, name);
       assert.match(loaded.state.output ?? '', /references|examples/);
       const resource = await readFile(join(installed.directory, 'skills', name, 'SKILL.md'), 'utf8');
-      const body = resource.slice(resource.indexOf('\n---\n') + 5).trim();
-      assert.equal(loaded.state.output?.includes(body), true, `packaged guidance body: ${name}`);
+      const normalized = resource.replaceAll('\r\n', '\n');
+      const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(normalized);
+      assert.ok(frontmatter !== null, `packaged guidance frontmatter: ${name}`);
+      const body = normalized.slice(frontmatter[0].length).trim();
+      assert.ok(body.length > 0);
+      assert.equal(
+        loaded.state.output?.replaceAll('\r\n', '\n').includes(body),
+        true,
+        `packaged guidance body: ${name}`,
+      );
       assert.ok(
         requests
           .slice(beforeGuidance)
