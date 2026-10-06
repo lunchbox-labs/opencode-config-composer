@@ -1710,3 +1710,103 @@ test('parameter UI rejects a lost provider catalog at confirmation without writi
   assert.match(ui.toasts.at(-1)!.message, /provider models/);
   assert.equal(await readFile(path, 'utf8'), original);
 });
+
+test('permission UI edits, reorders and previews rules without saving cancelled drafts', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(path);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('+add');
+  await ui.select('0');
+  await ui.select('tool');
+  await ui.enter('bash');
+  await ui.select('pattern');
+  await ui.enter('git *');
+  await ui.select('action');
+  await ui.select('deny');
+  await ui.escape();
+  await ui.select('+add');
+  await ui.select('1');
+  await ui.select('action');
+  await ui.select('allow');
+  await ui.select('earlier');
+  await ui.select('+preview');
+  await ui.select('+local');
+  await ui.enter('bash');
+  await ui.enter('git status');
+  assert.match(ui.message(), /deny: bash git \*/);
+  assert.match(ui.message(), /Earlier matching contributions/);
+  assert.match(ui.message(), /cannot apply/);
+  await ui.escape();
+  await ui.escape();
+  await ui.escape();
+  await ui.escape();
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('+save');
+  assert.ok(ui.message().indexOf('bash git * → deny') < ui.message().indexOf('* * → allow'));
+  assert.doesNotMatch(ui.message(), /Reload saved settings to apply/);
+  await ui.cancel();
+  assert.equal(await readFile(path, 'utf8'), original);
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.developers.configuration?.permissions, [
+    { tool: 'bash', pattern: 'git *', action: 'deny' },
+    { tool: '*', action: 'allow' },
+  ]);
+  assert.equal(ui.title(), 'Configured permission rules saved');
+  assert.match(ui.message(), /running configuration and conversations are unchanged/);
+  assert.equal(ui.updates, 0);
+});
+
+test('permission UI creates an inactive permission-only preset without choosing a model', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(path);
+  await ui.select('+create');
+  await ui.enter('checks');
+  await ui.confirm();
+  const snapshot = await loadSnapshot(root);
+  assert.deepEqual(snapshot.sources.registry.configurationPresets?.checks, { permissions: [] });
+  assert.deepEqual(snapshot.sources.activeProfiles, ['work']);
+  assert.equal(ui.updates, 0);
+});
+
+test('permission agent previews cannot collide with local-definition navigation values', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(
+    join(root, 'opencode.jsonc'),
+    JSON.stringify({ plugin: [packageName], agent: { '+local': { groups: ['developers', 'reviewers'] } } }),
+  );
+  await writeFile(
+    path,
+    JSON.stringify({
+      componentGroups: {
+        developers: { configuration: { permissions: [{ tool: 'bash', action: 'deny' }] } },
+        reviewers: { configuration: { permissions: [{ tool: 'bash', action: 'allow' }] } },
+        'custom-team': {},
+      },
+      profiles: { work: { layers: [{ componentGroup: 'developers' }, { componentGroup: 'reviewers' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(path);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('+preview');
+  await ui.select('agent:+local');
+  await ui.enter('bash');
+  await ui.enter('git status');
+  assert.match(ui.message(), /allow: bash/);
+  assert.match(ui.message(), /componentGroups\/reviewers/);
+});

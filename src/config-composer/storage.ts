@@ -1252,6 +1252,11 @@ export async function reloadConfiguration(
       }
     }
     await observedSourceList(snapshot);
+    if (snapshot.resolved.permissions.length > 0) {
+      throw new SettingsError(
+        'Selected profiles contain permission contributions that this draft cannot apply. Remove those contributions or deactivate their profiles before reloading; native compiler integration is pending.',
+      );
+    }
     const original = await sourceFile(snapshot.root, snapshot.configFile.path);
     if (original.text !== snapshot.configFile.text) {
       throw new SettingsError('Settings changed. Reopen the editor before reloading.');
