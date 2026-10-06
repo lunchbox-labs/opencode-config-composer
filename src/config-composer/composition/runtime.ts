@@ -22,6 +22,10 @@ export interface PermissionContribution {
   rule: PermissionRule;
   origin: FieldOrigin;
 }
+interface PromptContribution {
+  configuration: PromptConfiguration;
+  origin: FieldOrigin;
+}
 export interface ResolvedModelSettings {
   model?: string;
   modelRef?: string;
@@ -189,7 +193,7 @@ export async function resolveProfileRuntime(
   const permissions: PermissionContribution[] = [];
   const prompts: Record<
     string,
-    { defaults: PromptConfiguration[]; groups: PromptConfiguration[]; explicit: PromptConfiguration[] }
+    { defaults: PromptContribution[]; groups: PromptContribution[]; explicit: PromptContribution[] }
   > = {};
   const globals: { model?: string; small_model?: string } = {};
   for (const key of ['model', 'small_model'] as const) {
@@ -316,7 +320,10 @@ export async function resolveProfileRuntime(
       permissions.push({ agent: name, rule, origin: { ...at, pointer: `${at.pointer}/permissions/${index}/action` } });
     }
     if (value.prompt !== undefined) {
-      prompts[name][explicit ? 'explicit' : at.layer === 'defaults' ? 'defaults' : 'groups'].push(value.prompt);
+      prompts[name][explicit ? 'explicit' : at.layer === 'defaults' ? 'defaults' : 'groups'].push({
+        configuration: value.prompt,
+        origin: { ...at, pointer: `${at.pointer}/prompt` },
+      });
     }
   }
   function select(name: string) {
@@ -414,7 +421,7 @@ export async function resolveProfileRuntime(
     }
     const operations = prompts[name];
     const policy = operations.explicit.reduce<PromptConfiguration>(
-      (previous, value) => ({ ...previous, ...value }),
+      (previous, value) => ({ ...previous, ...value.configuration }),
       {},
     );
     const ordered = [
@@ -423,16 +430,76 @@ export async function resolveProfileRuntime(
       ...operations.explicit,
     ];
     const parts = [
-      ...ordered.flatMap((item) => item.prepend ?? []),
+      ...ordered.flatMap((item) => item.configuration.prepend ?? []),
       value.prompt,
-      ...ordered.flatMap((item) => item.append ?? []),
+      ...ordered.flatMap((item) => item.configuration.append ?? []),
     ];
+    const reference = (at: FieldOrigin) => `${at.sourceId ?? 'native'}#${at.pointer}`;
+    const pointer = `/agent/${part(name)}/prompt`;
+    const definition = Object.hasOwn(registry.components?.agents ?? {}, name)
+      ? registry.components?.agents?.[name]
+      : undefined;
+    const nativeOverride = Object.hasOwn(native.composerOwnedAgents ?? {}, name)
+      ? native.composerOwnedAgents?.[name].prompt
+      : undefined;
+    const base =
+      definition === undefined || nativeOverride !== undefined
+        ? { ...origin(undefined, pointer, 'native'), operation: 'native' as const }
+        : sources.provenance[`/components/agents/${part(name)}/${definition.file === undefined ? 'prompt' : 'file'}`];
+    const references = [reference(base)];
+    if (definition !== undefined && base.operation !== 'native') {
+      if (definition.file !== undefined) {
+        references.push(`file:${definition.file}`);
+      }
+      for (const prompt of definition.promptRefs ?? []) {
+        const component = Object.hasOwn(registry.components?.prompts ?? {}, prompt)
+          ? registry.components?.prompts?.[prompt]
+          : undefined;
+        if (component !== undefined) {
+          references.push(
+            reference(
+              sources.provenance[
+                `/components/prompts/${part(prompt)}/${component.file === undefined ? 'text' : 'file'}`
+              ],
+            ),
+          );
+          if (component.file !== undefined) {
+            references.push(`file:${component.file}`);
+          }
+        }
+      }
+    }
+    for (const contribution of ordered) {
+      for (const field of ['prepend', 'append'] as const) {
+        for (const index of (contribution.configuration[field] ?? []).keys()) {
+          references.push(`${reference(contribution.origin)}/${field}/${index}`);
+        }
+      }
+    }
+    for (const contribution of operations.explicit) {
+      for (const field of ['inheritDefaults', 'inheritGroups'] as const) {
+        if (contribution.configuration[field] !== undefined) {
+          references.push(`${reference(contribution.origin)}/${field}`);
+        }
+      }
+    }
+    const included = new Set<string>();
     value.prompt = await expandIncludes(
       parts.map((text) => (/^@[a-z][a-z0-9-]*\//.test(text) ? `{{include:${text}}}` : text)).join('\n\n'),
       registry.sourceDirectories ?? {},
-      onPromptRead,
+      (file) => {
+        included.add(`file:${file.canonicalPath}`);
+        onPromptRead?.(file);
+      },
       overlays,
     );
+    provenance[pointer] = {
+      ...base,
+      layer: 'prompt composition',
+      operation: 'merge',
+      references: [...new Set([...references, ...included])],
+      overwritten: [],
+    };
   }
   for (const [name, command] of Object.entries(commands)) {
     if (

@@ -11,6 +11,7 @@ import type * as Storage from '../src/config-composer/storage.ts';
 import type * as Parameters from '../src/config-composer/composition/parameter-authoring.ts';
 import type * as Permissions from '../src/config-composer/composition/permission-authoring.ts';
 import type * as Prompts from '../src/config-composer/composition/prompt-authoring.ts';
+import type * as PromptSources from '../src/config-composer/composition/prompt-sources.ts';
 import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import { randomUUID } from 'node:crypto';
@@ -154,11 +155,15 @@ test(
     };
     const composer = {
       sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
+      components: { agents: { 'prompt-consumer': { prompt: 'CONSUMER_BASE', mode: 'primary' } } },
       configurationPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
       defaults: { agents: { prompt: { append: ['{{include:@shared/default.md}}'] } } },
       componentGroups: {
         base: { configuration: { model: 'fixture/beta', variant: 'high' } },
-        developers: { configuration: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } } },
+        developers: {
+          agents: ['prompt-consumer'],
+          configuration: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } },
+        },
         primary: { configuration: { modelRef: 'opencode:model', variant: 'low' } },
         small: { configuration: { modelRef: 'opencode:small_model', variant: 'low' } },
       },
@@ -463,6 +468,41 @@ test(
         /RELOADED_WORKER_GUIDANCE[\s\S]*AUTHORED_PROMPT_FIRST\nAUTHORED_PROMPT_SECOND/,
       );
     });
+    const { planPromptAsset, planPromptReferences, validatePromptAssets } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/prompt-sources.js')).href
+    )) as typeof PromptSources;
+    await writeFile(join(configRoot, 'shared-prompts/authored.md'), 'REUSABLE_NATIVE_PROMPT');
+    for (const change of [
+      {
+        registry: 'sourceDirectories',
+        name: 'authored',
+        operation: 'create',
+        sourceId: settingsPath,
+        value: './shared-prompts',
+      },
+      {
+        registry: 'prompts',
+        name: 'notes',
+        operation: 'create',
+        sourceId: settingsPath,
+        value: { text: '{{include:@authored/authored.md}}' },
+      },
+      { registry: 'sourceDirectories', name: 'authored', operation: 'rename', nextName: 'reusable' },
+    ] as const) {
+      const snapshot = await loadSnapshot(configRoot, project, baseline, project, '/');
+      const plan = await planPromptAsset(snapshot, change);
+      await saveFilePlan(plan, async () => {
+        await validatePromptAssets(plan);
+      });
+    }
+    const references = await planPromptReferences(
+      await loadSnapshot(configRoot, project, baseline, project, '/'),
+      'prompt-consumer',
+      ['notes', 'notes'],
+    );
+    await saveFilePlan(references, async () => {
+      await validatePromptAssets(references);
+    });
     await reload();
     let refreshed = agents;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -493,6 +533,13 @@ test(
       'native selected variant retains precedence over authored provider options',
     );
     assert.ok(!JSON.stringify(reloadedRequest).includes('INITIAL_WORKER_GUIDANCE'));
+    assert.equal((await request('prompt-consumer')).info.modelID, 'beta');
+    const reusableRequest = requests.find((body) => JSON.stringify(body).includes('REUSABLE_NATIVE_PROMPT'));
+    assert.ok(reusableRequest !== undefined);
+    assert.match(
+      JSON.stringify(reusableRequest),
+      /CONSUMER_BASE\\n\\nREUSABLE_NATIVE_PROMPT\\n\\nREUSABLE_NATIVE_PROMPT/,
+    );
     await writeFile(
       join(project, 'opencode.json'),
       JSON.stringify({ model: 'fixture/alpha', small_model: 'fixture/alpha' }),

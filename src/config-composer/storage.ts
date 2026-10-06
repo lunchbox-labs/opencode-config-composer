@@ -117,6 +117,7 @@ export interface FilePlan {
   description: string;
   /** Extra inputs observed while validating newly authored prompt references. */
   reads?: SourceFile[];
+  directories?: { path: string; canonicalPath: string }[];
 }
 export interface EditPlan extends FilePlan {
   change: Change;
@@ -1168,7 +1169,7 @@ export async function previewFilePlan(
   plan: FilePlan,
 ): Promise<{ sources: LoadedSources; resolved: ResolvedProfileRuntime; reads: SourceFile[] }> {
   const overlays = new Map<string, string>();
-  for (const file of plan.snapshot.files) {
+  for (const file of [...plan.snapshot.files, ...(plan.reads ?? [])]) {
     overlays.set(file.path, file.text);
     overlays.set(file.canonicalPath ?? file.path, file.text);
   }
@@ -1203,6 +1204,14 @@ export async function saveFilePlan(
   const createdDirectories: string[] = [];
   try {
     const assertAuthorized = await authorize?.();
+    const observeDirectories = async () => {
+      for (const directory of plan.directories ?? []) {
+        if ((await realpath(directory.path).catch(() => undefined)) !== directory.canonicalPath) {
+          throw new SettingsError('A prompt source directory changed while editing. Reopen the editor.');
+        }
+      }
+    };
+    await observeDirectories();
     await observedComposition(plan.snapshot.sources);
     for (const original of collectFileReads([...plan.snapshot.files, ...(plan.reads ?? [])]).files) {
       const current = await observedFile(plan.snapshot.root, original);
@@ -1222,6 +1231,7 @@ export async function saveFilePlan(
         throw new SettingsError('Settings changed during validation. Reopen the editor.');
       }
     }
+    await observeDirectories();
     for (const edit of plan.edits) {
       if (edit.file.writable === false) {
         throw new SettingsError(`Read-only composition source ${edit.file.path}.`);

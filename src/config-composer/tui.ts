@@ -52,6 +52,13 @@ import { openActivation } from './tui/activation.ts';
 import { openPermissions } from './tui/permissions.ts';
 import { permissionStatus, planPermissions, previewPermission } from './composition/permission-authoring.ts';
 import { openPrompts } from './tui/prompts.ts';
+import { openPromptSources } from './tui/prompt-sources.ts';
+import {
+  type PromptAssetPlan,
+  planPromptAsset,
+  planPromptReferences,
+  validatePromptAssets,
+} from './composition/prompt-sources.ts';
 import { planPrompt, promptReview } from './composition/prompt-authoring.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
@@ -1001,6 +1008,46 @@ export function registerSettings(
       [
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
+        {
+          title: 'Reusable prompts and include source aliases',
+          value: 'prompt-sources',
+          run: async () => {
+            const current = navigation.checkpoint();
+            const snapshot = await load();
+            if (!current()) {
+              return;
+            }
+            const propose = async (pending: Promise<PromptAssetPlan>) => {
+              const current = navigation.checkpoint();
+              const plan = await pending;
+              const preview = await validatePromptAssets(plan);
+              if (!current()) {
+                return;
+              }
+              await proposeComposition(snapshot, plan, undefined, {
+                title: 'Save prompt source definition?',
+                details: `Known reference consumers:\n${plan.consumers.length === 0 ? 'none' : plan.consumers.join('\n')}\n\n${promptReview(snapshot, preview)}`,
+                validate: async () => {
+                  await validatePromptAssets(plan);
+                },
+              });
+            };
+            openPromptSources(snapshot, {
+              menu,
+              back: navigation.back,
+              alert: (title, message) => navigation.alert({ title, message }),
+              prompt: (title, value, confirmed) =>
+                navigation.prompt({
+                  title,
+                  value,
+                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                  onConfirm: (text) => run(() => confirmed(text)),
+                }),
+              propose: (change) => propose(planPromptAsset(snapshot, change)),
+              references: (agent, references) => propose(planPromptReferences(snapshot, agent, references)),
+            });
+          },
+        },
         {
           title: 'Prompt operations and inheritance',
           value: 'prompts',
