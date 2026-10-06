@@ -191,3 +191,65 @@ test('new project-native files block reload before the host update', async (t) =
   );
   assert.equal(updates, 0);
 });
+
+test('native JSONC environment and file substitutions resolve effective pins while preserving authored bytes', async (t) => {
+  const f = await fixture(t);
+  const variable = 'COMPOSER_TEST_NATIVE_MODEL';
+  const originalEnv = process.env[variable];
+  process.env[variable] = 'fixture/pinned';
+  t.after(() => {
+    if (originalEnv === undefined) {
+      Reflect.deleteProperty(process.env, variable);
+    } else {
+      process.env[variable] = originalEnv;
+    }
+  });
+  const path = join(f.project, 'opencode.jsonc');
+  const text =
+    '{"agent":{"project-json":{"model":"{env:COMPOSER_TEST_NATIVE_MODEL}","prompt":"{file:./native-prompt.txt}"}}}\n// {file:./missing-comment.txt}\n';
+  await writeFile(path, text);
+  await writeFile(join(f.project, 'native-prompt.txt'), '  Native "quoted" prompt\nsecond line  \n');
+  const snapshot = await loadSnapshot(f.installation, f.project);
+  assert.equal(snapshot.nativeAgents['project-json'].model, 'fixture/pinned');
+  assert.equal(snapshot.nativeAgents['project-json'].prompt, 'Native "quoted" prompt\nsecond line');
+  const plan = planChange(snapshot, { kind: 'group', name: 'work', choice: { model: 'fixture/changed' } });
+  await savePlan(plan);
+  assert.equal((await loadSnapshot(f.installation, f.project)).resolved.agent['project-json'].model, 'fixture/pinned');
+  assert.equal(await readFile(path, 'utf8'), text);
+});
+
+test('native substitution environment and file changes invalidate an open save or reload', async (t) => {
+  const f = await fixture(t);
+  const variable = 'COMPOSER_TEST_STALE_NATIVE_MODEL';
+  const originalEnv = process.env[variable];
+  process.env[variable] = 'fixture/pinned';
+  t.after(() => {
+    if (originalEnv === undefined) {
+      Reflect.deleteProperty(process.env, variable);
+    } else {
+      process.env[variable] = originalEnv;
+    }
+  });
+  await writeFile(
+    join(f.project, 'opencode.jsonc'),
+    '{"agent":{"project-json":{"model":"{env:COMPOSER_TEST_STALE_NATIVE_MODEL}","prompt":"{file:./native-prompt.txt}"}}}',
+  );
+  const prompt = join(f.project, 'native-prompt.txt');
+  await writeFile(prompt, 'Native prompt');
+  const snapshot = await loadSnapshot(f.installation, f.project);
+  process.env[variable] = 'fixture/other';
+  await assert.rejects(
+    savePlan(planChange(snapshot, { kind: 'group', name: 'work', choice: { model: 'fixture/changed' } })),
+    /substitution|environment|changed/i,
+  );
+  const fresh = await loadSnapshot(f.installation, f.project);
+  await writeFile(prompt, 'Changed prompt');
+  let updates = 0;
+  await assert.rejects(
+    reloadConfiguration(fresh, async () => {
+      updates++;
+    }),
+    /changed/i,
+  );
+  assert.equal(updates, 0);
+});

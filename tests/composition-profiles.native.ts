@@ -26,9 +26,21 @@ test(
     const { loadSnapshot, planChange, savePlan } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
     )) as typeof Storage;
+    const previousModel = process.env.COMPOSER_NATIVE_AGENT_MODEL;
+    process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/project-pin';
+    t.after(() => {
+      if (previousModel === undefined) {
+        Reflect.deleteProperty(process.env, 'COMPOSER_NATIVE_AGENT_MODEL');
+      } else {
+        process.env.COMPOSER_NATIVE_AGENT_MODEL = previousModel;
+      }
+    });
+    await writeFile(join(project, 'native-agent-prompt.txt'), 'Native project JSON body.\n');
     const projectJson = JSON.stringify({
       $schema: 'https://opencode.ai/config.json',
-      agent: { 'project-json': { model: 'fixture/project-pin', prompt: 'Native project JSON body.' } },
+      agent: {
+        'project-json': { model: '{env:COMPOSER_NATIVE_AGENT_MODEL}', prompt: '{file:./native-agent-prompt.txt}' },
+      },
     });
     const projectMarkdown =
       '---\ndescription: Existing project agent\ngroups: [work]\n---\nNative project Markdown body.';
@@ -219,6 +231,7 @@ test(
         modelID: before.name === 'plan' ? 'pinned' : before.name === 'build' ? 'beta' : 'alpha',
       });
     }
+    assert.equal(activated.find((item) => item.name === 'project-json')?.prompt, 'Native project JSON body.');
     assert.deepEqual(activated.find((item) => item.name === 'project-json')?.model, {
       providerID: 'fixture',
       modelID: 'project-pin',
