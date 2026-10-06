@@ -476,3 +476,54 @@ test('parameter subtree replacements invalidate inherited descendant origins wit
     assert.equal(result.provenance['/agent/build/parameters/options/nested/leaf'].operation, 'unset');
   }
 });
+
+test('generated agent ownership survives unrelated external edits and replacement objects across recomposition', async (t) => {
+  const value = {
+    components: { agents: { worker: { prompt: 'Original body' } } },
+    componentGroups: { work: { agents: ['worker'], configuration: { model: 'fixture/first', variant: 'low' } } },
+    profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+    activeProfiles: ['work'],
+  };
+  const f = await fixture(t, value);
+  const config: Config = {};
+  await f.hooks.config!(config);
+  config.agent!.worker = { ...config.agent!.worker, description: 'External description', options: { external: true } };
+  await writeFile(
+    f.file,
+    JSON.stringify({
+      ...value,
+      components: { agents: { worker: { prompt: 'Updated body' } } },
+      componentGroups: { work: { agents: ['worker'], configuration: { model: 'fixture/second' } } },
+    }),
+  );
+  await f.hooks.config!(config);
+  assert.equal(agent(config, 'worker')?.description, 'External description');
+  assert.equal(agent(config, 'worker')?.model, 'fixture/second');
+  assert.equal(agent(config, 'worker')?.variant, undefined);
+  assert.equal(agent(config, 'worker')?.prompt, 'Updated body');
+  assert.deepEqual(agent(config, 'worker')?.options, { external: true });
+  await f.hooks.config!(config);
+  assert.equal(agent(config, 'worker')?.description, 'External description');
+  await writeFile(join(f.root, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
+  await f.hooks.config!(config);
+  assert.deepEqual(agent(config, 'worker'), { description: 'External description', options: { external: true } });
+  await writeFile(join(f.root, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":["work"]}');
+  await f.hooks.config!(config);
+  assert.equal(agent(config, 'worker')?.model, 'fixture/second');
+  assert.equal(agent(config, 'worker')?.description, 'External description');
+});
+
+test('externally edited generated commands retain their template after deselection', async (t) => {
+  const f = await fixture(t, {
+    components: { commands: { example: { template: 'Body' } } },
+    componentGroups: { work: { commands: ['example'] } },
+    profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+    activeProfiles: ['work'],
+  });
+  const config: Config = {};
+  await f.hooks.config!(config);
+  config.command!.example.description = 'External description';
+  await writeFile(join(f.root, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
+  await f.hooks.config!(config);
+  assert.deepEqual(config.command!.example, { template: 'Body', description: 'External description' });
+});

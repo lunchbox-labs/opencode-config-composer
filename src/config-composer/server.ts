@@ -29,14 +29,24 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
   let sources = await loadCompositionSources(context);
   let agents: Partial<Record<string, AgentSettings>> = {};
   let choices: Partial<Record<string, EffectiveChoice & ResolvedModelSettings>> = {};
-  const authored = new WeakMap<object, { native: Record<string, unknown>; applied: Record<string, unknown> }>();
+  interface Authored {
+    native: Record<string, unknown>;
+    applied: Record<string, unknown>;
+    owned: boolean;
+  }
+  const agentSnapshots = new WeakMap<object, Authored>();
   const resources = new WeakMap<
     object,
     { commands: { native: Record<string, unknown>; applied: Record<string, unknown> }; addedPaths: Set<string> }
   >();
   const configurations = new WeakMap<
     object,
-    { native: Record<string, unknown>; applied: Record<string, unknown>; added: Set<string> }
+    {
+      native: Record<string, unknown>;
+      applied: Record<string, unknown>;
+      added: Set<string>;
+      agents: Map<string, Authored>;
+    }
   >();
   function agentConfigurations(value: unknown): value is Record<string, AgentSettings> {
     return record(value) && Object.values(value).every(record);
@@ -47,6 +57,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
   function restore(
     value: Record<string, unknown>,
     previous: { native: Record<string, unknown>; applied: Record<string, unknown> } | undefined,
+    recursive = false,
   ): Record<string, unknown> {
     const result = { ...value };
     if (previous !== undefined) {
@@ -56,6 +67,20 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
             result[key] = previous.native[key];
           } else {
             Reflect.deleteProperty(result, key);
+          }
+        } else if (recursive && record(value[key]) && record(previous.applied[key])) {
+          const restored = restore(
+            value[key],
+            {
+              native: record(previous.native[key]) ? previous.native[key] : {},
+              applied: previous.applied[key],
+            },
+            true,
+          );
+          if (Object.keys(restored).length === 0 && !Object.hasOwn(previous.native, key)) {
+            Reflect.deleteProperty(result, key);
+          } else {
+            result[key] = restored;
           }
         }
       }
@@ -84,18 +109,27 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       const previous = configurations.get(config);
       const nativeGlobals = restore({ model: config.model, small_model: config.small_model }, previous);
       const staged: Record<string, AgentSettings> = {};
+      const owned: Record<string, AgentSettings> = {};
       for (const [name, value] of Object.entries(configured)) {
         if (!record(value)) {
           throw new SettingsError('An agent configuration must be an object.');
         }
-        const saved = authored.get(value);
-        if (previous?.added.has(name) === true && saved !== undefined && isDeepStrictEqual(value, saved.applied)) {
-          continue;
+        const saved = previous?.agents.get(name) ?? agentSnapshots.get(value);
+        const restored = restore(value, saved, true);
+        if (previous?.added.has(name) === true || (previous === undefined && saved?.owned === true)) {
+          if (Object.keys(restored).length > 0) {
+            owned[name] = restored;
+          }
+        } else {
+          staged[name] = restored;
         }
-        staged[name] = restore(value, saved);
       }
       const nextSources = await loadCompositionSources(context);
-      const resolved = await resolveProfileRuntime(nextSources, { ...nativeGlobals, agent: staged });
+      const resolved = await resolveProfileRuntime(nextSources, {
+        ...nativeGlobals,
+        agent: staged,
+        composerOwnedAgents: owned,
+      });
       // Staging guard only: OpenCode catches config-hook errors and may continue without Composer.
       // This is not fail-closed enforcement; do not release until failure behavior is integrated.
       if (resolved.permissions.length !== 0) {
@@ -133,6 +167,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           Reflect.deleteProperty(configured, name);
         }
       }
+      const authored = new Map<string, Authored>();
       for (const [name, value] of Object.entries(resolved.agent)) {
         const existing = configured[name];
         const target = record(existing) ? existing : {};
@@ -143,13 +178,22 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
         Object.assign(target, value);
         configured[name] = target;
-        authored.set(target, { native: structuredClone(staged[name] ?? {}), applied: structuredClone(value) });
+        const snapshot = {
+          native: structuredClone(
+            Object.hasOwn(staged, name) ? staged[name] : Object.hasOwn(owned, name) ? owned[name] : {},
+          ),
+          applied: structuredClone(value),
+          owned: !Object.hasOwn(staged, name),
+        };
+        authored.set(name, snapshot);
+        agentSnapshots.set(target, snapshot);
       }
       config.agent = configured;
       configurations.set(config, {
         native: nativeGlobals,
         applied: { model: config.model, small_model: config.small_model },
         added: new Set(Object.keys(resolved.agent).filter((name) => !Object.hasOwn(staged, name))),
+        agents: authored,
       });
       agents = resolved.agent;
       choices = Object.fromEntries(
