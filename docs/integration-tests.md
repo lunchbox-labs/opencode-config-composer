@@ -52,8 +52,8 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | Terminal menus | Packaged entrypoint and both existing menus render through a real pseudo-terminal | Existing Linux Check only; Windows terminal driving and complete interaction/save/reload flows remain open |
 | Composer model defaults | Native overrides, fallback removal and session interactions | Await integration of [#31](https://github.com/lunchbox-labs/opencode-config-composer/pull/31) |
 | Typed model parameters | Provider request mapping, variant precedence, title/compaction parameters and removal | Await integration of [#34](https://github.com/lunchbox-labs/opencode-config-composer/pull/34); its existing native request assertions supply regression cases |
-| Components, component groups, configuration presets | Canonical schema, explicit imports, resolution and validation | Await canonical schema/runtime implementation |
-| Profiles and ordered `activeProfiles` | Local replacement; absent inherits; empty disables; ordering, reload and persistence | Await canonical schema/runtime implementation; [#30](https://github.com/lunchbox-labs/opencode-config-composer/pull/30) is earlier source/profile work |
+| Components, component groups, configuration presets | Canonical schema, explicit imports, resolution and validation | Schema contract in [#36](https://github.com/lunchbox-labs/opencode-config-composer/pull/36); runtime/import assembly pending |
+| Profiles and ordered `activeProfiles` | Local replacement; absent inherits; empty disables; ordering, reload and persistence | Schema contract in [#36](https://github.com/lunchbox-labs/opencode-config-composer/pull/36); runtime integration pending; [#30](https://github.com/lunchbox-labs/opencode-config-composer/pull/30) is earlier source/profile work |
 | Compose TUI and provenance | Real terminal navigation, inspection, selection, save/apply and error flows | Await integration of [#32](https://github.com/lunchbox-labs/opencode-config-composer/pull/32) and the final profile UI |
 | Automatic source discovery | Discovery boundaries and precedence | Deferred; explicit imports come first |
 
