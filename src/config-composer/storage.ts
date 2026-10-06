@@ -44,6 +44,7 @@ export interface SourceFile {
   mode: number;
   writable?: boolean;
   canonicalPath?: string;
+  aliases?: string[];
 }
 export interface AgentFile {
   file: SourceFile;
@@ -148,7 +149,26 @@ async function sourceFile(root: string, path: string): Promise<SourceFile> {
   return { path, text: await readFile(path, 'utf8'), mode: info.mode & 0o777, writable: (info.mode & 0o222) !== 0 };
 }
 
+async function observedComposition(sources: LoadedSources): Promise<void> {
+  for (const [path, expected] of sources.paths) {
+    const actual = await realpath(path).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        return undefined;
+      }
+      throw error;
+    });
+    if (actual !== expected) {
+      throw new SettingsError('Settings source identity changed. Reopen the editor.');
+    }
+  }
+}
+
 async function observedFile(root: string, original: SourceFile): Promise<SourceFile> {
+  for (const alias of original.aliases ?? []) {
+    if ((await realpath(alias)) !== (original.canonicalPath ?? original.path)) {
+      throw new SettingsError('Settings source identity changed. Reopen the editor.');
+    }
+  }
   if (original.writable !== false) {
     return sourceFile(root, original.path);
   }
@@ -237,12 +257,30 @@ export async function loadSnapshot(
       typeof options.configFile === 'string' ? options.configFile : 'config-composer.jsonc',
       root,
     ),
-    baseExplicit: true,
+    baseExplicit: typeof options.configFile === 'string',
   };
   const sources = await loadCompositionSources(sourceContext);
-  const settingsFile = await sourceFile(root, sourceContext.baseFile);
-  if (sources.documents.find((source) => source.id === settingsFile.path)?.text !== settingsFile.text) {
-    throw new SettingsError('Composition sources changed while loading. Reopen the editor.');
+  const compositionFiles: SourceFile[] = [];
+  for (const source of sources.documents) {
+    const file = await configurationFile(source.id);
+    if (file.text !== source.text) {
+      throw new SettingsError('Composition sources changed while loading. Reopen the editor.');
+    }
+    const rel = relative(root, source.id);
+    compositionFiles.push({
+      ...file,
+      canonicalPath: source.id,
+      aliases: [...sources.paths].flatMap(([path, canonical]) =>
+        canonical === source.id && path !== source.id ? [path] : [],
+      ),
+      writable: source.writable && !rel.startsWith('..') && !isAbsolute(rel),
+      mode: file.mode & 0o777,
+    });
+  }
+  const preferred = sources.scopes.find((source) => source.id === sourceContext.baseFile) ?? sources.scopes[0];
+  const settingsFile = compositionFiles.find((file) => file.path === preferred.id);
+  if (settingsFile === undefined) {
+    throw new SettingsError('No composition source is available for the editor.');
   }
   const nativeModels = native ?? config;
   const settings = editorSettings(sources, nativeModels);
@@ -256,18 +294,7 @@ export async function loadSnapshot(
       return [name, { name, settings: value }];
     }),
   );
-  const files = [configFile, settingsFile];
-  for (const source of sources.documents) {
-    if (files.some((file) => file.path === source.id)) {
-      continue;
-    }
-    const file = await configurationFile(source.id);
-    if (file.text !== source.text) {
-      throw new SettingsError('Composition sources changed while loading. Reopen the editor.');
-    }
-    const rel = relative(root, source.id);
-    files.push({ ...file, writable: source.writable && !rel.startsWith('..') && !isAbsolute(rel) });
-  }
+  const files = [configFile, ...compositionFiles];
   const markdownNames = new Set<string>();
   async function scan(directory: string, base: string): Promise<void> {
     if ((await lstat(directory)).isSymbolicLink()) {
@@ -367,6 +394,7 @@ export async function loadSnapshot(
     .sort((a, b) => a.name.localeCompare(b.name));
   enabled.forEach((agent) => agentGroups(agent.settings));
   const resolved = await resolveProfileRuntime(sources, { ...nativeModels, agent: nativeAgents }, overlays);
+  await observedComposition(sources);
   for (const file of files) {
     if ((await observedFile(root, file)).text !== file.text) {
       throw new SettingsError('Settings changed while loading. Reopen the editor.');
@@ -834,6 +862,7 @@ export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => v
   const applied: FileEdit[] = [];
   try {
     const assertAuthorized = await authorize?.();
+    await observedComposition(plan.snapshot.sources);
     for (const original of plan.snapshot.files) {
       const current = await observedFile(plan.snapshot.root, original);
       if (current.text !== original.text) {
@@ -899,6 +928,7 @@ export async function reloadConfiguration(
     throw new SettingsError('Another settings edit is active. Reload after it finishes.');
   });
   try {
+    await observedComposition(snapshot.sources);
     for (const file of snapshot.files) {
       if ((await observedFile(snapshot.root, file)).text !== file.text) {
         throw new SettingsError('Settings changed. Reopen the editor before reloading.');
@@ -931,6 +961,7 @@ export async function reloadConfiguration(
     }
     const plugins: unknown[] = config.plugin;
     await update(plugins);
+    await observedComposition(snapshot.sources);
     for (const file of snapshot.files) {
       if (file.path !== original.path && (await observedFile(snapshot.root, file)).text !== file.text) {
         throw new SettingsError('Settings changed during reload. Reopen the editor and check the saved configuration.');

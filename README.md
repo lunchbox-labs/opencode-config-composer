@@ -20,6 +20,8 @@ The model editor updates only model/reference/variant fields in canonical `compo
 `configurationPresets`, retaining their permissions, parameters, prompt settings, and component membership.
 Imported definitions are edited in their declaring file when it is writable inside the configuration directory;
 outside sources and symlink aliases are read-only. All observed sources participate in stale-file checks.
+The default shared file is optional when project sources exist; an explicit `configFile` remains required.
+Reload checks every source path, including aliases and previously absent project/local scopes, before applying changes.
 Previews use the selected profiles and their layer order. Membership changes never activate profiles,
 and reordering a membership list does not change profile precedence. Inline and file-backed component agents
 and native built-ins are available in the membership picker. Native agent files must currently be discoverable

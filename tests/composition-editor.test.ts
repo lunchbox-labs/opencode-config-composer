@@ -5,7 +5,14 @@ import { type TestContext, test } from 'node:test';
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadSnapshot, memberships, planChange, plannedChoices, savePlan } from '../src/config-composer/storage.ts';
+import {
+  loadSnapshot,
+  memberships,
+  planChange,
+  plannedChoices,
+  reloadConfiguration,
+  savePlan,
+} from '../src/config-composer/storage.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { parseCompositionDocument } from '../src/config-composer/composition/document.ts';
 
@@ -366,3 +373,90 @@ for (const kind of ['composition', 'component'] as const) {
     }
   });
 }
+
+test('an absent optional shared file permits project-only editor snapshots and native default edits', async (t) => {
+  const root = await fixture(t);
+  const project = await mkdtemp(join(tmpdir(), 'composer-project-only-'));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  await mkdir(join(project, '.opencode'), { recursive: true });
+  const source = join(project, '.opencode/config-composer.jsonc');
+  await writeFile(source, await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
+  await rm(join(root, 'config-composer.jsonc'));
+  const snapshot = await loadSnapshot(root, project);
+  assert.equal(snapshot.sourceContext.baseExplicit, false);
+  assert.equal(snapshot.settingsFile.path, source);
+  assert.equal(snapshot.settingsFile.writable, false);
+  await savePlan(planChange(snapshot, { kind: 'global', field: 'model', model: 'fixture/changed' }));
+  assert.equal((await loadSnapshot(root, project)).config.model, 'fixture/changed');
+  await writeFile(
+    join(root, 'opencode.jsonc'),
+    JSON.stringify({ plugin: [[packageName, { configFile: 'missing.jsonc' }]] }),
+  );
+  await assert.rejects(loadSnapshot(root, project), /Could not read composition source/);
+});
+
+test('retargeting an imported JSONC alias blocks reload before the host is changed', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const first = join(root, 'first.jsonc');
+  const second = join(root, 'second.jsonc');
+  const alias = join(root, 'alias.jsonc');
+  await writeFile(first, '{"configurationPresets":{"one":{"model":"fixture/first"}}}');
+  await writeFile(second, '{"configurationPresets":{"one":{"model":"fixture/second"}}}');
+  await symlink(first, alias);
+  await writeFile(
+    path,
+    JSON.stringify({
+      imports: ['./alias.jsonc'],
+      componentGroups: { work: { agents: ['build'], configuration: { modelRef: 'preset:one' } } },
+      profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const snapshot = await loadSnapshot(root);
+  await rm(alias);
+  await symlink(second, alias);
+  let updates = 0;
+  await assert.rejects(
+    reloadConfiguration(snapshot, async () => {
+      updates++;
+    }),
+    /identity changed/,
+  );
+  assert.equal(updates, 0);
+});
+
+test('retargeting a deduplicated project scope alias blocks reload before the host is changed', async (t) => {
+  const root = await fixture(t);
+  await mkdir(join(root, '.opencode'));
+  const alias = join(root, '.opencode/config-composer.jsonc');
+  await symlink(join(root, 'config-composer.jsonc'), alias);
+  const snapshot = await loadSnapshot(root);
+  const second = join(root, 'second.jsonc');
+  await writeFile(second, '{"activeProfiles":[]}');
+  await rm(alias);
+  await symlink(second, alias);
+  let updates = 0;
+  await assert.rejects(
+    reloadConfiguration(snapshot, async () => {
+      updates++;
+    }),
+    /identity changed/,
+  );
+  assert.equal(updates, 0);
+});
+
+test('adding a previously absent local selection blocks reload before the host is changed', async (t) => {
+  const root = await fixture(t);
+  const snapshot = await loadSnapshot(root);
+  await mkdir(join(root, '.opencode'));
+  await writeFile(join(root, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
+  let updates = 0;
+  await assert.rejects(
+    reloadConfiguration(snapshot, async () => {
+      updates++;
+    }),
+    /identity changed/,
+  );
+  assert.equal(updates, 0);
+});
