@@ -10,7 +10,8 @@ const schemaUrl = import.meta.resolve(`${name}/schema.json`);
 assert.ok(schemaUrl.endsWith('/schema.json'));
 const { default: schema } = await import(`${name}/schema.json`, { with: { type: 'json' } });
 assert.equal(schema.type, 'object');
-assert.ok(schema.properties.agent);
+assert.ok(schema.properties.components);
+assert.equal(schema.properties.agent, undefined);
 assert.equal(typeof schema.description, 'string');
 for (const module of [rootModule, serverModule, tuiModule]) {
   assert.deepEqual(Object.keys(module), ['default']);

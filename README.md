@@ -12,6 +12,11 @@ The command retains the menu's running-agent checks, filesystem checks, and succ
 
 The npm package name is **`@lunchbox-labs/opencode-config-composer`**.
 
+The canonical composition format is specified in [the schema contract](docs/composition-schema.md).
+`schema.json` describes that format, including components, mixed groups, presets, and named profiles.
+Its validator is available internally; the server/TUI integration is still pending. The runtime setup below
+describes the existing runtime and must not be used as a canonical-schema example.
+
 Supported and tested host: **OpenCode V1 1.18.34**. The `opencode` engine requirement is intentionally exact.
 Broaden it only after checking another host version. This package does not implement a V2 port.
 Development requires Node 22.18 or newer and npm. Compiled runtime files do not require TypeScript or OpenTUI packages.

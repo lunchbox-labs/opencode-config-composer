@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Hooks, PluginInput } from '@opencode-ai/plugin';
 import server from '../src/server.ts';
 import { readSettings } from '../src/config-composer/settings.ts';
+import { CompositionValidationError, readCompositionDocument } from '../src/config-composer/composition/document.ts';
 
 test('Composer defaults override independently', async () => {
   // Parser acceptance is part of the feature, before exercising its resolver.
@@ -33,10 +34,17 @@ test('Composer defaults override independently', async () => {
 
 test('default validation matches the schema and rejects references and malformed IDs', async () => {
   const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as {
-    properties: Record<string, { type: string; pattern: string }>;
+    properties: Record<string, { $ref: string }>;
+    $defs: {
+      defaults: { properties: Record<string, { $ref: string }> };
+      model: { type: string; pattern: string };
+    };
   };
+  assert.equal(schema.properties.defaults.$ref, '#/$defs/defaults');
+  assert.equal(schema.$defs.model.type, 'string');
   for (const field of ['model', 'small_model']) {
-    assert.equal(schema.properties[field].type, 'string');
+    assert.equal(schema.properties[field], undefined);
+    assert.equal(schema.$defs.defaults.properties[field].$ref, '#/$defs/model');
     for (const value of [
       'fixture/main',
       'fixture/path/model',
@@ -48,11 +56,21 @@ test('default validation matches the schema and rejects references and malformed
       12,
     ]) {
       const valid = typeof value === 'string' && /^[^\s/]+\/\S+$/.test(value);
-      assert.equal(typeof value === 'string' && new RegExp(schema.properties[field].pattern).test(value), valid);
+      assert.equal(typeof value === 'string' && new RegExp(schema.$defs.model.pattern).test(value), valid);
       if (valid) {
+        assert.doesNotThrow(() => readCompositionDocument({ defaults: { [field]: value } }));
         assert.doesNotThrow(() => readSettings({ [field]: value }));
       } else {
         assert.throws(() => readSettings({ [field]: value }), /provider\/model/);
+        assert.throws(
+          () => readCompositionDocument({ defaults: { [field]: value } }),
+          (error: unknown) => {
+            assert.ok(error instanceof CompositionValidationError);
+            assert.equal(error.diagnostic.code, 'invalid-composition-document');
+            assert.equal(error.diagnostic.pointer, `/defaults/${field}`);
+            return true;
+          },
+        );
       }
     }
   }

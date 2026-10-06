@@ -1,0 +1,43 @@
+{
+  "profiles": {
+    "coding-base": {
+      "layers": [
+        { "componentGroup": "review" },
+        { "componentGroup": "programming" },
+        {
+          "configurationPreset": "review-checks",
+          "target": { "componentGroups": ["review"] },
+        },
+        {
+          "configurationPreset": "programming-checks",
+          "target": { "componentGroups": ["programming"] },
+        },
+      ],
+    },
+    "claude-coding": {
+      "extends": "coding-base",
+      "layers": [
+        {
+          "configurationPreset": "claude-code",
+          "target": { "agents": ["agent1", "agent2", "agent3", "agent4"] },
+        },
+      ],
+      "overrides": {
+        "agents": {
+          "agent1": {
+            "permissions": [{ "tool": "bash", "pattern": "git *", "action": "allow" }],
+          },
+        },
+      },
+    },
+    "openai-coding": {
+      "extends": "coding-base",
+      "layers": [
+        {
+          "configurationPreset": "openai-code",
+          "target": { "agents": ["agent1", "agent2", "agent3", "agent4"] },
+        },
+      ],
+    },
+  },
+}

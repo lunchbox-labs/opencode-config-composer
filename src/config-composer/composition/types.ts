@@ -1,4 +1,27 @@
 import type { AgentSettings, GroupOptions } from '../settings.ts';
+import type { CompositionDocument } from './document-types.ts';
+
+export type {
+  AgentComponent,
+  AgentConfiguration,
+  CommandComponent,
+  ComponentGroup,
+  Components,
+  CompositionDefaults,
+  CompositionDocument,
+  CompositionOverrides,
+  CompositionProfile,
+  ConfigurationParameters,
+  ConfigurationPreset,
+  JsonValue,
+  ModelIdentity,
+  PermissionRule,
+  PresetTarget,
+  ProfileLayer,
+  PromptComponent,
+  PromptConfiguration,
+  SkillComponent,
+} from './document-types.ts';
 
 export interface SourceDocument {
   id: string;
@@ -7,6 +30,11 @@ export interface SourceDocument {
   fingerprint: string;
   writable: boolean;
   value: Record<string, unknown>;
+}
+
+/** A structurally validated document; cross-document references remain unresolved. */
+export interface CompositionSourceDocument extends Omit<SourceDocument, 'value'> {
+  value: CompositionDocument;
 }
 
 export interface FieldOrigin {
