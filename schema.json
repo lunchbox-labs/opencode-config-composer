@@ -467,7 +467,8 @@
             "$ref": "#/$defs/componentName"
           },
           "maxItems": 256,
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "Available native or custom agent names. Built-in agents need no components.agents declaration. Union with custom frontmatter groups; preserve native fields unless explicitly overridden."
         },
         "skills": {
           "type": "array",
@@ -523,7 +524,7 @@
         }
       },
       "minProperties": 1,
-      "description": "Explicit selected agents or selected groups. Group targets expand to their agent members at this layer. Targets never select components implicitly."
+      "description": "Explicit selected agents or selected groups, resolved against available native and custom agents. Group targets expand to their agent members at this layer. Targets never select or synthesize components implicitly."
     },
     "layer": {
       "oneOf": [

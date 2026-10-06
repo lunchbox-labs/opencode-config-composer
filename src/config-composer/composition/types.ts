@@ -1,5 +1,5 @@
 import type { AgentSettings, GroupOptions } from '../settings.ts';
-import type { CompositionDocument } from './document-types.ts';
+import type { CompositionDocument, PermissionRule } from './document-types.ts';
 
 export type {
   AgentComponent,
@@ -45,6 +45,16 @@ export interface FieldOrigin {
   references: string[];
   overwritten: FieldOrigin[];
 }
+
+/** Configured Composer matches only; a nonmatch defers without inventing an action or origin. */
+export type ConfiguredPermissionPreview =
+  | {
+      action: PermissionRule['action'];
+      matched: { permission: string; pattern: string };
+      origin?: FieldOrigin;
+      fallback?: never;
+    }
+  | { fallback: 'native'; action?: never; matched?: never; origin?: never };
 
 export interface NativeInput {
   model?: string;

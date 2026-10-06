@@ -6,6 +6,7 @@ import schema from '../schema.json' with { type: 'json' };
 import type {
   AgentConfiguration,
   ConfigurationPreset,
+  ConfiguredPermissionPreview,
   PresetTarget,
 } from '../src/config-composer/composition/types.ts';
 import {
@@ -277,4 +278,55 @@ test('preset layer errors identify the supplied branch and exact invalid target'
       },
     );
   }
+});
+
+test('permission diagnostics retain canonical contribution pointers across scopes', () => {
+  const permissions = [{ tool: 'bash', action: 'invalid' }];
+  for (const [input, pointer] of [
+    [{ defaults: { agents: { permissions } } }, '/defaults/agents/permissions/0/action'],
+    [{ configurationPresets: { checks: { permissions } } }, '/configurationPresets/checks/permissions/0/action'],
+    [
+      { componentGroups: { review: { configuration: { permissions } } } },
+      '/componentGroups/review/configuration/permissions/0/action',
+    ],
+    [
+      { overrides: { agents: { 'team/reviewer': { permissions } } } },
+      '/overrides/agents/team~1reviewer/permissions/0/action',
+    ],
+    [
+      { profiles: { review: { overrides: { agents: { build: { permissions } } } } } },
+      '/profiles/review/overrides/agents/build/permissions/0/action',
+    ],
+  ] as const) {
+    assert.throws(
+      () => readCompositionDocument(input, 'source.jsonc'),
+      (error: unknown) => {
+        assert.ok(error instanceof CompositionValidationError);
+        assert.equal(error.diagnostic.sourceId, 'source.jsonc');
+        assert.equal(error.diagnostic.pointer, pointer);
+        return true;
+      },
+    );
+  }
+});
+
+test('permission preview contracts distinguish an explicit ask from native fallback', () => {
+  const fallback: ConfiguredPermissionPreview = { fallback: 'native' };
+  const matched: ConfiguredPermissionPreview = {
+    action: 'ask',
+    matched: { permission: 'bash', pattern: 'git *' },
+    origin: {
+      sourceId: 'source.jsonc',
+      pointer: '/configurationPresets/checks/permissions/0/action',
+      layer: 'profile:review',
+      operation: 'set',
+      references: [],
+      overwritten: [],
+    },
+  };
+  // @ts-expect-error -- A nonmatch must not claim that native fallback evaluates to ask.
+  const invalid: ConfiguredPermissionPreview = { fallback: 'native', action: 'ask' };
+  assert.equal(fallback.action, undefined);
+  assert.equal(matched.fallback, undefined);
+  assert.equal(invalid.action, 'ask');
 });

@@ -25,6 +25,22 @@ or inline `text`; a skill names its native `SKILL.md` with `file`. Agent `prompt
 prompt bodies in order. Agent `skills` records intended on-demand relationships: it neither injects
 skill bodies nor grants exclusive access. Agent configuration belongs in `configuration`.
 
+`componentGroups.<name>.agents` resolves against the complete available native/custom agent registry,
+not just `components.agents`. For example, `{ "componentGroups": { "coding": { "agents": ["build", "plan", "explore"] } } }`
+needs no shadow agent files or custom declarations. The [pinned OpenCode 1.18.34 agent implementation](https://github.com/anomalyco/opencode/blob/v1.18.34/packages/opencode/src/agent/agent.ts)
+also defines `general`, `compaction`, `title`, and `summary`, including hidden agents. This observed list
+is not a Composer allowlist: runtime callers must supply the current host registry, including disabled
+status and discovered custom agents. Missing/disabled explicit members fail rather than creating agents.
+
+Custom-agent frontmatter `groups` remains a second membership source (including the native
+`options.groups` representation). The membership helper forms a union: JSONC member names retain their
+authored order, then frontmatter-only member names follow in lexical order, independent of host registry
+enumeration. A name present through both paths occurs once. Existing direct `groups` takes precedence
+over `options.groups` if both exist. Selecting a group applies its configuration once to each member;
+profile layer order determines settings precedence, not the membership source. Membership alone does
+not activate a profile or change built-in prompts, modes, permissions, or pinned models. The helper
+does not mutate agent data; runtime integration must preserve these fields unless explicitly overridden.
+
 Model settings support `model` **or** `modelRef`, an optional `variant`, and typed `parameters`.
 References are `opencode:model`, `opencode:small_model`, or `preset:<configuration-preset-name>`.
 A model reference selects model-bound settings; a targeted preset layer also contributes permissions.
@@ -64,6 +80,14 @@ wins, even if looser**. A later nonmatch leaves an earlier match intact. Only no
 back to native globals, then native defaults. An explicit `ask` is a match, not a fallback. Replacing a
 permission array in a definition must not discard earlier matching contributions from other layers.
 This schema does not compile or evaluate native permissions.
+
+A configured permission preview returns a matched `action` or `{ "fallback": "native" }`; a nonmatch
+does not invent `ask` or claim a Composer source. Canonical origins address authored rule-array fields,
+for example `/configurationPresets/checks/permissions/0/action`,
+`/componentGroups/review/configuration/permissions/0/action`, `/defaults/agents/permissions/0/action`,
+or `/profiles/review/overrides/agents/build/permissions/0/action`. Document overrides use
+`/overrides/agents/<escaped-name>/permissions/<index>/action`. Preserve JSON Pointer escaping,
+the declaring source, prior matching candidates, and the distinction from native resolved paths.
 
 Local `activeProfiles` replaces the shared selection. An absent local key inherits; `[]` selects none.
 Selecting none does not disable independent document defaults/overrides. The selection helper returns

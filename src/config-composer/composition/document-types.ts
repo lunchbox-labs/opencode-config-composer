@@ -64,7 +64,7 @@ export interface Components {
   prompts?: Record<string, PromptComponent>;
 }
 
-/** Any subset of component kinds is valid. Configuration applies to member agents. */
+/** Any subset of component kinds is valid. Agent names resolve against native and custom agents. */
 export interface ComponentGroup {
   agents?: string[];
   skills?: string[];
