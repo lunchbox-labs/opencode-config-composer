@@ -104,13 +104,6 @@ export async function nativeTerminal(
     }
     assert.fail(`Native terminal did not render ${JSON.stringify(labels)}:\n${text()}`);
   };
-  const press = async (keys: string, ...labels: string[]) => {
-    const before = revision;
-    child.write(keys);
-    if (labels.length > 0) {
-      await wait(labels, before);
-    }
-  };
   const waitInput = async (ready: () => boolean, description: string) => {
     for (let attempt = 0; attempt < 600; attempt++) {
       assert.equal(exited, false, `Native terminal exited:\n${text()}`);
@@ -120,6 +113,18 @@ export async function nativeTerminal(
       await setTimeout(50);
     }
     assert.fail(`Native terminal did not expose ${description}:\n${text()}`);
+  };
+  const press = async (keys: string, ...labels: string[]) => {
+    // Back navigation paints the next menu before its input/key handler is ready.
+    // A second Escape during that gap is lost by the native dialog.
+    if (keys === '\x1b' && search.pending()) {
+      await waitInput(search.focused, 'the menu input before Escape');
+    }
+    const before = revision;
+    child.write(keys);
+    if (labels.length > 0) {
+      await wait(labels, before);
+    }
   };
   const choose = async (label: string, ...next: string[]) => {
     // Command autocomplete and a first menu paint can contain this option before
@@ -134,7 +139,9 @@ export async function nativeTerminal(
     await press('\r', ...next);
   };
   const command = async (name: string, ...labels: string[]) => {
+    await waitInput(search.promptFocused, 'the main conversation input');
     await press(name, name);
+    await waitInput(() => search.echoed(name), `the command query ${JSON.stringify(name)}`);
     await press('\r', ...labels);
   };
   return { text, wait, press, choose, command, stop };
