@@ -56,7 +56,10 @@ function relativeFile<T extends { file?: string }>(value: T, path: string): T {
   return value.file === undefined ? value : { ...value, file: configurationPath(value.file, dirname(path)) };
 }
 
-export async function loadCompositionSources(context: ProjectContext): Promise<LoadedSources> {
+export async function loadCompositionSources(
+  context: ProjectContext,
+  overlays: ReadonlyMap<string, string> = new Map(),
+): Promise<LoadedSources> {
   const documents = new Map<string, CompositionSourceDocument>();
   const visited = new Set<string>();
   const scopes: CompositionSourceDocument[] = [];
@@ -98,6 +101,7 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
         `Could not read composition source ${path}: ${error instanceof Error ? error.message : 'unreadable file'}`,
       ),
     );
+    file.text = overlays.get(canonical) ?? file.text;
     totalBytes += Buffer.byteLength(file.text, 'utf8');
     if (totalBytes > 8 * 1024 * 1024) {
       fail('Composition sources exceed the 8 MiB total text limit.', path);

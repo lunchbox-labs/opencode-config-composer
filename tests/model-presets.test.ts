@@ -60,7 +60,17 @@ async function fixture(t: TestContext): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'model-presets-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'agents'));
-  await writeFile(join(root, 'config-composer.jsonc'), JSON.stringify({ agent: options }));
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      configurationPresets: options.modelPresets,
+      componentGroups: Object.fromEntries(
+        Object.entries(options.groups).map(([name, configuration]) => [name, { configuration }]),
+      ),
+      profiles: { work: { layers: Object.keys(options.groups).map((componentGroup) => ({ componentGroup })) } },
+      activeProfiles: ['work'],
+    }),
+  );
   await writeFile(
     join(root, 'opencode.jsonc'),
     '// Preserve this comment.\n' +
@@ -238,7 +248,7 @@ test('preset and native edits retain references, comments, prompts, permissions,
   const change = { kind: 'preset', name: 'balanced', choice: { model: 'fixture/next', variant: 'high' } } as const;
   const plan = planChange(snapshot, change);
   assert.deepEqual(affectedGroups(snapshot, change).sort(), ['developers', 'reviewers']);
-  for (const choice of plannedChoices(plan)) {
+  for (const choice of await plannedChoices(plan)) {
     validateChoice(choice, catalog);
   }
   assert.equal(await readFile(snapshot.configFile.path, 'utf8'), snapshot.configFile.text);
@@ -295,7 +305,10 @@ test('validation includes variants on linked groups and unpinned agents', async 
   const root = await fixture(t);
   const snapshot = await loadSnapshot(root);
   const preset = planChange(snapshot, { kind: 'preset', name: 'balanced', choice: { model: 'fixture/small' } });
-  assert.throws(() => plannedChoices(preset).forEach((choice) => validateChoice(choice, catalog)), /variant/);
+  await assert.rejects(
+    async () => (await plannedChoices(preset)).forEach((choice) => validateChoice(choice, catalog)),
+    /variant/,
+  );
   assert.equal(await readFile(snapshot.configFile.path, 'utf8'), snapshot.configFile.text);
   await writeFile(
     snapshot.configFile.path,
@@ -306,16 +319,25 @@ test('validation includes variants on linked groups and unpinned agents', async 
   );
   await writeFile(
     join(root, 'config-composer.jsonc'),
-    JSON.stringify({ agent: { groups: { developers: { modelRef: 'opencode:model' } } } }),
+    JSON.stringify({
+      componentGroups: { developers: { configuration: { modelRef: 'opencode:model' } } },
+      profiles: { work: { layers: [{ componentGroup: 'developers' }] } },
+      activeProfiles: ['work'],
+    }),
   );
   const agentOnly = await loadSnapshot(root);
   assert.deepEqual(
-    agentOnly.agents.map((agent) => [agent.name, agent.settings.variant]),
+    agentOnly.agents
+      .filter((agent) => agent.markdown !== undefined)
+      .map((agent) => [agent.name, agent.settings.variant]),
     [['extra', 'low']],
   );
   validateChoice(resolveGroup(agentOnly.groups.developers, { native: { model: 'fixture/small' } }), catalog);
   const global = planChange(agentOnly, { kind: 'global', field: 'model', model: 'fixture/small' });
-  assert.throws(() => plannedChoices(global).forEach((choice) => validateChoice(choice, catalog)), /variant/);
+  await assert.rejects(
+    async () => (await plannedChoices(global)).forEach((choice) => validateChoice(choice, catalog)),
+    /variant/,
+  );
   assert.equal(await readFile(agentOnly.configFile.path, 'utf8'), agentOnly.configFile.text);
 });
 
@@ -598,4 +620,66 @@ test('TUI flags an unset native slot and validates inherited variants before sav
   await ui.confirm();
   assert.match(ui.toasts.at(-1)!.message, /variant/);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), original);
+});
+
+test('TUI resolves indirect native preset references against the running workspace and rechecks them before saving', async (t) => {
+  const root = await fixture(t);
+  await rm(join(root, 'agents/extra.md'));
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(
+    path,
+    JSON.stringify({
+      configurationPresets: { native: { modelRef: 'opencode:model' }, balanced: { modelRef: 'preset:native' } },
+      componentGroups: { developers: { configuration: { model: 'fixture/fast' } }, reviewers: {}, workflow: {} },
+      profiles: { work: { layers: [{ componentGroup: 'developers' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  ui.setNative({ model: 'fixture/small' });
+  await ui.command();
+  await ui.select('developers');
+  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
+  assert.match(ui.dialog.options.find((option) => option.value === 'preset:balanced')!.description!, /fixture\/small/);
+  await ui.select('preset:balanced');
+  assert.equal(ui.dialog.title, 'Save agent settings?', 'the running model has no variants to offer');
+  ui.setNative({ model: 'fixture/next' });
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /Effective model defaults changed/);
+  assert.equal(await readFile(path, 'utf8'), original);
+  ui.setNative({ model: 'fixture/small' });
+  await ui.command();
+  await ui.select('developers');
+  await ui.select('preset:balanced');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).groups.developers, { modelRef: 'preset:balanced' });
+});
+
+test('TUI opens and saves active native references when only the running workspace supplies the model', async (t) => {
+  const root = await fixture(t);
+  await rm(join(root, 'agents/extra.md'));
+  await writeFile(join(root, 'opencode.jsonc'), JSON.stringify({ plugin: [packageName] }));
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      componentGroups: { work: { agents: ['build'], configuration: { modelRef: 'opencode:model' } } },
+      profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  ui.setNative({ model: 'fixture/fast' });
+  await ui.command();
+  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
+  assert.match(ui.dialog.options.find((option) => option.value === 'work')!.description!, /fixture\/fast/);
+  await ui.select('work');
+  await ui.select('opencode:model');
+  await ui.select('low');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root, root, { model: 'fixture/fast' })).groups.work, {
+    modelRef: 'opencode:model',
+    variant: 'low',
+  });
+  assert.equal(ui.toasts.length, 0);
 });

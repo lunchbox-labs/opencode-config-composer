@@ -75,13 +75,14 @@ function mergeParameters(
 export async function resolveProfileRuntime(
   sources: LoadedSources,
   native: NativeInput,
+  overlays: ReadonlyMap<string, string> = new Map(),
 ): Promise<ResolvedProfileRuntime> {
   const { registry } = sources;
   const groups = registry.componentGroups ?? {};
   const presets = registry.configurationPresets ?? {};
   const available: Record<string, AgentSettings> = Object.fromEntries(nativeAgentNames.map((name) => [name, {}]));
   Object.assign(available, structuredClone(native.agent ?? {}));
-  const components = await loadComponents(sources, available);
+  const components = await loadComponents(sources, available, overlays);
   Object.assign(available, components.agents);
   const commands: Awaited<ReturnType<typeof loadComponents>>['commands'] = {};
   const skillPaths = new Set<string>();

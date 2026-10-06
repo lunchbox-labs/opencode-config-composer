@@ -27,18 +27,23 @@ import {
   groupName,
   modelChoice,
   presetName,
-  readSettings,
   record,
-  resolveChoice,
-  resolveGroup,
 } from './settings.ts';
-import { loadConfiguration } from './configuration.ts';
+import { configurationFile, configurationPath } from './configuration.ts';
+import { type LoadedSources, type ProjectContext, loadCompositionSources } from './composition/sources.ts';
+import { loadComponents } from './composition/components.ts';
+import { type ResolvedProfileRuntime, nativeAgentNames, resolveProfileRuntime } from './composition/runtime.ts';
+import { parseCompositionDocument } from './composition/document.ts';
+import { editorSettings } from './composition/editor.ts';
+import { resolveGroupAgentNames } from './composition/membership.ts';
 import { packageName } from './package-name.ts';
 
 export interface SourceFile {
   path: string;
   text: string;
   mode: number;
+  writable?: boolean;
+  canonicalPath?: string;
 }
 export interface AgentFile {
   file: SourceFile;
@@ -51,6 +56,7 @@ export interface StoredAgent {
   name: string;
   settings: AgentSettings;
   markdown?: AgentFile;
+  component?: boolean;
 }
 export interface Snapshot {
   root: string;
@@ -63,6 +69,11 @@ export interface Snapshot {
   modelPresets: ModelPresets;
   agents: StoredAgent[];
   files: SourceFile[];
+  sources: LoadedSources;
+  sourceContext: ProjectContext;
+  resolved: ResolvedProfileRuntime;
+  nativeAgents: Record<string, AgentSettings>;
+  nativeModels: NativeModels;
 }
 export type Change =
   | { kind: 'group'; name: string; choice: GroupChoice }
@@ -134,7 +145,18 @@ async function sourceFile(root: string, path: string): Promise<SourceFile> {
   if (!info.isFile() || info.isSymbolicLink() || rel.startsWith('..') || isAbsolute(rel) || info.size > 2_000_000) {
     throw new SettingsError('Settings must be regular files inside this configuration directory, under 2 MB each.');
   }
-  return { path, text: await readFile(path, 'utf8'), mode: info.mode & 0o777 };
+  return { path, text: await readFile(path, 'utf8'), mode: info.mode & 0o777, writable: (info.mode & 0o222) !== 0 };
+}
+
+async function observedFile(root: string, original: SourceFile): Promise<SourceFile> {
+  if (original.writable !== false) {
+    return sourceFile(root, original.path);
+  }
+  const canonical = await realpath(original.path);
+  if (canonical !== (original.canonicalPath ?? original.path)) {
+    throw new SettingsError('Settings source identity changed. Reopen the editor.');
+  }
+  return configurationFile(canonical);
 }
 
 function serverEntry(spec: unknown, root: string): boolean {
@@ -173,7 +195,11 @@ function pluginOptions(config: Record<string, unknown>, index: number): unknown 
   return entry[1];
 }
 
-export async function loadSnapshot(directory: string): Promise<Snapshot> {
+export async function loadSnapshot(
+  directory: string,
+  projectRoot = directory,
+  native?: NativeModels,
+): Promise<Snapshot> {
   const root = await realpath(directory);
   const entries = await readdir(root);
   const configs = entries.filter((name) => ['opencode.json', 'opencode.jsonc'].includes(name));
@@ -196,12 +222,31 @@ export async function loadSnapshot(directory: string): Promise<Snapshot> {
     throw new SettingsError('Configure exactly one Config Composer server plugin entry.');
   }
   const pluginIndex = matches[0];
-  const loaded = await loadConfiguration(pluginOptions(config, pluginIndex), root);
-  const settingsFile = await sourceFile(root, loaded.file.path);
-  if (settingsFile.text !== loaded.file.text) {
-    throw new SettingsError('Config Composer settings changed while loading. Reopen the editor.');
+  const options = pluginOptions(config, pluginIndex) ?? {};
+  if (
+    !record(options) ||
+    Object.keys(options).some((key) => !['configFile', 'reloadToken'].includes(key)) ||
+    (options.configFile !== undefined && typeof options.configFile !== 'string') ||
+    (options.reloadToken !== undefined && typeof options.reloadToken !== 'string')
+  ) {
+    throw new SettingsError('Config Composer plugin options support only configFile and an optional reloadToken.');
   }
-  const { groups, modelPresets } = loaded.settings;
+  const sourceContext = {
+    root: projectRoot,
+    baseFile: configurationPath(
+      typeof options.configFile === 'string' ? options.configFile : 'config-composer.jsonc',
+      root,
+    ),
+    baseExplicit: true,
+  };
+  const sources = await loadCompositionSources(sourceContext);
+  const settingsFile = await sourceFile(root, sourceContext.baseFile);
+  if (sources.documents.find((source) => source.id === settingsFile.path)?.text !== settingsFile.text) {
+    throw new SettingsError('Composition sources changed while loading. Reopen the editor.');
+  }
+  const nativeModels = native ?? config;
+  const settings = editorSettings(sources, nativeModels);
+  const { groups, modelPresets } = settings;
   const jsonAgents = record(config.agent) ? config.agent : {};
   const agents = new Map<string, StoredAgent>(
     Object.entries(jsonAgents).map(([name, value]) => {
@@ -212,6 +257,17 @@ export async function loadSnapshot(directory: string): Promise<Snapshot> {
     }),
   );
   const files = [configFile, settingsFile];
+  for (const source of sources.documents) {
+    if (files.some((file) => file.path === source.id)) {
+      continue;
+    }
+    const file = await configurationFile(source.id);
+    if (file.text !== source.text) {
+      throw new SettingsError('Composition sources changed while loading. Reopen the editor.');
+    }
+    const rel = relative(root, source.id);
+    files.push({ ...file, writable: source.writable && !rel.startsWith('..') && !isAbsolute(rel) });
+  }
   const markdownNames = new Set<string>();
   async function scan(directory: string, base: string): Promise<void> {
     if ((await lstat(directory)).isSymbolicLink()) {
@@ -259,22 +315,91 @@ export async function loadSnapshot(directory: string): Promise<Snapshot> {
       await scan(join(root, dir), join(root, dir));
     }
   }
+  const nativeAgents = Object.fromEntries(
+    [...agents].map(([name, agent]) => [
+      name,
+      {
+        ...agent.settings,
+        ...(agent.markdown !== undefined ? { prompt: agent.markdown.body.replace(/^---[^\n]*\n?/, '').trim() } : {}),
+      },
+    ]),
+  );
+  const available = { ...Object.fromEntries(nativeAgentNames.map((name) => [name, {}])), ...nativeAgents };
+  for (const definitions of [
+    sources.registry.components?.agents,
+    sources.registry.components?.skills,
+    sources.registry.components?.commands,
+    sources.registry.components?.prompts,
+  ]) {
+    for (const value of Object.values(definitions ?? {})) {
+      if (!record(value) || typeof value.file !== 'string' || files.some((file) => file.path === value.file)) {
+        continue;
+      }
+      const file = await configurationFile(await realpath(value.file));
+      const rel = relative(root, value.file);
+      files.push({
+        ...file,
+        path: value.file,
+        mode: file.mode & 0o777,
+        canonicalPath: file.path,
+        writable: (file.mode & 0o222) !== 0 && file.path === value.file && !rel.startsWith('..') && !isAbsolute(rel),
+      });
+    }
+  }
+  const overlays = new Map(files.map((file) => [file.path, file.text]));
+  const components = await loadComponents(sources, available, overlays);
+  for (const name of nativeAgentNames) {
+    if (!agents.has(name)) {
+      agents.set(name, { name, settings: {} });
+    }
+  }
+  for (const [name, value] of Object.entries(components.agents)) {
+    const path = sources.registry.components?.agents?.[name].file;
+    const file = files.find((file) => file.path === path);
+    if (path !== undefined && file === undefined) {
+      throw new SettingsError(`Component source ${path} is unavailable. Reopen the editor.`);
+    }
+    const markdown = file === undefined ? undefined : parseAgent(file);
+    agents.set(name, { name, settings: value, component: true, markdown });
+  }
   const enabled = [...agents.values()]
     .filter((agent) => agent.settings.disable !== true)
     .sort((a, b) => a.name.localeCompare(b.name));
   enabled.forEach((agent) => agentGroups(agent.settings));
+  const resolved = await resolveProfileRuntime(sources, { ...nativeModels, agent: nativeAgents }, overlays);
+  for (const file of files) {
+    if ((await observedFile(root, file)).text !== file.text) {
+      throw new SettingsError('Settings changed while loading. Reopen the editor.');
+    }
+  }
   return {
     root,
     configFile,
     config,
     settingsFile,
-    settings: loaded.settings,
+    settings,
     pluginIndex,
     groups,
     modelPresets,
     agents: enabled,
     files,
+    sources,
+    sourceContext,
+    resolved,
+    nativeAgents,
+    nativeModels,
   };
+}
+
+export function memberships(snapshot: Snapshot, agent: StoredAgent): string[] {
+  return [
+    ...new Set([
+      ...agentGroups(agent.settings),
+      ...Object.entries(snapshot.sources.registry.componentGroups ?? {})
+        .filter(([, group]) => group.agents?.includes(agent.name) === true)
+        .map(([name]) => name),
+    ]),
+  ];
 }
 
 export function groupNames(snapshot: Snapshot): string[] {
@@ -353,27 +478,58 @@ function membershipGroups(change: Extract<Change, { kind: 'membership' }>): stri
 
 export function planChange(snapshot: Snapshot, change: Change): EditPlan {
   let configText = snapshot.configFile.text;
-  let settingsText = snapshot.settingsFile.text;
   const edits: FileEdit[] = [];
   const patch = (path: (string | number)[], value: unknown) => {
     configText = editJson(configText, path, value);
   };
-  const patchSettings = (path: (string | number)[], value: unknown) => {
-    settingsText = editJson(settingsText, path, value);
+  const pending = new Map<string, FileEdit>();
+  const patchFile = (file: SourceFile, path: (string | number)[], value: unknown) => {
+    if (file.writable === false) {
+      throw new SettingsError(`Read-only composition source ${file.path}. Edit its declaring document directly.`);
+    }
+    const text = editJson(pending.get(file.path)?.text ?? file.text, path, value);
+    pending.set(file.path, { file, text });
   };
-  const groupPath = ['agent', 'groups'];
-  const presetPath = ['agent', 'modelPresets'];
+  const definition = (kind: 'componentGroups' | 'configurationPresets' | 'components/agents', name: string) => {
+    const pointer = `/${kind}/${name.replaceAll('~', '~0').replaceAll('/', '~1')}`;
+    const origin = Object.hasOwn(snapshot.sources.provenance, pointer)
+      ? snapshot.sources.provenance[pointer]
+      : undefined;
+    const file =
+      origin === undefined ? snapshot.settingsFile : snapshot.files.find((file) => file.path === origin.sourceId);
+    if (file === undefined) {
+      throw new SettingsError('The declaring composition source is unavailable. Reopen the editor.');
+    }
+    return { file, path: [...kind.split('/'), name] };
+  };
+  const patchDefinition = (
+    kind: 'componentGroups' | 'configurationPresets' | 'components/agents',
+    name: string,
+    suffix: string[],
+    value: unknown,
+  ) => {
+    const { file, path } = definition(kind, name);
+    patchFile(file, [...path, ...suffix], value);
+  };
+  const patchModel = (
+    kind: 'componentGroups' | 'configurationPresets' | 'components/agents',
+    name: string,
+    choice: GroupChoice,
+  ) => {
+    const suffix = kind === 'configurationPresets' ? [] : ['configuration'];
+    // Update only the model fields: mixed bundles and presets retain their other settings.
+    for (const field of ['model', 'modelRef', 'variant'] as const) {
+      patchDefinition(kind, name, [...suffix, field], choice[field]);
+    }
+  };
   const patchGroup = (name: string, value: GroupChoice) => {
     const choice = groupChoice(value);
     if (!Object.hasOwn(snapshot.groups, name)) {
-      patchSettings([...groupPath, name], choice);
-      return;
+      patchDefinition('componentGroups', name, [], {});
     }
-    for (const field of ['model', 'modelRef', 'variant'] as const) {
-      patchSettings([...groupPath, name, field], choice[field]);
-    }
+    patchModel('componentGroups', name, choice);
     if (choice.prompt !== undefined) {
-      patchSettings([...groupPath, name, 'prompt'], choice.prompt);
+      patchDefinition('componentGroups', name, ['configuration', 'prompt'], choice.prompt);
     }
   };
   if (change.kind === 'group') {
@@ -383,16 +539,27 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     if (choice.model === undefined || choice.model === '') {
       throw new SettingsError('A model preset requires a concrete model.');
     }
-    patchSettings([...presetPath, presetName(change.name)], choice);
+    patchModel('configurationPresets', presetName(change.name), choice);
   } else if (change.kind === 'deletePreset') {
     const name = presetName(change.name);
     if (!Object.hasOwn(snapshot.modelPresets, name)) {
       throw new SettingsError('That model preset no longer exists.');
     }
-    if (affectedGroups(snapshot, change).length > 0) {
-      throw new SettingsError('This preset is referenced by groups. Reassign those groups before deleting it.');
+    const referenced = (value: unknown): boolean =>
+      record(value)
+        ? Object.entries(value).some(
+            ([key, child]) =>
+              (key === 'modelRef' && child === `preset:${name}`) ||
+              (key === 'configurationPreset' && child === name) ||
+              referenced(child),
+          )
+        : Array.isArray(value) && value.some(referenced);
+    if (snapshot.sources.documents.some((source) => referenced(source.value))) {
+      throw new SettingsError(
+        'This preset is referenced by composition settings. Reassign those references before deleting it.',
+      );
     }
-    patchSettings([...presetPath, name], undefined);
+    patchDefinition('configurationPresets', name, [], undefined);
   } else if (change.kind === 'global') {
     modelChoice({ model: change.model });
     patch([change.field], change.model);
@@ -404,7 +571,7 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     patch(['model'], choice.model);
     patch(['small_model'], choice.model);
     for (const name of Object.keys(snapshot.modelPresets)) {
-      patchSettings([...presetPath, name], choice);
+      patchModel('configurationPresets', name, choice);
     }
     for (const name of groupNames(snapshot)) {
       const group = Object.hasOwn(snapshot.groups, name) ? snapshot.groups[name] : undefined;
@@ -424,6 +591,35 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     if (agent === undefined) {
       throw new SettingsError('That agent is no longer available. Reopen the editor.');
     }
+    if (change.kind === 'membership') {
+      const desired = membershipGroups(change);
+      for (const name of membershipGroups(change)) {
+        if (!Object.hasOwn(snapshot.groups, name)) {
+          patchDefinition('componentGroups', name, [], {});
+        }
+      }
+
+      for (const [name, group] of Object.entries(snapshot.sources.registry.componentGroups ?? {})) {
+        if (group.agents?.includes(agent.name) === true && !desired.includes(name)) {
+          patchDefinition(
+            'componentGroups',
+            name,
+            ['agents'],
+            group.agents.filter((member) => member !== agent.name),
+          );
+        }
+      }
+      // Inline components have no frontmatter. JSONC membership is authoritative for them.
+      if (agent.component === true && agent.markdown === undefined) {
+        for (const name of desired) {
+          const previous = snapshot.sources.registry.componentGroups?.[name]?.agents ?? [];
+          patchDefinition('componentGroups', name, ['agents'], [...new Set([...previous, agent.name])]);
+        }
+      }
+    }
+    if (agent.component === true && change.kind === 'override') {
+      patchModel('components/agents', agent.name, modelChoice(change.choice));
+    }
     const values: Record<string, unknown> =
       change.kind === 'membership'
         ? { groups: membershipGroups(change) }
@@ -434,11 +630,6 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     const document = agent.markdown?.document.clone();
     const options: unknown = agent.settings.options;
     if (change.kind === 'membership') {
-      for (const name of membershipGroups(change)) {
-        if (!Object.hasOwn(snapshot.groups, name)) {
-          patchSettings([...groupPath, name], {});
-        }
-      }
       // A new ordered membership replaces lower-layer membership.
       if (document?.has('options') === true) {
         document.deleteIn(['options', 'groups']);
@@ -449,6 +640,17 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
       }
     }
     for (const [key, value] of Object.entries(values)) {
+      if (
+        agent.component === true &&
+        change.kind === 'override' &&
+        typeof change.choice.model === 'string' &&
+        change.choice.model !== ''
+      ) {
+        continue;
+      }
+      if (agent.component === true && change.kind === 'membership' && document === undefined) {
+        continue;
+      }
       if (document !== undefined) {
         if (value === undefined) {
           document.delete(key);
@@ -472,14 +674,28 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
       const text = prefix + document.toString({ lineWidth: 0 }).replaceAll('\n', eol) + body;
       parseAgent({ ...file, text });
       if (text !== file.text) {
-        edits.push({ file, text });
+        if (
+          agent.component === true &&
+          snapshot.agents.some((other) => other.name !== agent.name && other.markdown?.file.path === file.path)
+        ) {
+          throw new SettingsError(
+            `Component source ${file.path} is shared by multiple agents. Edit its source directly to change inherited settings.`,
+          );
+        }
+        const tracked = snapshot.files.find((source) => source.path === file.path);
+        if (tracked?.writable === false) {
+          throw new SettingsError(`Read-only component source ${file.path}. Edit its declaring document directly.`);
+        }
+        edits.push({ file: tracked ?? file, text });
       }
     }
   }
   parseConfig(configText);
-  readSettings(parseConfig(settingsText));
-  if (settingsText !== snapshot.settingsFile.text) {
-    edits.push({ file: snapshot.settingsFile, text: settingsText });
+  for (const edit of pending.values()) {
+    parseCompositionDocument(edit.text, edit.file.path);
+    if (edit.text !== edit.file.text) {
+      edits.push(edit);
+    }
   }
   if (configText !== snapshot.configFile.text) {
     edits.push({ file: snapshot.configFile, text: configText });
@@ -501,57 +717,90 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
   return { snapshot, change, edits, description };
 }
 
-export function plannedChoices(plan: EditPlan, native: NativeModels = plan.snapshot.config): ModelChoice[] {
+export async function plannedChoices(
+  plan: EditPlan,
+  native: NativeModels = plan.snapshot.nativeModels,
+): Promise<ModelChoice[]> {
   const { snapshot, change } = plan;
-  const text = plan.edits.find((edit) => edit.file.path === snapshot.configFile.path)?.text ?? snapshot.configFile.text;
-  parseConfig(text);
-  const settingsText =
-    plan.edits.find((edit) => edit.file.path === snapshot.settingsFile.path)?.text ?? snapshot.settingsFile.text;
-  const { groups, modelPresets } = readSettings(parseConfig(settingsText));
-  // Validate a changed global value for all consumers, even when this workspace has an override.
+  const overlays = new Map(plan.edits.map((edit) => [edit.file.path, edit.text]));
+  const config = parseConfig(overlays.get(snapshot.configFile.path) ?? snapshot.configFile.text);
+  const sources = await loadCompositionSources(snapshot.sourceContext, overlays);
+  const agents: Record<string, AgentSettings> = {};
+  if (record(config.agent)) {
+    for (const [name, value] of Object.entries(config.agent)) {
+      if (record(value)) {
+        agents[name] = value;
+      }
+    }
+  }
+  for (const stored of snapshot.agents) {
+    if (stored.component === true || stored.markdown === undefined) {
+      continue;
+    }
+    const file = stored.markdown.file;
+    const parsed = parseAgent({ ...file, text: overlays.get(file.path) ?? file.text });
+    const value: unknown = parsed.document.toJS({ maxAliasCount: 0 });
+    if (!record(value)) {
+      throw new SettingsError('Invalid agent frontmatter.');
+    }
+    const previous = agents[stored.name] ?? {};
+    agents[stored.name] = {
+      ...previous,
+      ...value,
+      options: { ...previous.options, ...(record(value.options) ? value.options : {}) },
+      prompt: parsed.body.replace(/^---[^\n]*\n?/, '').trim(),
+    };
+  }
   const defaults =
     change.kind === 'global'
       ? { ...native, [change.field]: change.model }
       : change.kind === 'all'
         ? { model: change.choice.model, small_model: change.choice.model }
         : native;
-  const context = { native: defaults, modelPresets };
-  if (change.kind === 'deletePreset') {
-    return [];
-  }
-  if (change.kind === 'membership' || change.kind === 'override') {
-    const agent = snapshot.agents.find((item) => item.name === change.agent);
-    if (agent === undefined) {
-      throw new SettingsError('That agent is no longer available. Reopen the editor.');
-    }
-    if (change.kind === 'membership' && typeof agent.settings.model === 'string' && agent.settings.model !== '') {
-      return [];
-    }
-    const settings =
-      change.kind === 'override'
-        ? { ...agent.settings, model: change.choice.model, variant: change.choice.variant }
-        : {
-            ...agent.settings,
-            groups: membershipGroups(change),
-            options: { ...agent.settings.options, groups: undefined },
-          };
-    return [resolveChoice(settings, groups, context)];
-  }
-  const affected = affectedGroups(snapshot, change);
-  const choices: ModelChoice[] = affected.map((name) => resolveGroup(groups[name] ?? {}, context));
-  for (const agent of snapshot.agents) {
-    if (
-      (typeof agent.settings.model !== 'string' || agent.settings.model === '') &&
-      agentGroups(agent.settings).some((group) => affected.includes(group))
-    ) {
-      choices.push(resolveChoice(agent.settings, groups, context));
-    }
+  const resolved = await resolveProfileRuntime(sources, { ...defaults, agent: agents }, overlays);
+  const choices: ModelChoice[] = Object.entries(resolved.choices)
+    .filter(([name, choice]) => {
+      const previous = Object.hasOwn(snapshot.resolved.choices, name) ? snapshot.resolved.choices[name] : undefined;
+      const authored = snapshot.agents.find((agent) => agent.name === name)?.settings.model;
+      return (
+        typeof authored !== 'string' ||
+        authored === '' ||
+        choice.model !== previous?.model ||
+        choice.variant !== previous?.variant
+      );
+    })
+    .map(([, { model, variant }]) => ({ model, variant }));
+  // Validate edited definitions even when no active profile currently consumes them.
+  const settings = editorSettings(sources, defaults);
+  if (change.kind === 'group') {
+    const available = {
+      ...Object.fromEntries(nativeAgentNames.map((name) => [name, {}])),
+      ...agents,
+      ...(await loadComponents(sources, agents, overlays)).agents,
+    };
+    resolveGroupAgentNames(change.name, sources.registry.componentGroups ?? {}, available);
   }
   if (change.kind === 'global') {
     choices.push({ model: change.model });
   }
-  if (change.kind === 'preset' || change.kind === 'all') {
+  if (change.kind === 'preset' || change.kind === 'all' || change.kind === 'override') {
     choices.push(change.choice);
+  }
+  for (const name of affectedGroups(snapshot, change)) {
+    const group = settings.groups[name] ?? {};
+    const preset =
+      group.modelRef?.startsWith('preset:') === true ? settings.modelPresets[group.modelRef.slice(7)] : undefined;
+    choices.push({
+      model:
+        group.model ??
+        preset?.model ??
+        (group.modelRef === 'opencode:model'
+          ? resolved.model
+          : group.modelRef === 'opencode:small_model'
+            ? resolved.small_model
+            : undefined),
+      variant: group.variant ?? preset?.variant,
+    });
   }
   return choices;
 }
@@ -586,21 +835,33 @@ export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => v
   try {
     const assertAuthorized = await authorize?.();
     for (const original of plan.snapshot.files) {
-      const current = await sourceFile(plan.snapshot.root, original.path);
+      const current = await observedFile(plan.snapshot.root, original);
       if (current.text !== original.text) {
         throw new SettingsError('Settings changed while the dialog was open. Reopen it and try again.');
       }
     }
     // Detect newly added agents before approving a group-wide preview.
-    const current = await loadSnapshot(plan.snapshot.root);
+    const current = await loadSnapshot(
+      plan.snapshot.root,
+      plan.snapshot.sourceContext.root,
+      plan.snapshot.nativeModels,
+    );
     if (
       current.files.length !== plan.snapshot.files.length ||
       current.files.some((file) => !plan.snapshot.files.some((old) => old.path === file.path))
     ) {
       throw new SettingsError('The agent list changed. Reopen the editor and review the affected agents.');
     }
+    await plannedChoices(plan);
     for (const edit of plan.edits) {
+      if (edit.file.writable === false) {
+        throw new SettingsError(`Read-only composition source ${edit.file.path}.`);
+      }
       assertAuthorized?.();
+      const before = await sourceFile(plan.snapshot.root, edit.file.path);
+      if (before.text !== edit.file.text || before.writable === false) {
+        throw new SettingsError('Settings changed or became read-only before saving. Reopen the editor.');
+      }
       await atomicWrite(edit.file.path, edit.text, edit.file.mode);
       applied.push(edit);
     }
@@ -639,7 +900,7 @@ export async function reloadConfiguration(
   });
   try {
     for (const file of snapshot.files) {
-      if ((await sourceFile(snapshot.root, file.path)).text !== file.text) {
+      if ((await observedFile(snapshot.root, file)).text !== file.text) {
         throw new SettingsError('Settings changed. Reopen the editor before reloading.');
       }
     }
@@ -671,7 +932,7 @@ export async function reloadConfiguration(
     const plugins: unknown[] = config.plugin;
     await update(plugins);
     for (const file of snapshot.files) {
-      if (file.path !== original.path && (await sourceFile(snapshot.root, file.path)).text !== file.text) {
+      if (file.path !== original.path && (await observedFile(snapshot.root, file)).text !== file.text) {
         throw new SettingsError('Settings changed during reload. Reopen the editor and check the saved configuration.');
       }
     }

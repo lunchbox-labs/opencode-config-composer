@@ -64,7 +64,13 @@ export async function fixture(t: TestContext): Promise<string> {
   await writeFile(join(root, 'opencode.jsonc'), config);
   await writeFile(
     join(root, 'config-composer.jsonc'),
-    JSON.stringify({ agent: { groups: { ...groups, 'custom-team': {} } } }),
+    JSON.stringify({
+      componentGroups: Object.fromEntries(
+        Object.entries({ ...groups, 'custom-team': {} }).map(([name, configuration]) => [name, { configuration }]),
+      ),
+      profiles: { work: { layers: Object.keys(groups).map((componentGroup) => ({ componentGroup })) } },
+      activeProfiles: ['work'],
+    }),
   );
   await writeFile(join(root, 'agents', 'nested', 'pinned.md'), pinned);
   await writeFile(join(root, 'agents', 'new.md'), `---\ngroups: [custom-team]\n${prompt}`);
@@ -118,21 +124,24 @@ async function dedicatedFixture(t: TestContext): Promise<string> {
       JSON.stringify(
         {
           sourceDirectories: { shared: './references' },
-          agent: {
-            modelPresets: { shared: { model: 'example/fast', variant: 'medium' } },
-            groups: {
-              developers: { modelRef: 'preset:shared', prompt: { append: ['DEVELOPMENT_GUIDANCE'] } },
-              reviewers: { model: 'example/deep', variant: 'high' },
-              'custom-team': {},
-              'instructions-only': { prompt: { prepend: ['COMMON_GUIDANCE'] } },
-            },
-            prompts: {
-              defaults: { append: ['GLOBAL_GUIDANCE'] },
-              overrides: { 'nested/pinned': { inheritDefaults: false, append: ['PINNED_GUIDANCE'] } },
+          configurationPresets: { shared: { model: 'example/fast', variant: 'medium' } },
+          componentGroups: {
+            developers: { configuration: { modelRef: 'preset:shared', prompt: { append: ['DEVELOPMENT_GUIDANCE'] } } },
+            reviewers: { configuration: { model: 'example/deep', variant: 'high' } },
+            'custom-team': {},
+            'instructions-only': { configuration: { prompt: { prepend: ['COMMON_GUIDANCE'] } } },
+          },
+          defaults: { agents: { prompt: { append: ['GLOBAL_GUIDANCE'] } } },
+          overrides: {
+            agents: { 'nested/pinned': { prompt: { inheritDefaults: false, append: ['PINNED_GUIDANCE'] } } },
+          },
+          components: { skills: {}, commands: {} },
+          profiles: {
+            work: {
+              layers: ['developers', 'instructions-only', 'reviewers'].map((componentGroup) => ({ componentGroup })),
             },
           },
-          skill: {},
-          command: {},
+          activeProfiles: ['work'],
         },
         null,
         2,
@@ -178,10 +187,10 @@ test('dedicated model edits preserve prompt composition, typed namespaces, comme
   assert.equal(snapshot.settingsFile.path, join(root, 'config-composer.jsonc'));
   await savePlan(planChange(snapshot, { kind: 'group', name: 'developers', choice: { model: 'other/new' } }));
   const after = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
-  assert.deepEqual(after.skill, before.skill);
-  assert.deepEqual(after.command, before.command);
+  assert.deepEqual(after.components, before.components);
   assert.deepEqual(after.sourceDirectories, before.sourceDirectories);
-  assert.deepEqual((after.agent as Record<string, unknown>).prompts, (before.agent as Record<string, unknown>).prompts);
+  assert.deepEqual(after.defaults, before.defaults);
+  assert.deepEqual(after.overrides, before.overrides);
   assert.equal(after.groups, undefined, 'editor must not create a flat group section');
   assert.equal(after.modelPresets, undefined, 'editor must not create a flat preset section');
   assert.deepEqual((await loadSnapshot(root)).groups.developers, {
@@ -212,11 +221,8 @@ test('membership edits store ordered arrays and preserve pins and prompts', asyn
   await savePlan(planChange(snapshot, { kind: 'override', agent: 'nested/pinned', choice: {} }));
   snapshot = await loadSnapshot(root);
   agent = snapshot.agents.find((agent) => agent.name === 'nested/pinned')!;
-  assert.equal(
-    resolveChoice(agent.settings, snapshot.groups, { modelPresets: snapshot.modelPresets }).model,
-    'example/deep',
-  );
-  assert.equal(resolveChoice(agent.settings, snapshot.groups, { modelPresets: snapshot.modelPresets }).variant, 'high');
+  assert.equal(snapshot.resolved.choices[agent.name].model, 'example/deep');
+  assert.equal(snapshot.resolved.choices[agent.name].variant, 'high');
   await savePlan(
     planChange(snapshot, {
       kind: 'membership',
@@ -226,13 +232,16 @@ test('membership edits store ordered arrays and preserve pins and prompts', asyn
   );
   snapshot = await loadSnapshot(root);
   agent = snapshot.agents.find((agent) => agent.name === 'nested/pinned')!;
-  const effective = resolveChoice(agent.settings, snapshot.groups, { modelPresets: snapshot.modelPresets });
-  assert.equal(effective.model, 'example/fast', 'later model groups override earlier groups');
-  assert.equal(effective.variant, 'medium', 'prompt-only groups do not erase model defaults');
-  await savePlan(planChange(snapshot, { kind: 'membership', agent: 'nested/pinned', groups: [] }));
-  assert.deepEqual(
-    agentGroups((await loadSnapshot(root)).agents.find((agent) => agent.name === 'nested/pinned')!.settings),
-    [],
+  const effective = snapshot.resolved.choices[agent.name];
+  assert.equal(
+    effective.model,
+    'example/deep',
+    'active profile order controls precedence independently of membership order',
+  );
+  assert.equal(effective.variant, 'high');
+  await assert.rejects(
+    savePlan(planChange(snapshot, { kind: 'membership', agent: 'nested/pinned', groups: [] })),
+    /must be selected before applying an override/,
   );
 });
 
@@ -264,7 +273,7 @@ test('removing a sole model reference preserves adjacent comments and accepts it
     path,
     before.replace(
       '"reviewers": {',
-      '"sole": {\n        // Keep the leading comment.\n        "modelRef": "preset:shared",\n        // Keep the trailing comment.\n      },\n      "reviewers": {',
+      '"sole": {"configuration": {\n        // Keep the leading comment.\n        "modelRef": "preset:shared",\n        // Keep the trailing comment.\n      }},\n      "reviewers": {',
     ),
   );
   await savePlan(planChange(await loadSnapshot(root), { kind: 'group', name: 'sole', choice: {} }));
@@ -1052,10 +1061,10 @@ test('TUI adds, reorders, and removes memberships with a resolved preview and pr
   await ui.select('+add');
   await ui.select('reviewers');
   assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
-  assert.match(ui.dialog.options.find((option) => option.value === '+save')!.description!, /example\/deep/);
+  assert.match(ui.dialog.options.find((option) => option.value === '+save')!.description!, /profile layer order/);
   await ui.select('reviewers');
   await ui.select('earlier');
-  assert.match(ui.dialog.options.find((option) => option.value === '+save')!.description!, /example\/fast/);
+  assert.match(ui.dialog.options.find((option) => option.value === '+save')!.description!, /profile layer order/);
   await ui.select('developers');
   await ui.select('remove');
   await ui.select('+save');
@@ -1084,10 +1093,8 @@ test('TUI model edits save to the dedicated file while retaining shared prompt o
     prompt: { append: ['DEVELOPMENT_GUIDANCE'] },
   });
   const saved = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
-  assert.deepEqual(
-    (saved.agent as Record<string, unknown>).prompts,
-    (original.agent as Record<string, unknown>).prompts,
-  );
+  assert.deepEqual(saved.defaults, original.defaults);
+  assert.deepEqual(saved.overrides, original.overrides);
   assert.deepEqual(saved.sourceDirectories, original.sourceDirectories);
   assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Keep fragment operations/);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), originalNative);
