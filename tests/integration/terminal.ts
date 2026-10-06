@@ -7,6 +7,7 @@ import headless from '@xterm/headless';
 import type { nativeHarness } from './harness.ts';
 import { killProcessTree } from './process.ts';
 import { registerProcess } from './resources.ts';
+import { terminalSearch } from './terminal-screen.ts';
 
 export async function nativeTerminal(
   host: Awaited<ReturnType<typeof nativeHarness>>,
@@ -38,6 +39,7 @@ export async function nativeTerminal(
     },
   );
   const unregister = registerProcess(child.pid, host.root);
+  const search = terminalSearch(screen);
   let transcript = '';
   let revision = 0;
   let exited = false;
@@ -109,10 +111,26 @@ export async function nativeTerminal(
       await wait(labels, before);
     }
   };
+  const waitInput = async (ready: () => boolean, description: string) => {
+    for (let attempt = 0; attempt < 600; attempt++) {
+      assert.equal(exited, false, `Native terminal exited:\n${text()}`);
+      if (ready()) {
+        return;
+      }
+      await setTimeout(50);
+    }
+    assert.fail(`Native terminal did not expose ${description}:\n${text()}`);
+  };
   const choose = async (label: string, ...next: string[]) => {
-    // Select dialogs expose a search input. Clear its current query, find the exact
-    // visible action, then submit through the real terminal keyboard path.
-    await press(`\x15${label}`, label);
+    // Command autocomplete and a first menu paint can contain this option before
+    // the search input has focus. Wait for native focus, then its actual query echo.
+    await waitInput(search.focused, 'a focused select search input');
+    // Keep the query within the native input viewport so its complete echo is
+    // observable; still require the requested full option label before selecting.
+    const query = label.slice(0, 32);
+    await press(`\x15${query}`);
+    await waitInput(() => search.echoed(query), `the select query ${JSON.stringify(query)}`);
+    await wait([label]);
     await press('\r', ...next);
   };
   const command = async (name: string, ...labels: string[]) => {

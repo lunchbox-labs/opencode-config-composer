@@ -49,7 +49,9 @@ The persistence, activation and registry tests import the **installed** editor i
 reload callback to the real OpenCode API. They exercise the storage used by the TUI;
 they do not establish UI confirmation, catalog validation or filesystem authorization by themselves.
 The terminal suite separately uses node-pty (PTY on Linux, ConPTY on Windows) and a headless
-VT terminal to drive the installed `/compose` interface. Assertions read the current screen,
+VT terminal to drive the installed `/compose` interface. Selection waits for the native
+search input to gain focus and echo the typed query before Enter; command autocomplete
+and a dialog’s first paint do not establish input readiness. Assertions read the current screen,
 saved JSONC, native state and actual provider requests after explicit reload. No source implementation
 is substituted, and no unimplemented feature is represented by a skipped test.
 
