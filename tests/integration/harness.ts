@@ -235,7 +235,23 @@ export async function nativeHarness(t: TestContext, name: string) {
         `@opencode-ai/plugin@${manifest.engines.opencode}`,
       ],
       { cwd: directory, timeout: 120_000 },
-    );
+    ).catch((error: unknown) => {
+      const failure = error as NodeJS.ErrnoException & {
+        signal?: string;
+        killed?: boolean;
+        stdout?: string;
+        stderr?: string;
+      };
+      throw new Error(
+        `Native SDK preparation failed in ${directory}: ${JSON.stringify({
+          code: failure.code,
+          signal: failure.signal,
+          killed: failure.killed,
+          stdout: failure.stdout?.slice(-4000),
+          stderr: failure.stderr?.slice(-4000),
+        })}`,
+      );
+    });
     const metadata = JSON.parse(
       await readFile(join(directory, 'node_modules/@opencode-ai/plugin/package.json'), 'utf8'),
     ) as { version: string };
@@ -244,15 +260,10 @@ export async function nativeHarness(t: TestContext, name: string) {
   };
   let environment = isolatedEnvironment(root);
   const prepareConfigurationDependencies = async () => {
-    const preparations = await Promise.allSettled([
-      prepareDependencies(configRoot),
-      prepareDependencies(join(root, '.opencode')),
-      prepareDependencies(join(project, '.opencode')),
-    ]);
-    for (const result of preparations) {
-      if (result.status === 'rejected') {
-        throw result.reason;
-      }
+    // npm installations share a cache even when their target config directories
+    // are isolated. Avoid overlapping cold SDK preparations in one fixture.
+    for (const directory of [configRoot, join(root, '.opencode'), join(project, '.opencode')]) {
+      await prepareDependencies(directory);
     }
   };
   const start = async (
