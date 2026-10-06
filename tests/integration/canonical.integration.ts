@@ -11,7 +11,7 @@ import type { CompositionDocument } from '../../src/config-composer/composition/
 interface Agent {
   name: string;
   model?: { modelID: string };
-  variant?: string;
+  variant?: string | null;
   prompt?: string;
 }
 interface Message {
@@ -296,6 +296,22 @@ test(
       },
     );
 
+    await t.test('generic preset options reach native requests without a selected variant', async (t) => {
+      await restoreSourcesAfter(t, [models, local]);
+      await edit(models, ['configurationPresets', 'fast', 'variant'], undefined);
+      await activate({ activeProfiles: ['base'] });
+      const reviewer = await findAgent('reviewer');
+      assert.ok(reviewer !== undefined);
+      assert.equal(reviewer.variant ?? undefined, undefined, 'the native agent has no selected variant');
+      const { captured } = await send();
+      assert.equal(captured.model, 'alpha');
+      assert.equal(captured.reasoning_effort, 'medium', 'generic preset options reach the provider independently');
+
+      await edit(models, ['configurationPresets', 'fast', 'parameters', 'options'], undefined);
+      await reload();
+      assert.equal((await send()).captured.reasoning_effort, undefined, 'removed options do not remain active');
+    });
+
     await t.test('targeted presets preserve native pins and explicit overrides can replace them', async () => {
       await activate({ activeProfiles: ['targeted'] });
       assert.equal((await send()).captured.model, 'beta');
@@ -357,7 +373,7 @@ test(
       assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('CANONICAL_SKILL_BODY'));
     });
 
-    await t.test('automatic title and compaction dispatch use their configured utility parameters', async () => {
+    await t.test('automatic title and manual compaction dispatch use their configured utility parameters', async () => {
       const start = requests.length;
       const session = await api<{ id: string }>('/session', {});
       await send('reviewer', {}, session.id);

@@ -59,8 +59,8 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | Built-in/custom membership | Native build/plan/explore JSONC membership, inline components and custom frontmatter; installed membership editor; unchanged native fields/permissions and no shadow agent files | Both platforms; Composer permission overlays remain pending |
 | Global model defaults | Shared/project/local precedence for `model` and `small_model`; late-bound references; removal restores inherited defaults | Both platforms |
 | Session model selection | Captured explicit model and variant selection compared with a native pinned agent | Both platforms |
-| Typed model parameters | Captured temperature, top-p, output-token limit and generic options; native variant precedence; model changes clear previous-model parameters | Both platforms |
-| Utility dispatch | Automatic title updates and persisted compaction summaries, with captured model and parameter values | Both platforms; these exercise the host's utility paths |
+| Typed model parameters | Captured temperature, top-p, output-token limit and generic options without a selected variant; removing generic options clears later requests; native variant precedence; model changes clear previous-model parameters | Both platforms |
+| Utility dispatch | Automatic title updates and manually requested compaction summaries, with captured model and parameter values | Both platforms; automatic context-triggered compaction remains untested |
 | Prompt composition | Authored Markdown, inline and file prompt references, group/default order, per-agent inheritance, nested includes, provider-visible text | Both platforms |
 | Commands and native skills | Real imported command execution; expanded native skill tool result and following provider request; metadata and companion files | Both platforms |
 | Native permissions | Actual allow, deny and interactive ask decisions; denied content never reaches provider | Both platforms; Composer permission-group compilation is separate work in [#33](https://github.com/lunchbox-labs/opencode-config-composer/pull/33) |
