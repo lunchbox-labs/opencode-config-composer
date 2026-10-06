@@ -67,6 +67,8 @@ test(
       'Agent worker:',
       'Fallback may be more',
       'permissive, including missing intended deny rules.',
+      'Confirm',
+      'Cancel',
     );
     assert.equal(await readFile(f.paths.shared, 'utf8'), invalid, 'candidate warning and preview precede every write');
     await terminal.press('\x1b', 'Repair invalid memberships');
@@ -81,6 +83,8 @@ test(
       'Agent worker:',
       'Fallback may be more',
       'permissive, including missing intended deny rules.',
+      'Confirm',
+      'Cancel',
     );
     await terminal.press('\r', 'Settings saved');
     assert.deepEqual((await f.document(f.paths.shared)).componentGroups!.work.agents, ['worker']);
@@ -150,7 +154,12 @@ test(
     await terminal.choose('ask', 'Rule 4');
     await terminal.press('\x1b', '4. skill included-skill → ask');
     await terminal.choose('Save ordered rules', 'Save configured permission rules?', 'Agent worker:');
-    await terminal.wait(['Fallback may be more', 'permissive, including missing intended deny rules.']);
+    await terminal.wait([
+      'Fallback may be more',
+      'permissive, including missing intended deny rules.',
+      'Confirm',
+      'Cancel',
+    ]);
     assert.equal(await readFile(f.paths.shared, 'utf8'), pending, 'the fallback warning is visible before saving');
     await terminal.press('\x1b', 'Preset: policy: ordered permissions');
     assert.equal(await readFile(f.paths.shared, 'utf8'), pending);
@@ -159,6 +168,8 @@ test(
       'Save configured permission rules?',
       'Fallback may be more',
       'permissive, including missing intended deny rules.',
+      'Confirm',
+      'Cancel',
     );
     await terminal.press('\r', 'Settings saved');
     const warningStart = notifications.toasts.length;
