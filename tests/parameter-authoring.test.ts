@@ -302,6 +302,46 @@ test('an unrelated inactive native-slot reference does not block a global model 
   assert.deepEqual(await plannedChoices(plan), [{ model: 'fixture/next' }]);
 });
 
+test('global edits leave masked inactive preset and group parameters out of validation', async (t) => {
+  const { catalogModels } = await import('../src/config-composer/settings.ts');
+  const { validateParameterChoice } = await import('../src/config-composer/composition/parameter-review.ts');
+  const root = await mkdtemp(join(tmpdir(), 'composer-parameter-masked-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'opencode.jsonc'), JSON.stringify({ plugin: [packageName], model: 'fixture/current' }));
+  const configuration = { modelRef: 'opencode:model', parameters: { temperature: 0.5 } };
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      overrides: { model: 'fixture/pinned' },
+      configurationPresets: { masked: configuration },
+      componentGroups: { masked: { configuration }, indirect: { configuration: { modelRef: 'preset:masked' } } },
+    }),
+  );
+  const plan = planChange(await loadSnapshot(root), { kind: 'global', field: 'model', model: 'fixture/next' });
+  const choices = await plannedChoices(plan);
+  assert.ok(choices.every((choice) => choice.parameters === undefined));
+  const catalog = catalogModels([
+    { id: 'fixture', models: { next: {}, pinned: { capabilities: { temperature: false } } } },
+  ]);
+  choices.forEach((choice) => validateParameterChoice(choice, catalog));
+});
+
+test('bulk model edits can create groups known only through native membership', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-parameter-native-group-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    join(root, 'opencode.jsonc'),
+    JSON.stringify({ plugin: [packageName], agent: { worker: { groups: ['undeclared'] } } }),
+  );
+  await writeFile(join(root, 'config-composer.jsonc'), '{}');
+  const plan = planChange(await loadSnapshot(root), { kind: 'all', choice: { model: 'fixture/next' } });
+  assert.ok((await plannedChoices(plan)).every((choice) => choice.model === 'fixture/next'));
+  assert.equal(
+    (await previewFilePlan(plan)).sources.registry.componentGroups?.undeclared.configuration?.model,
+    'fixture/next',
+  );
+});
+
 for (const binding of ['concrete', 'masked native'] as const) {
   test(`bulk defaults leave unchanged inactive ${binding} bindings out of validation`, async (t) => {
     const { catalogModels } = await import('../src/config-composer/settings.ts');

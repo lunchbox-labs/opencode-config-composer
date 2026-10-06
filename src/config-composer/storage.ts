@@ -984,10 +984,15 @@ export async function plannedChoices(
   };
   for (const name of affectedGroups(snapshot, change)) {
     const choice = resolvedSettings(sources.registry.componentGroups?.[name].configuration ?? {});
+    const parameters =
+      change.kind === 'group' ||
+      !unchangedBinding(snapshot.sources.registry.componentGroups?.[name]?.configuration ?? {}, choice)
+        ? choice.parameters
+        : undefined;
     choices.push({
       model: choice.model,
       variant: choice.variant,
-      ...(choice.parameters === undefined ? {} : { parameters: choice.parameters }),
+      ...(parameters === undefined ? {} : { parameters }),
     });
   }
   if (change.kind === 'preset' || change.kind === 'all' || change.kind === 'global') {
@@ -1007,7 +1012,11 @@ export async function plannedChoices(
         continue;
       }
       const choice = resolvedSettings(value);
-      if (choice.parameters !== undefined) {
+      if (
+        choice.parameters !== undefined &&
+        ((change.kind === 'preset' && name === change.name) ||
+          !unchangedBinding(snapshot.sources.registry.configurationPresets?.[name] ?? {}, choice))
+      ) {
         choices.push(choice);
       }
     }
