@@ -93,6 +93,7 @@ test(
     await nativeSkill(f.host, 'build', 'allow');
     await nativeSkill(f.host, 'custom', 'deny');
     await nativeSkill(f.host, 'fallback-allow', 'deny');
+    await notifications.flush();
     assert.equal(notifications.toasts.length, 0);
 
     document.componentGroups!.broken.configuration!.permissions = unsupportedRules;
@@ -158,11 +159,13 @@ test(
     document.defaults!.permissions = skill('deny');
     document.componentGroups!.broken.configuration!.permissions = skill('deny');
     await f.write(f.paths.shared, document);
+    await notifications.flush();
     const recoveryStart = notifications.toasts.length;
     await f.editor.reload();
     assert.deepEqual((await f.editor.snapshot()).resolved.permissionWarnings, []);
     await nativeSkill(f.host, 'fallback-allow', 'deny');
     await nativeSkill(f.host, 'fallback-ask', 'deny');
+    await notifications.flush();
     assert.equal(
       notifications.toasts.length,
       recoveryStart,

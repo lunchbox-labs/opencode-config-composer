@@ -65,7 +65,8 @@ test(
       'Save membership repair?',
       'Validated candidate profiles: work',
       'Agent worker:',
-      'Fallback may be more permissive',
+      'Fallback may be more',
+      'permissive, including missing intended deny rules.',
     );
     assert.equal(await readFile(f.paths.shared, 'utf8'), invalid, 'candidate warning and preview precede every write');
     await terminal.press('\x1b', 'Repair invalid memberships');
@@ -78,7 +79,8 @@ test(
       'Review complete repair',
       'Save membership repair?',
       'Agent worker:',
-      'Fallback may be more permissive',
+      'Fallback may be more',
+      'permissive, including missing intended deny rules.',
     );
     await terminal.press('\r', 'Settings saved');
     assert.deepEqual((await f.document(f.paths.shared)).componentGroups!.work.agents, ['worker']);
@@ -148,11 +150,16 @@ test(
     await terminal.choose('ask', 'Rule 4');
     await terminal.press('\x1b', '4. skill included-skill → ask');
     await terminal.choose('Save ordered rules', 'Save configured permission rules?', 'Agent worker:');
-    await terminal.press('\x1b[6~', 'Fallback may be more permissive');
+    await terminal.wait(['Fallback may be more', 'permissive, including missing intended deny rules.']);
     assert.equal(await readFile(f.paths.shared, 'utf8'), pending, 'the fallback warning is visible before saving');
     await terminal.press('\x1b', 'Preset: policy: ordered permissions');
     assert.equal(await readFile(f.paths.shared, 'utf8'), pending);
-    await terminal.choose('Save ordered rules', 'Save configured permission rules?', 'Fallback may be more permissive');
+    await terminal.choose(
+      'Save ordered rules',
+      'Save configured permission rules?',
+      'Fallback may be more',
+      'permissive, including missing intended deny rules.',
+    );
     await terminal.press('\r', 'Settings saved');
     const warningStart = notifications.toasts.length;
     await reloadFromTerminal(f, terminal);
@@ -177,8 +184,10 @@ test(
     await terminal.press('\r', 'Settings saved');
     await reloadFromTerminal(f, terminal);
     assert.deepEqual((await f.editor.snapshot()).resolved.permissionWarnings, []);
+    await notifications.flush();
     const recovered = notifications.toasts.length;
     await nativeSkill(f.host, 'worker', 'deny');
+    await notifications.flush();
     assert.equal(
       notifications.toasts.length,
       recovered,
