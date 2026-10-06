@@ -43,11 +43,12 @@ export function terminalSearch(screen: Terminal) {
     const input = buffer.getLine(buffer.cursorY)!.getCell(column)!;
     for (let row = buffer.cursorY + 1; row < screen.rows; row++) {
       const line = buffer.getLine(row)!;
-      if (line.translateToString(false, column, column + label.length) !== label) {
+      const titleColumn = line.translateToString(false, column, column + 2) === '✓ ' ? column + 2 : column;
+      if (line.translateToString(false, titleColumn, titleColumn + label.length) !== label) {
         continue;
       }
-      const first = line.getCell(column)!;
-      const last = line.getCell(column + label.length - 1)!;
+      const first = line.getCell(titleColumn)!;
+      const last = line.getCell(titleColumn + label.length - 1)!;
       // Native selection is a highlighted row. The dot marks the current value,
       // and can remain on another option while filtering changes selection.
       if (

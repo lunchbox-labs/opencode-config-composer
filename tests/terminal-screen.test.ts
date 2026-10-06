@@ -58,4 +58,12 @@ test('native filtered selection becomes ready only after its highlighted paint',
   await write('\x1b[48;2;250;180;130m\x1b[20;63H  Save ordered fragments…\x1b[48;2;20;20;20m\x1b[18;87H');
   assert.equal(search.selected(label, label), true, 'the actual highlight arrives one frame after the query echo');
   assert.equal(search.selected('Add multiline fragment', label), false);
+  await write(
+    '\x1b[18;65H\x1b[Kmissing-agent\x1b[48;2;250;180;130m\x1b[20;65H\x1b[K✓ missing-agent\x1b[48;2;20;20;20m\x1b[18;78H',
+  );
+  assert.equal(
+    search.selected('missing-agent', 'missing-agent'),
+    true,
+    'membership checkmarks are part of the option title',
+  );
 });
