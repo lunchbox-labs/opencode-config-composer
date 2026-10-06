@@ -137,6 +137,39 @@ function overlaps(left: string, right: string): boolean {
   );
 }
 
+// A bounded containment proof: universal globs cover every name; otherwise
+// prove a fixed-width domain against a covering glob using symbolic '?' slots.
+// A literal cannot cover an arbitrary slot. Unknown cases remain unsupported.
+function covers(cover: string, domain: string): boolean {
+  cover = cover.replaceAll('\\', '/');
+  domain = domain.replaceAll('\\', '/');
+  if (/^\*+$/.test(cover)) {
+    return true;
+  }
+  if (domain.includes('*') || cover.endsWith(' *')) {
+    return false;
+  }
+  const cache = new Map<string, boolean>();
+  const visit = (i: number, j: number): boolean => {
+    const key = `${i}:${j}`;
+    const known = cache.get(key);
+    if (known !== undefined) {
+      return known;
+    }
+    const result =
+      i === cover.length
+        ? j === domain.length
+        : cover[i] === '*'
+          ? visit(i + 1, j) || (j < domain.length && visit(i, j + 1))
+          : j < domain.length &&
+            (cover[i] === '?' || (domain[j] !== '?' && matches(domain[j], cover[i]))) &&
+            visit(i + 1, j + 1);
+    cache.set(key, result);
+    return result;
+  };
+  return visit(0, 0);
+}
+
 /** Lower ordered contributions without moving old matches past newer rules. */
 export function compilePermissions(layers: readonly PermissionPolicy[]): {
   policy: PermissionPolicy;
@@ -190,7 +223,7 @@ export function compilePermissions(layers: readonly PermissionPolicy[]): {
     const block = ordered[index];
     const later = ordered.findIndex((item, position) => position > index && item.permission === block.permission);
     // A repeated '?' pattern has no distinct, equivalent native object key.
-    // It can be coalesced only across disjoint permission-name contributions.
+    // Coalesce across disjoint contributions or replay whole-domain ones.
     const star = block.permission
       .split('')
       .findIndex(
@@ -198,12 +231,19 @@ export function compilePermissions(layers: readonly PermissionPolicy[]): {
           char === '*' && !(position === block.permission.length - 1 && block.permission[position - 1] === ' '),
       );
     if (later !== -1 && star === -1) {
-      if (ordered.slice(index + 1, later).some((item) => overlaps(block.permission, item.permission))) {
-        throw new SettingsError(
-          `OpenCode cannot preserve interleaved permission blocks for ${block.permission} in one native object. Use concrete permission names for this contribution.`,
-        );
+      const replay = [...block.rules];
+      for (const intervening of ordered.slice(index + 1, later)) {
+        if (!overlaps(block.permission, intervening.permission)) {
+          continue;
+        }
+        if (!covers(intervening.permission, block.permission)) {
+          throw new SettingsError(
+            `Unsupported permission compilation for interleaved ${block.permission} blocks across ${intervening.permission}. This compiler cannot yet preserve this ordering in native configuration. Use concrete permission names for this contribution.`,
+          );
+        }
+        replay.push(...intervening.rules);
       }
-      ordered[later].rules.unshift(...block.rules);
+      ordered[later].rules.unshift(...replay);
       continue;
     }
     let permission = block.permission;

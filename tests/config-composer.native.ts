@@ -177,6 +177,34 @@ test(
         layers: [{ 's*': { 'included-*': 'deny' } }, { '*': 'allow' }, { 's*': { 'other-*': 'deny' } }],
         action: 'allow',
       },
+      {
+        name: 'question-domain-scalar',
+        layers: [{ 'skil?': { 'included-*': 'deny' } }, { '*': 'allow' }, { 'skil?': { 'other-*': 'deny' } }],
+        action: 'allow',
+      },
+      {
+        name: 'question-domain-map',
+        layers: [
+          { 'skil?': { 'included-*': 'deny' } },
+          { 's*': { 'included-*': 'allow' } },
+          { 'skil?': { 'other-*': 'deny' } },
+        ],
+        action: 'allow',
+      },
+      {
+        name: 'question-domain-later',
+        layers: [{ 'skil?': { 'included-*': 'deny' } }, { '*': 'allow' }, { 'skil?': { 'included-*': 'ask' } }],
+        action: 'ask',
+      },
+      {
+        name: 'optional-domain-map',
+        layers: [
+          { 'skill *': { 'included-*': 'deny' } },
+          { '*': { 'included-*': 'allow' } },
+          { 'skill *': { 'other-*': 'deny' } },
+        ],
+        action: 'allow',
+      },
       { name: 'native-fallback', layers: [{ skill: { 'other-*': 'allow' } }], action: 'allow' },
       { name: 'group-over-native', layers: [{ skill: 'allow' }], action: 'allow' },
       { name: 'native-default-allow', layers: [], action: 'allow', probe: 'allow' },
@@ -185,7 +213,7 @@ test(
     ];
     const config = {
       plugin: [installed.directory, permissionProbe],
-      permission: { skill: { 'included-*': 'deny' } } satisfies PermissionPolicy,
+      permission: { 'sk*': { 'included-*': 'deny' } } satisfies PermissionPolicy,
       model: 'fixture/alpha',
       small_model: 'fixture/alpha',
       default_agent: 'worker',
@@ -223,7 +251,7 @@ test(
       sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
       agent: {
         permission: {
-          skill: { '*': 'deny' },
+          'sk*': { '*': 'deny' },
           task: { '*': 'allow' },
           webfetch: 'allow',
           question: 'ask',
@@ -394,6 +422,9 @@ test(
             ? { skill: 'deny' }
             : {};
       const policy = composePermissions([global, explicit, ...fixture.layers]);
+      if (fixture.name.includes('-domain-')) {
+        assert.equal(policy.skill, undefined, 'native proof must exercise wildcard replay without an exact-tool block');
+      }
       // /config's response schema enumerates known keys first; /agent exposes
       // the ordered rules actually used by native permission evaluation.
       if (fixture.probe === undefined) {
@@ -470,7 +501,7 @@ test(
       const rules = agents.find((agent) => agent.name === name)?.permission;
       assert.ok(rules !== undefined);
       assert.equal(
-        rules.findLast((rule) => rule.permission === 'skill')?.action,
+        rules.findLast((rule) => rule.permission === (name === 'build' ? 'skill' : 'sk*'))?.action,
         name === 'build' ? 'allow' : 'deny',
         `${name} inherits the global policy`,
       );

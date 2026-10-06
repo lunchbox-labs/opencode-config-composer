@@ -295,14 +295,93 @@ test('scalar-only native keys retain their position between wildcard contributio
   assert.equal(explainPermission(policy, 'webfetch_extra', 'a').action, 'deny');
 });
 
-test('compiler never broadens an unrepresentable repeated question wildcard to a star', () => {
+test('compiler never broadens an unsupported repeated question wildcard to a star', () => {
   assert.throws(
     () => composePermissions([{ 'webfetc?': { a: 'deny' } }, { webfetch: 'allow' }, { 'webfetc?': { b: 'deny' } }]),
-    /cannot preserve.*webfetc\?/i,
+    /unsupported permission compilation.*webfetc\?/i,
   );
   const policy = composePermissions([{ 'ba?': { a: 'deny' } }, { 'ba?': { b: 'allow' } }]);
   assert.equal(explainPermission(policy, 'bat', 'a').action, 'deny');
   assert.equal(explainPermission(policy, 'bat', 'b').action, 'allow');
+});
+
+test('repeated question globs replay intervening rules covering their whole domain', () => {
+  for (const middle of ['*', '**', 'b*', '?a?', 'ba*']) {
+    const layers: PermissionPolicy[] = [
+      { 'ba?': { a: 'deny', retained: 'ask' } },
+      { [middle]: { a: 'allow' } },
+      { 'ba?': { b: 'ask' } },
+      { '*': { c: 'deny' } },
+      { 'ba?': { d: 'allow' } },
+    ];
+    const policy = composePermissions(layers);
+    for (const name of ['bat', 'bar', 'ba', 'bath', 'other']) {
+      for (const target of ['a', 'b', 'c', 'd', 'retained', 'unknown']) {
+        assert.equal(
+          explainPermission(policy, name, target).action,
+          layers.map((layer) => explainPermission(layer, name, target).action).findLast((value) => value !== undefined),
+          JSON.stringify({ middle, name, target }),
+        );
+      }
+    }
+  }
+  const policy = composePermissions([{ 'ba?': { a: 'deny' } }, { '*': 'allow' }, { 'ba?': { b: 'ask' } }]);
+  assert.equal(explainPermission(policy, 'bat', 'a').action, 'allow');
+  assert.equal(explainPermission(policy, 'bat', 'b').action, 'ask');
+});
+
+test('optional trailing name glob replays universal partial maps without losing its bare-name match', () => {
+  const layers: PermissionPolicy[] = [
+    { 'skill *': { a: 'deny', retained: 'ask' } },
+    { '*': { a: 'allow' } },
+    { 'skill *': { b: 'deny' } },
+  ];
+  const policy = composePermissions(layers);
+  for (const name of ['skill', 'skill extra', 'skills', 'skillx', 'other']) {
+    for (const target of ['a', 'b', 'retained', 'unknown']) {
+      assert.equal(
+        explainPermission(policy, name, target).action,
+        layers.map((layer) => explainPermission(layer, name, target).action).findLast((value) => value !== undefined),
+        JSON.stringify({ name, target }),
+      );
+    }
+  }
+});
+
+test('replayed whole-domain rules retain authored provenance', () => {
+  const value = {
+    agent: {
+      groups: {
+        first: { permission: { 'ba?': { a: 'deny' } } },
+        middle: { permission: { '*': { a: 'allow' } } },
+        last: { permission: { 'ba?': { b: 'ask' } } },
+      },
+    },
+  };
+  const source = {
+    id: 'composer',
+    path: '/config/composer.jsonc',
+    text: JSON.stringify(value),
+    fingerprint: 'fixture',
+    writable: true,
+    value,
+  };
+  const result = resolveLegacy(source, { agent: { worker: { groups: ['first', 'middle', 'last'] } } });
+  const origin = result.provenance['/agent/worker/permission/ba?/a'];
+  assert.equal(origin.pointer, '/agent/groups/middle/permission/*/a');
+  assert.equal(origin.overwritten[0]?.pointer, '/agent/groups/first/permission/ba?/a');
+});
+
+test('partial-domain overlaps still reject without broadening', () => {
+  for (const middle of ['b?t', 'ba', 'ba?x', 'b*t']) {
+    const layers: PermissionPolicy[] = [{ 'ba?': { a: 'deny' } }, { [middle]: 'allow' }, { 'ba?': { b: 'ask' } }];
+    if (middle === 'ba' || middle === 'ba?x') {
+      // Disjoint names are safe and must not acquire the moved block's rules.
+      assert.equal(explainPermission(composePermissions(layers), middle, 'a').action, 'allow');
+    } else {
+      assert.throws(() => composePermissions(layers), /Unsupported permission compilation/);
+    }
+  }
 });
 
 test('compiled policies agree with last matching authored layers across tool and target overlaps', () => {
@@ -355,7 +434,7 @@ test('scalar-only permission origins retain overwritten native candidates', () =
   assert.equal(result.provenance['/permission/webfetch'].overwritten[0]?.operation, 'native');
 });
 
-test('unsupported wildcard interleaving fails atomically rather than broadening permissions', async (t) => {
+test('unsupported wildcard interleaving throws before mutating the config object', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'composer-permission-shape-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, 'config-composer.jsonc');
@@ -378,7 +457,7 @@ test('unsupported wildcard interleaving fails atomically rather than broadening 
     agent: { worker: { groups: ['earlier', 'middle', 'later'] } },
   };
   const before = structuredClone(config);
-  await assert.rejects(hooks.config!(config), /cannot preserve/);
+  await assert.rejects(hooks.config!(config), /Unsupported permission compilation/);
   assert.deepEqual(config, before);
 });
 

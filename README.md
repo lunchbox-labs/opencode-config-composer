@@ -187,11 +187,19 @@ OpenCode 1.18.34 requires scalar actions for `todowrite`, `question`,
 `webfetch`, `websearch`, and `doom_loop`.
 
 Native objects cannot directly retain duplicate wildcard tool-name blocks.
-Composer handles `*` globs with equivalent native keys, but rejects interleaved
-repeated `?`-only tool-name globs across overlapping contributions instead of
-broadening their matches. Use concrete permission names for these contributions.
-The same restriction applies to repeated tool-name globs whose only star is the
-special trailing `" *"`. Target-pattern wildcards remain supported.
+Composer handles `*` globs with equivalent native keys. Repeated `?`-only
+name globs can also cross disjoint contributions or contributions proven to cover
+their entire name domain: for example, `ba?`, then `*`, then `ba?` preserves all
+three contributions in order. The compiler replays the covering rules inside the
+later block without broadening its matches.
+
+Some partially overlapping repeated name globs remain unsupported by this
+compiler and produce a compilation error before configuration mutation. This includes `webfetc?`, then `webfetch`,
+then `webfetc?`; it is a compilation limitation, not a claim that every rejected
+case is impossible in native configuration. Use concrete permission names for
+these contributions. Repeated globs whose only star is the special trailing
+`" *"` support disjoint or universal intervening contributions. Target-pattern
+wildcards remain supported.
 
 These settings overlay runtime configuration without writing native files.
 Configure them in the settings file and reload OpenCode to apply changes.
