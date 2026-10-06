@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { join, parse, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout } from 'node:timers/promises';
 import type * as Storage from '../../src/config-composer/storage.ts';
@@ -18,23 +18,19 @@ export async function installedEditor(host: Awaited<ReturnType<typeof nativeHarn
     const root = path.worktree !== '' && path.worktree !== '/' ? path.worktree : path.directory;
     const location = { root: resolve(root), directory: resolve(path.directory) };
     const baseline = readRuntimeBaseline(await host.api('/config'), location, host.configRoot);
-    // OpenCode reports '/' outside Git. On Windows the Node test checkout may
-    // occupy a different drive than the real TUI's cwd (host.project).
-    const nativeWorktree =
-      process.platform === 'win32' && path.worktree === '/' ? parse(path.directory).root : path.worktree;
-    return { path, location, baseline, nativeWorktree };
+    return { path, location, baseline };
   };
   const snapshot = async (reloading = false) => {
     if (host.pid === undefined) {
       return storage.loadSnapshot(host.configRoot, host.project);
     }
-    const { path, location, baseline, nativeWorktree } = await runtime();
+    const { path, location, baseline } = await runtime();
     return storage.loadSnapshot(
       host.configRoot,
       location.root,
       reloading ? { model: baseline.model, small_model: baseline.small_model } : baseline,
       path.directory,
-      nativeWorktree,
+      path.worktree,
     );
   };
   const reload = async (previous?: Storage.Snapshot) => {
