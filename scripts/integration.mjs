@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 import { validateBaseline, validateCliVersion } from './opencode.mjs';
 import { isolatedEnvironment } from '../tests/integration/harness.ts';
 
@@ -15,6 +16,26 @@ export function nativePackage(platform = process.platform, arch = process.arch) 
     name: platform === 'win32' ? 'opencode-windows-x64' : 'opencode-linux-x64',
     executable: platform === 'win32' ? 'opencode.exe' : 'opencode',
   };
+}
+
+// Match OpenCode 1.18.34's native ripgrep dependency, with release checksums.
+// Preinstallation avoids an instance reload interrupting the host's cached download.
+const ripgrepVersion = '15.1.0';
+export function ripgrepPackage(platform = process.platform) {
+  assert.ok(['linux', 'win32'].includes(platform), 'ripgrep requires Linux or Windows');
+  return platform === 'win32'
+    ? {
+        target: 'x86_64-pc-windows-msvc',
+        extension: 'zip',
+        executable: 'rg.exe',
+        sha256: '124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a',
+      }
+    : {
+        target: 'x86_64-unknown-linux-musl',
+        extension: 'tar.gz',
+        executable: 'rg',
+        sha256: '1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599',
+      };
 }
 
 async function main() {
@@ -64,6 +85,42 @@ async function main() {
       );
       binary = join(root, 'node_modules', target.name, 'bin', target.executable);
     }
+    const ripgrep = ripgrepPackage();
+    const archiveName = `ripgrep-${ripgrepVersion}-${ripgrep.target}.${ripgrep.extension}`;
+    const archive = join(root, archiveName);
+    await run(
+      process.platform === 'win32' ? 'curl.exe' : 'curl',
+      [
+        '--fail',
+        '--silent',
+        '--show-error',
+        '--location',
+        '--retry',
+        '2',
+        '--max-time',
+        '60',
+        `https://github.com/BurntSushi/ripgrep/releases/download/${ripgrepVersion}/${archiveName}`,
+        '--output',
+        archive,
+      ],
+      { timeout: 120_000 },
+    );
+    assert.equal(
+      createHash('sha256')
+        .update(await readFile(archive))
+        .digest('hex'),
+      ripgrep.sha256,
+      'ripgrep archive checksum mismatch',
+    );
+    await run(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xf', archive, '-C', root], { timeout: 30_000 });
+    const ripgrepDirectory = join(root, `ripgrep-${ripgrepVersion}-${ripgrep.target}`);
+    const verifiedRipgrep = await promisify(execFile)(join(ripgrepDirectory, ripgrep.executable), ['--version'], {
+      timeout: 10_000,
+    });
+    assert.equal(verifiedRipgrep.stdout.split(/\s+/)[1], ripgrepVersion, verifiedRipgrep.stdout);
+    const testEnvironment = { ...process.env, OPENCODE_BIN: binary, INTEGRATION_ARTIFACT_DIR: artifacts };
+    const pathKey = Object.keys(testEnvironment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+    testEnvironment[pathKey] = `${ripgrepDirectory}${delimiter}${testEnvironment[pathKey] ?? ''}`;
     const { stdout } = await promisify(execFile)(binary, ['--version'], {
       env: isolatedEnvironment(root),
       timeout: 30_000,
@@ -80,6 +137,7 @@ async function main() {
           arch: process.arch,
           opencode: version,
           node: process.version,
+          ripgrep: ripgrepVersion,
           package: manifest.version,
         },
         null,
@@ -97,7 +155,7 @@ async function main() {
         'tests/integration/lifecycle.integration.ts',
       ],
       {
-        env: { ...process.env, OPENCODE_BIN: binary, INTEGRATION_ARTIFACT_DIR: artifacts },
+        env: testEnvironment,
         timeout: 480_000,
       },
     );

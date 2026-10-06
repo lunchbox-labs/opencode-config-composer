@@ -119,10 +119,26 @@ test(
       assert.ok(found !== undefined);
       return found;
     };
-    const reload = async () =>
-      storage.reloadConfiguration(await storage.loadSnapshot(configRoot), async (plugins) => {
+    const reload = async () => {
+      let token: string | undefined;
+      await storage.reloadConfiguration(await storage.loadSnapshot(configRoot), async (plugins) => {
+        const entry = plugins[0] as [string, { reloadToken: string }];
+        token = entry[1].reloadToken;
         await api('/global/config', { plugin: plugins }, 'PATCH');
       });
+      assert.ok(token !== undefined);
+      // PATCH schedules instance disposal. Wait for the new configuration to be
+      // visible before dispatch; do not retry a model/tool request to conceal failure.
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const current = await api<{ plugin?: unknown[] }>('/config');
+        if (JSON.stringify(current.plugin).includes(token)) {
+          await api('/agent');
+          return;
+        }
+        await setTimeout(50);
+      }
+      assert.fail('Reload token did not become visible in the native instance');
+    };
     const send = async (
       agentName = 'worker',
       text = 'Reply with verified.',

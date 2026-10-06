@@ -3,7 +3,9 @@
 Run `npm ci` and `npm run test:integration` with Node 24 on Linux x64 or Windows x64.
 The command builds the package, installs the exact OpenCode version from
 `engines.opencode` (currently **1.18.34**), verifies its reported version, packs Composer,
-and installs the tarball in temporary consumer projects. Set `OPENCODE_BIN` to an
+and installs the tarball in temporary consumer projects. It also installs and checksum-verifies
+the real ripgrep 15.1.0 binary used by the pinned host on both platforms before startup,
+so reload cannot interrupt OpenCode’s lazy dependency download. Set `OPENCODE_BIN` to an
 existing binary to avoid downloading it; a version mismatch fails the run.
 
 The **Integration** workflow runs the same functional cases on `ubuntu-latest` and
@@ -25,7 +27,8 @@ Every fixture has separate home, configuration, cache, data, state and session d
 paths. Temporary paths contain spaces. Only OS launch variables and network transport
 (proxy/CA) settings needed for host dependency installation are inherited. Provider
 credentials and personal OpenCode configuration are excluded. File watchers are disabled;
-tests distinguish saved settings from settings applied by an explicit reload. Fixtures
+tests distinguish saved settings from settings applied by an explicit reload and wait
+for the new token to be visible before dispatching a request. Fixtures
 are deleted after the host stops, including on failures.
 
 The persistence tests import the **installed** editor implementation and connect its
