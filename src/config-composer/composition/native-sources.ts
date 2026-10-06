@@ -1,5 +1,5 @@
 import { lstat, readdir, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import path, { join, relative } from 'node:path';
 import { configurationFile } from '../configuration.ts';
 import { SettingsError } from '../settings.ts';
 import type { SourceFile } from '../storage.ts';
@@ -17,6 +17,25 @@ export interface NativeProjectSources {
   directories: NativeAgentLayer[];
 }
 
+/** The native non-Git "/" sentinel means the opened directory's filesystem root. */
+export function nativeAncestorPaths(root: string, directory: string, paths = path): string[] {
+  const project = root === '/' ? paths.parse(directory).root : root;
+  const inside = paths.relative(project, directory);
+  if (inside === '..' || inside.startsWith(`..${paths.sep}`) || paths.isAbsolute(inside)) {
+    throw new SettingsError('The native project directory must be inside its worktree.');
+  }
+  const ancestors: string[] = [];
+  for (let current = directory; ; current = paths.dirname(current)) {
+    ancestors.push(current);
+    if (paths.relative(project, current) === '') {
+      return ancestors;
+    }
+    if (ancestors.length >= 64 || paths.dirname(current) === current) {
+      throw new SettingsError('Native project discovery exceeds 64 directories or its worktree boundary.');
+    }
+  }
+}
+
 /** Mirror native project paths only; Composer definitions still require explicit imports. */
 export async function loadNativeProjectSources(root: string, directory = root): Promise<NativeProjectSources> {
   const configurations: NativeAgentLayer[] = [];
@@ -24,22 +43,8 @@ export async function loadNativeProjectSources(root: string, directory = root): 
   if (['true', '1'].includes(process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? '')) {
     return { configurations, directories };
   }
-  const project = await realpath(root);
   const start = await realpath(directory);
-  const inside = relative(project, start);
-  if (inside.startsWith('..') || isAbsolute(inside)) {
-    throw new SettingsError('The native project directory must be inside its worktree.');
-  }
-  const ancestors: string[] = [];
-  for (let current = start; ; current = dirname(current)) {
-    ancestors.push(current);
-    if (current === project) {
-      break;
-    }
-    if (ancestors.length >= 64) {
-      throw new SettingsError('Native project discovery exceeds 64 directories.');
-    }
-  }
+  const ancestors = nativeAncestorPaths(root === '/' ? root : await realpath(root), start);
   let bytes = 0;
   let count = 0;
   const exists = async (path: string) => {
