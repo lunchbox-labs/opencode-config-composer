@@ -24,8 +24,12 @@ The default shared file is optional when project sources exist; an explicit `con
 Reload checks every source path, including aliases and previously absent project/local scopes, before applying changes.
 Previews use the selected profiles and their layer order. Membership changes never activate profiles,
 and reordering a membership list does not change profile precedence. Inline and file-backed component agents
-and native built-ins are available in the membership picker. Native agent files must currently be discoverable
-in the editor's global/custom configuration directory; project-native agent discovery is a separate follow-up.
+and native built-ins are available in the membership picker. Existing project agents from native `opencode.json(c)`
+and `.opencode/agent(s)/*.md` sources are included, following the pinned host's project source precedence.
+Project-native sources remain read-only in this editor: JSONC component groups can add memberships without
+creating shadow agent files or changing native model pins. Removing native frontmatter/JSON memberships or
+changing native pins requires editing the declaring native source. Nested native source paths and aliases
+participate in stale-save checks. Composer component definitions still require explicit JSONC imports.
 
 Supported and tested host: **OpenCode V1 1.18.34**. The `opencode` engine requirement is intentionally exact.
 Broaden it only after checking another host version. This package does not implement a V2 port.

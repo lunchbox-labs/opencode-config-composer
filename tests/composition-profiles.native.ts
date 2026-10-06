@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 import { installPackage } from './install-package.ts';
+import type * as Storage from '../src/config-composer/storage.ts';
 import { nativeAgentNames } from '../src/config-composer/composition/runtime.ts';
 
 // The native registry is the oracle: neither config debug output nor a copied built-in prompt is used.
@@ -21,6 +23,28 @@ test(
     await mkdir(join(project, '.opencode'), { recursive: true });
     await mkdir(join(root, 'library/checks'), { recursive: true });
     const installed = await installPackage(configRoot);
+    const { loadSnapshot, planChange, savePlan } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
+    )) as typeof Storage;
+    const projectJson = JSON.stringify({
+      $schema: 'https://opencode.ai/config.json',
+      agent: { 'project-json': { model: 'fixture/project-pin', prompt: 'Native project JSON body.' } },
+    });
+    const projectMarkdown =
+      '---\ndescription: Existing project agent\ngroups: [work]\n---\nNative project Markdown body.';
+    await writeFile(join(project, 'opencode.jsonc'), projectJson);
+    await mkdir(join(project, '.opencode/agent'));
+    await writeFile(
+      join(project, '.opencode/agent/project-md.md'),
+      '---\nmodel: fixture/discarded\n---\nObsolete duplicate body.',
+    );
+    await mkdir(join(root, '.opencode/agents'), { recursive: true });
+    await writeFile(
+      join(root, '.opencode/agents/ancestor.md'),
+      '---\ndescription: Ancestor agent outside Git\n---\nAncestor body.',
+    );
+    await mkdir(join(project, '.opencode/agents'));
+    await writeFile(join(project, '.opencode/agents/project-md.md'), projectMarkdown);
     await writeFile(
       join(root, 'library/reviewer.md'),
       '---\ndescription: Synthetic reviewer\nmode: subagent\ngroups: [work]\npermission:\n  edit: deny\n---\nNative custom body.',
@@ -39,7 +63,7 @@ test(
         },
         componentGroups: {
           work: {
-            agents: [...nativeAgentNames],
+            agents: [...nativeAgentNames, 'project-json', 'project-md', 'ancestor'],
             commands: ['review'],
             skills: ['checks'],
             configuration: { model: 'fixture/alpha' },
@@ -116,10 +140,11 @@ test(
       await setTimeout(100);
     }
     assert.ok(url !== undefined, logs);
-    async function api<T>(path: string, method = 'GET'): Promise<T> {
+    async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
       const response = await fetch(`${url}${path}`, {
         method,
-        headers: { 'x-opencode-directory': project },
+        headers: { 'x-opencode-directory': project, 'content-type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(30_000),
       });
       assert.ok(response.ok, `${path}: ${await response.clone().text()}\n${logs.slice(-3000)}`);
@@ -136,6 +161,26 @@ test(
       model?: { providerID: string; modelID: string };
     }
     const baseline = await api<Agent[]>('/agent');
+    const conversation = await api<{ id: string; title: string }>('/session', 'POST', {
+      title: 'Existing project conversation',
+    });
+    const snapshot = await loadSnapshot(configRoot, project, undefined, project, '/');
+    assert.ok(snapshot.agents.some((agent) => agent.name === 'project-json'));
+    assert.ok(snapshot.agents.some((agent) => agent.name === 'project-md'));
+    assert.ok(snapshot.agents.some((agent) => agent.name === 'ancestor'));
+    assert.equal(snapshot.nativeAgents['project-md'].model, undefined);
+    await savePlan(
+      planChange(snapshot, { kind: 'membership', agent: 'project-md', groups: ['work', 'editor-created'] }),
+    );
+    assert.equal(
+      (
+        (await loadSnapshot(configRoot, project, undefined, project, '/')).config.agent as
+          Record<string, unknown> | undefined
+      )?.['project-md'],
+      undefined,
+    );
+    assert.equal(await readFile(join(project, 'opencode.jsonc'), 'utf8'), projectJson);
+    assert.equal(await readFile(join(project, '.opencode/agents/project-md.md'), 'utf8'), projectMarkdown);
     assert.deepEqual(
       baseline
         .filter((item) => item.native)
@@ -172,6 +217,15 @@ test(
         modelID: before.name === 'plan' ? 'pinned' : before.name === 'build' ? 'beta' : 'alpha',
       });
     }
+    assert.deepEqual(activated.find((item) => item.name === 'project-json')?.model, {
+      providerID: 'fixture',
+      modelID: 'project-pin',
+    });
+    assert.deepEqual(activated.find((item) => item.name === 'project-md')?.model, {
+      providerID: 'fixture',
+      modelID: 'alpha',
+    });
+    assert.equal(activated.find((item) => item.name === 'project-md')?.prompt, 'Native project Markdown body.');
     const reviewer = activated.find((item) => item.name === 'reviewer');
     assert.ok(reviewer !== undefined);
     assert.equal(reviewer.mode, 'subagent');
@@ -186,5 +240,8 @@ test(
     await api('/instance/dispose', 'POST');
     const cleared = await api<Agent[]>('/agent');
     assert.deepEqual(cleared, baseline, 'empty local selection restores the exact native registry');
+    const retained = await api<{ id: string; title: string }>(`/session/${conversation.id}`);
+    assert.equal(retained.id, conversation.id);
+    assert.equal(retained.title, conversation.title);
   },
 );

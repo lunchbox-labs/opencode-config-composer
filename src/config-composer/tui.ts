@@ -173,7 +173,13 @@ export function registerSettings(
       typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
         ? path.worktree
         : (path.directory ?? root);
-    const snapshot = await loadSnapshot(root, project, await readNative());
+    const snapshot = await loadSnapshot(
+      root,
+      project,
+      await readNative(),
+      path.directory ?? project,
+      typeof path.worktree === 'string' && path.worktree !== '' ? path.worktree : project,
+    );
     native.set(snapshot, { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model });
     return snapshot;
   };
