@@ -1486,6 +1486,54 @@ test('compose accumulates active membership repairs, rejects incomplete drafts, 
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), nativeBefore);
 });
 
+test('membership repair confirmation exposes permission fallback before saving an otherwise valid candidate', async (t) => {
+  const root = await fixture(t);
+  const nativePath = join(root, 'opencode.jsonc');
+  const native = parseConfig(await readFile(nativePath, 'utf8'));
+  (native.agent as Record<string, AgentSettings>).builtin.permission = { skill: 'allow' };
+  const nativeBefore = JSON.stringify(native);
+  await writeFile(nativePath, nativeBefore);
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  const file = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(file, 'utf8'));
+  const definitions = value.componentGroups as Record<string, Record<string, unknown>>;
+  definitions.developers.agents = ['removed'];
+  definitions.developers.configuration = {
+    permissions: [
+      { tool: 'webfetc?', pattern: 'a', action: 'deny' },
+      { tool: 'webfetch', action: 'allow' },
+      { tool: 'webfetc?', pattern: 'b', action: 'deny' },
+      { tool: 'skill', action: 'deny' },
+    ],
+  };
+  const before = JSON.stringify(value);
+  await writeFile(file, before);
+  await ui.command('config-composer.compose');
+  await ui.select('repair');
+  await ui.select('group:developers');
+  await ui.select('agents');
+  await ui.select('member:removed');
+  await ui.select('member:builtin');
+  await ui.select('+keep');
+  await ui.select('\u0000back');
+  await ui.select('+review');
+  assert.equal(ui.title(), 'Save membership repair?');
+  assert.match(ui.message(), /All Composer.*agent.*not applied/);
+  assert.match(ui.message(), /builtin/);
+  assert.match(ui.message(), /more permissive/i);
+  assert.equal(await readFile(file, 'utf8'), before, 'warning is visible before any write');
+  await ui.cancel();
+  assert.equal(await readFile(file, 'utf8'), before);
+  await ui.select('+review');
+  await ui.confirm();
+  const saved = await loadSnapshot(root);
+  assert.ok(saved.resolved.permissionWarnings.some((warning) => warning.scope === 'agent:builtin'));
+  assert.deepEqual(saved.resolved.agent.builtin.permission, { skill: 'allow' });
+  assert.equal(ui.updates, 0, 'saving the warned candidate still does not apply it');
+  assert.equal(await readFile(nativePath, 'utf8'), nativeBefore);
+});
+
 test('new configuration presets choose model settings before saving a valid definition', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);

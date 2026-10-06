@@ -1079,6 +1079,7 @@ export function registerSettings(
             `Validated candidate profiles: ${preview.sources.activeProfiles.length === 0 ? 'none' : preview.sources.activeProfiles.join(' → ')}.\n` +
             `Selected agents: ${preview.resolved.selectedAgents.length === 0 ? 'none' : preview.resolved.selectedAgents.join(', ')}.\n` +
             `Commands: ${Object.keys(preview.resolved.commands).length === 0 ? 'none' : Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
+            `${preview.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}\n` +
             'Save preserves native files and conversations. Apply remains an explicit reload.',
           async () => {
             const next = await validate();
