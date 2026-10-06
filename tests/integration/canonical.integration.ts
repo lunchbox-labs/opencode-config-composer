@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
-import { test } from 'node:test';
+import { type TestContext, test } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 import { applyEdits, modify, parse } from 'jsonc-parser';
 import { nativeHarness } from './harness.ts';
@@ -203,6 +203,15 @@ test(
     const activate = async (value: CompositionDocument) => {
       await writeDocument(local, value);
       await reload();
+    };
+    const restoreSourcesAfter = async (context: TestContext, paths: string[]) => {
+      const saved = await Promise.all(paths.map(async (path) => ({ path, text: await readFile(path, 'utf8') })));
+      context.after(async () => {
+        // A failing assertion must not leave later cases with a pin or broken import.
+        // This restores fixture input after the case; all behavior assertions run first.
+        await Promise.all(saved.map(({ path, text }) => writeFile(path, text)));
+        await reload();
+      });
     };
     const send = async (agent = 'reviewer', selection: Record<string, unknown> = {}, sessionID?: string) => {
       const session =
@@ -436,67 +445,68 @@ test(
       await reload();
     });
 
-    await t.test(
-      'model and membership editors preserve mixed bundles, activation and shared component bodies',
-      async () => {
-        const before = (await document(settings)).componentGroups!.primary;
-        await storage.savePlan(
-          storage.planChange(await snapshot(), {
-            kind: 'group',
-            name: 'primary',
-            choice: { modelRef: 'opencode:model', variant: 'high' },
-          }),
-        );
-        const after = (await document(settings)).componentGroups!.primary;
-        for (const key of ['agents', 'commands', 'skills', 'prompts'] as const) {
-          assert.deepEqual(after[key], before[key]);
-        }
-        assert.deepEqual(after.configuration!.prompt, before.configuration!.prompt);
-        await reload();
-        assert.equal((await send()).captured.model, 'beta');
-        assert.notEqual((await send()).captured.temperature, 0.2);
-        await storage.savePlan(
-          storage.planChange(await snapshot(), {
-            kind: 'group',
-            name: 'primary',
-            choice: { modelRef: 'preset:tuned' },
-          }),
-        );
-        await reload();
-        const markdown = await readFile(reviewerPath, 'utf8');
-        await storage.savePlan(
-          storage.planChange(await snapshot(), {
-            kind: 'override',
-            agent: 'reviewer',
-            choice: { model: 'fixture/beta', variant: 'high' },
-          }),
-        );
-        assert.equal(await readFile(reviewerPath, 'utf8'), markdown);
-        await reload();
-        assert.equal((await send()).captured.model, 'beta');
-        assert.equal((await send('twin')).captured.model, 'alpha');
-        await storage.savePlan(
-          storage.planChange(await snapshot(), { kind: 'override', agent: 'reviewer', choice: {} }),
-        );
-        await reload();
-        assert.equal((await send()).captured.model, 'alpha');
-        assert.equal(await readFile(reviewerPath, 'utf8'), markdown);
-        await storage.savePlan(
-          storage.planChange(await snapshot(), { kind: 'membership', agent: 'inline', groups: ['focus'] }),
-        );
-        await reload();
-        assert.equal(await findAgent('inline'), undefined, 'membership does not activate the focus profile');
-        assert.deepEqual((await snapshot()).sources.activeProfiles, ['base']);
-        await storage.savePlan(
-          storage.planChange(await snapshot(), { kind: 'membership', agent: 'inline', groups: ['primary'] }),
-        );
-        await reload();
-        assert.equal((await send('inline')).captured.model, 'alpha');
-        assert.deepEqual(await readdir(join(configRoot, 'agents')), ['pinned.md']);
-      },
-    );
+    await t.test('model and membership editors preserve mixed bundles and profile activation', async (context) => {
+      await restoreSourcesAfter(context, [settings, components, reviewerPath]);
+      const before = (await document(settings)).componentGroups!.primary;
+      await storage.savePlan(
+        storage.planChange(await snapshot(), {
+          kind: 'group',
+          name: 'primary',
+          choice: { modelRef: 'opencode:model', variant: 'high' },
+        }),
+      );
+      const after = (await document(settings)).componentGroups!.primary;
+      for (const key of ['agents', 'commands', 'skills', 'prompts'] as const) {
+        assert.deepEqual(after[key], before[key]);
+      }
+      assert.deepEqual(after.configuration!.prompt, before.configuration!.prompt);
+      await reload();
+      assert.equal((await send()).captured.model, 'beta');
+      assert.notEqual((await send()).captured.temperature, 0.2);
+      await storage.savePlan(
+        storage.planChange(await snapshot(), {
+          kind: 'group',
+          name: 'primary',
+          choice: { modelRef: 'preset:tuned' },
+        }),
+      );
+      await reload();
+      await storage.savePlan(
+        storage.planChange(await snapshot(), { kind: 'membership', agent: 'inline', groups: ['focus'] }),
+      );
+      await reload();
+      assert.equal(await findAgent('inline'), undefined, 'membership does not activate the focus profile');
+      assert.deepEqual((await snapshot()).sources.activeProfiles, ['base']);
+      await storage.savePlan(
+        storage.planChange(await snapshot(), { kind: 'membership', agent: 'inline', groups: ['primary'] }),
+      );
+      await reload();
+      assert.equal((await send('inline')).captured.model, 'alpha');
+      assert.deepEqual(await readdir(join(configRoot, 'agents')), ['pinned.md']);
+    });
 
-    await t.test('read-only imports, stale sources and invalid references reject before any save', async () => {
+    await t.test('shared component model overrides preserve Markdown and sibling inheritance', async (context) => {
+      await restoreSourcesAfter(context, [components, reviewerPath]);
+      const markdown = await readFile(reviewerPath, 'utf8');
+      await storage.savePlan(
+        storage.planChange(await snapshot(), {
+          kind: 'override',
+          agent: 'reviewer',
+          choice: { model: 'fixture/beta', variant: 'high' },
+        }),
+      );
+      assert.equal(await readFile(reviewerPath, 'utf8'), markdown);
+      await reload();
+      assert.equal((await send()).captured.model, 'beta');
+      assert.equal((await send('twin')).captured.model, 'alpha');
+      await storage.savePlan(storage.planChange(await snapshot(), { kind: 'override', agent: 'reviewer', choice: {} }));
+      await reload();
+      assert.equal((await send()).captured.model, 'alpha');
+      assert.equal(await readFile(reviewerPath, 'utf8'), markdown);
+    });
+
+    await t.test('read-only imports, stale sources and invalid references reject before any save', async (context) => {
+      await restoreSourcesAfter(context, [settings, models, external]);
       const current = await snapshot();
       assert.throws(
         () =>
