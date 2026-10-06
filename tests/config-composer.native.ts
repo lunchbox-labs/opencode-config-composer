@@ -6,6 +6,10 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import type * as Storage from '../src/config-composer/storage.ts';
+import type * as Parameters from '../src/config-composer/composition/parameter-authoring.ts';
+import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
 import { installPackage } from './install-package.ts';
@@ -120,6 +124,7 @@ test(
     assert.ok(address !== null && typeof address !== 'string');
     const model = {
       name: 'Synthetic model',
+      temperature: true,
       limit: { context: 8192, output: 256 },
       variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } },
     };
@@ -378,6 +383,30 @@ test(
         },
         'PATCH',
       );
+    const { loadSnapshot, previewFilePlan, saveFilePlan } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
+    )) as typeof Storage;
+    const { configurationTargets, planParameter } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/parameter-authoring.js')).href
+    )) as typeof Parameters;
+    const { readRuntimeBaseline } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
+    )) as typeof Baseline;
+    for (const [field, text] of [
+      ['temperature', '0.35'],
+      ['topP', '0.8'],
+      ['maxOutputTokens', '128'],
+      ['options', '{"reasoningEffort":"medium"}'],
+    ] as const) {
+      const native = readRuntimeBaseline(await api('/config'), { root: project, directory: project }, configRoot);
+      const snapshot = await loadSnapshot(configRoot, project, native, project, '/');
+      const target = configurationTargets(snapshot, settingsPath).find((target) => target.label === 'Preset: balanced');
+      assert.ok(target !== undefined);
+      const plan = planParameter(snapshot, target, field, text);
+      await saveFilePlan(plan, async () => {
+        await previewFilePlan(plan);
+      });
+    }
     await reload();
     let refreshed = agents;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -398,6 +427,14 @@ test(
     assert.equal((await request()).info.modelID, 'beta');
     const reloadedRequest = requests.find((body) => JSON.stringify(body).includes('RELOADED_WORKER_GUIDANCE'));
     assert.ok(reloadedRequest !== undefined, 'reread fragments after token reload');
+    assert.equal(reloadedRequest.temperature, 0.35);
+    assert.equal(reloadedRequest.top_p, 0.8);
+    assert.equal(reloadedRequest.max_tokens, 128);
+    assert.equal(
+      reloadedRequest.reasoning_effort,
+      'high',
+      'native selected variant retains precedence over authored provider options',
+    );
     assert.ok(!JSON.stringify(reloadedRequest).includes('INITIAL_WORKER_GUIDANCE'));
     await writeFile(
       join(project, 'opencode.json'),

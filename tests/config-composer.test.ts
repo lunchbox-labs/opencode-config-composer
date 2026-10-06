@@ -1662,3 +1662,51 @@ test('changing projects before confirmation rejects the previous project scope w
   assert.match(ui.toasts.at(-1)!.message, /project changed/);
   await assert.rejects(readFile(join(project, '.opencode/config-composer.local.jsonc')), /ENOENT/);
 });
+
+for (const [field, text, expected] of [
+  ['temperature', '0.4', 0.4],
+  ['topP', '0.8', 0.8],
+  ['topK', '16', 16],
+  ['maxOutputTokens', '128', 128],
+  ['options', '{"custom":[true,null,"value"]}', { custom: [true, null, 'value'] }],
+] as const) {
+  test(`parameter UI edits ${field} at its explicit destination and retains cancel/back behavior`, async (t) => {
+    const root = await fixture(t);
+    const path = join(root, 'config-composer.jsonc');
+    const original = await readFile(path, 'utf8');
+    const ui = uiHarness(root);
+    await ui.command('config-composer.compose');
+    await ui.select('parameters');
+    await ui.select(path);
+    await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+    await ui.select(field);
+    await ui.enter(text);
+    assert.match(ui.message(), /parameters|provider-unverified/);
+    await ui.cancel();
+    assert.equal(await readFile(path, 'utf8'), original);
+    await ui.escape();
+    await ui.select(field);
+    await ui.enter(text);
+    await ui.confirm();
+    const parameters = (await loadSnapshot(root)).sources.registry.componentGroups?.developers.configuration
+      ?.parameters;
+    assert.deepEqual(parameters?.[field], expected);
+  });
+}
+
+test('parameter UI rejects a lost provider catalog at confirmation without writing', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('parameters');
+  await ui.select(path);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('temperature');
+  await ui.enter('0.4');
+  ui.setProviderError(true);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /provider models/);
+  assert.equal(await readFile(path, 'utf8'), original);
+});

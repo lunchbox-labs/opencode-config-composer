@@ -372,6 +372,7 @@ export interface CatalogModel {
   name: string;
   provider: string;
   variants: Record<string, Record<string, unknown>>;
+  parameterMetadata?: Record<string, unknown>;
 }
 
 export function catalogModels(providers: unknown): CatalogModel[] {
@@ -402,6 +403,15 @@ export function catalogModels(providers: unknown): CatalogModel[] {
             name: typeof model.name === 'string' ? model.name : id,
             provider: providerName,
             variants,
+            parameterMetadata: {
+              ...(record(model.api) && typeof model.api.npm === 'string' ? { api: { npm: model.api.npm } } : {}),
+              ...(record(model.capabilities) && typeof model.capabilities.temperature === 'boolean'
+                ? { capabilities: { temperature: model.capabilities.temperature } }
+                : {}),
+              ...(record(model.limit) && typeof model.limit.output === 'number'
+                ? { limit: { output: model.limit.output } }
+                : {}),
+            },
           },
         ];
       });

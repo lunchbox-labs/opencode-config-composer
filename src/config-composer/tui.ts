@@ -45,6 +45,9 @@ import { openEffective } from './tui/compose.ts';
 import { openAuthoring } from './tui/authoring.ts';
 import { type DefinitionChange, planDefinition } from './composition/authoring.ts';
 import { planScope } from './composition/activation.ts';
+import { openParameters } from './tui/parameters.ts';
+import { planParameter } from './composition/parameter-authoring.ts';
+import { parameterReview, validateParameterChoice } from './composition/parameter-review.ts';
 import { openActivation } from './tui/activation.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
@@ -436,7 +439,14 @@ export function registerSettings(
       change.kind === 'global' || change.kind === 'all'
         ? '\nOther native fallback consumers can also change. Workspace overrides and session selections still apply.'
         : '';
-    const modelsPreview = [...new Set(preview.map(label))].join(', ');
+    const modelsPreview = [
+      ...new Set(
+        preview.map(
+          (choice) =>
+            `${label(choice)}${choice.parameters === undefined ? '' : ` · parameters ${JSON.stringify(choice.parameters).slice(0, 1200)}`}`,
+        ),
+      ),
+    ].join(', ');
     confirm(
       'Save agent settings?',
       `${plan.description}\n${choiceLabel}${impact}${scope}\nModels to validate: ${modelsPreview === '' ? 'Native fallback' : modelsPreview}\n\n` +
@@ -454,7 +464,7 @@ export function registerSettings(
         if (choices.some((choice) => typeof choice.model === 'string' && choice.model !== '')) {
           const available = await models();
           for (const choice of choices) {
-            validateChoice(choice, available);
+            validateParameterChoice(choice, available);
           }
         }
         if (api.lifecycle.signal.aborted) {
@@ -875,7 +885,16 @@ export function registerSettings(
       root,
     );
   };
-  const proposeComposition = async (snapshot: Snapshot, plan: FilePlan, change?: DefinitionChange) => {
+  const proposeComposition = async (
+    snapshot: Snapshot,
+    plan: FilePlan,
+    change?: DefinitionChange,
+    review?: {
+      title: string;
+      details: string;
+      validate: (preview: Awaited<ReturnType<typeof previewFilePlan>>) => Promise<void>;
+    },
+  ) => {
     const isCurrent = navigation.checkpoint();
     const preview = await previewFilePlan(plan);
     if (!isCurrent()) {
@@ -910,8 +929,9 @@ export function registerSettings(
       ...new Set([...Object.keys(snapshot.resolved.agent), ...Object.keys(preview.resolved.agent)]),
     ].filter((name) => JSON.stringify(snapshot.resolved.agent[name]) !== JSON.stringify(preview.resolved.agent[name]));
     confirm(
-      change === undefined ? 'Save profile selection?' : 'Save composition definition?',
+      review?.title ?? (change === undefined ? 'Save profile selection?' : 'Save composition definition?'),
       `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+        (review === undefined ? '' : `${review.details}\n\n`) +
         `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
         `Changed global models: ${globals.length === 0 ? 'none' : globals.map(({ field, model }) => `${field}: ${model}`).join(', ')}.\n` +
         `Changed command models: ${commands.length === 0 ? 'none' : commands.map(({ name, model }) => `${name}: ${model}`).join(', ')}.\n` +
@@ -921,10 +941,11 @@ export function registerSettings(
       async () => {
         await refreshNative(snapshot);
         const latest = await previewFilePlan(plan);
+        await review?.validate(latest);
         if (projection(latest) !== projection(preview)) {
           throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
         }
-        const choices: ModelChoice[] = [...changed.map(([, choice]) => choice), ...globals, ...commands];
+        const choices = [...changed.map(([, choice]) => choice), ...globals, ...commands];
         if (
           change?.registry === 'configurationPresets' &&
           (change.operation === 'create' || change.operation === 'patch')
@@ -934,7 +955,7 @@ export function registerSettings(
         }
         if (choices.some((choice) => choice.model !== undefined)) {
           const catalog = await models();
-          choices.forEach((choice) => validateChoice(choice, catalog));
+          choices.forEach((choice) => validateParameterChoice(choice, catalog));
         }
         if (api.lifecycle.signal.aborted) {
           return;
@@ -943,7 +964,9 @@ export function registerSettings(
           plan,
           async () => {
             await refreshNative(snapshot);
-            if (projection(await previewFilePlan(plan)) !== projection(preview)) {
+            const current = await previewFilePlan(plan);
+            await review?.validate(current);
+            if (projection(current) !== projection(preview)) {
               throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
             }
           },
@@ -961,6 +984,43 @@ export function registerSettings(
       [
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
+        {
+          title: 'Model parameters and provider options',
+          value: 'parameters',
+          run: async () => {
+            const isCurrent = navigation.checkpoint();
+            const snapshot = await load();
+            if (!isCurrent()) {
+              return;
+            }
+            openParameters(snapshot, {
+              menu,
+              prompt: (title, value, confirmed) =>
+                navigation.prompt({
+                  title,
+                  value,
+                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                  onConfirm: (value) => run(() => confirmed(value)),
+                }),
+              propose: async (target, field, text) => {
+                const current = navigation.checkpoint();
+                const plan = planParameter(snapshot, target, field, text);
+                const preview = await previewFilePlan(plan);
+                const details = parameterReview(snapshot, target, preview, await models());
+                if (!current()) {
+                  return;
+                }
+                await proposeComposition(snapshot, plan, undefined, {
+                  title: 'Save model parameters?',
+                  details,
+                  validate: async (candidate) => {
+                    parameterReview(snapshot, target, candidate, await models());
+                  },
+                });
+              },
+            });
+          },
+        },
         {
           title: 'Profile activation and scope files',
           value: 'activation',
