@@ -93,11 +93,13 @@ export interface FileEdit {
   file: SourceFile;
   text: string;
 }
-export interface EditPlan {
+export interface FilePlan {
   snapshot: Snapshot;
-  change: Change;
   edits: FileEdit[];
   description: string;
+}
+export interface EditPlan extends FilePlan {
+  change: Change;
 }
 
 function checkObjectKeys(node: JsonNode | undefined): void {
@@ -123,7 +125,7 @@ export function parseConfig(text: string): Record<string, unknown> {
   return value;
 }
 
-function parseAgent(file: SourceFile): AgentFile {
+export function parseAgent(file: SourceFile): AgentFile {
   const match = /^(---\r?\n)([\s\S]*?)(^---\s*\n|^---\s*$)/m.exec(file.text);
   if (match?.index !== 0) {
     throw new SettingsError('An agent file has missing or invalid frontmatter.');
@@ -534,7 +536,7 @@ export function affectedGroups(snapshot: Snapshot, change: Change): string[] {
     : [];
 }
 
-function editJson(text: string, path: (string | number)[], value: unknown): string {
+export function editJson(text: string, path: (string | number)[], value: unknown): string {
   const tree = parseTree(text);
   if (value === undefined && (tree === undefined || findNodeAtLocation(tree, path) === undefined)) {
     return text;
@@ -942,7 +944,31 @@ async function observedSourceList(snapshot: Snapshot): Promise<void> {
   }
 }
 
-export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => void>): Promise<void> {
+export async function previewFilePlan(
+  plan: FilePlan,
+): Promise<{ sources: LoadedSources; resolved: ResolvedProfileRuntime }> {
+  const overlays = new Map<string, string>();
+  for (const file of plan.snapshot.files) {
+    overlays.set(file.path, file.text);
+    overlays.set(file.canonicalPath ?? file.path, file.text);
+  }
+  for (const edit of plan.edits) {
+    overlays.set(edit.file.path, edit.text);
+    overlays.set(edit.file.canonicalPath ?? edit.file.path, edit.text);
+  }
+  const sources = await loadCompositionSources(plan.snapshot.sourceContext, overlays);
+  const agent = Object.fromEntries(
+    [...nativeAgentsFromLayers(plan.snapshot.nativeLayers, overlays)].map(([name, item]) => [name, item.settings]),
+  );
+  const resolved = await resolveProfileRuntime(sources, { ...plan.snapshot.nativeModels, agent }, overlays);
+  return { sources, resolved };
+}
+
+export async function saveFilePlan(
+  plan: FilePlan,
+  validate: () => Promise<void>,
+  authorize?: () => Promise<() => void>,
+): Promise<void> {
   if (plan.edits.length === 0) {
     return;
   }
@@ -962,7 +988,7 @@ export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => v
     }
     // Detect newly added agents before approving a group-wide preview.
     await observedSourceList(plan.snapshot);
-    await plannedChoices(plan);
+    await validate();
     for (const edit of plan.edits) {
       if (edit.file.writable === false) {
         throw new SettingsError(`Read-only composition source ${edit.file.path}.`);
@@ -998,6 +1024,16 @@ export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => v
     await lock.close();
     await unlink(lockPath);
   }
+}
+
+export function savePlan(plan: EditPlan, authorize?: () => Promise<() => void>): Promise<void> {
+  return saveFilePlan(
+    plan,
+    async () => {
+      await plannedChoices(plan);
+    },
+    authorize,
+  );
 }
 
 export async function reloadConfiguration(

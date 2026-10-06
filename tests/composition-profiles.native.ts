@@ -9,6 +9,7 @@ import { setTimeout } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { installPackage } from './install-package.ts';
 import type * as Storage from '../src/config-composer/storage.ts';
+import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import { nativeAgentNames } from '../src/config-composer/composition/runtime.ts';
 
 // The native registry is the oracle: neither config debug output nor a copied built-in prompt is used.
@@ -23,9 +24,12 @@ test(
     await mkdir(join(project, '.opencode'), { recursive: true });
     await mkdir(join(root, 'library/checks'), { recursive: true });
     const installed = await installPackage(configRoot);
-    const { loadSnapshot, planChange, savePlan } = (await import(
+    const { loadSnapshot, planChange, savePlan, saveFilePlan } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
     )) as typeof Storage;
+    const { planDefinition, previewDefinition } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/authoring.js')).href
+    )) as typeof Authoring;
     const projectJson = JSON.stringify({
       $schema: 'https://opencode.ai/config.json',
       agent: { 'project-json': { model: 'fixture/project-pin', prompt: 'Native project JSON body.' } },
@@ -192,8 +196,33 @@ test(
       'verify the complete pinned native identity catalog',
     );
     assert.ok(!baseline.some((item) => item.name === 'reviewer'), 'definitions alone do not activate custom agents');
+    for (const change of [
+      {
+        operation: 'create',
+        registry: 'profiles',
+        name: 'editor-profile',
+        sourceId: join(configRoot, 'config-composer.jsonc'),
+      },
+      {
+        operation: 'patch',
+        registry: 'profiles',
+        name: 'editor-profile',
+        path: ['layers'],
+        value: [{ componentGroup: 'work' }],
+      },
+      { operation: 'rename', registry: 'profiles', name: 'editor-profile', nextName: 'edited-profile' },
+    ] as const) {
+      const plan = planDefinition(
+        await loadSnapshot(configRoot, project, undefined, project, '/'),
+        change.operation === 'patch' ? { ...change, path: [...change.path] } : change,
+      );
+      await saveFilePlan(plan, async () => {
+        await previewDefinition(plan);
+      });
+    }
+    assert.deepEqual((await loadSnapshot(configRoot, project, undefined, project, '/')).sources.activeProfiles, []);
     const local = join(project, '.opencode/config-composer.local.jsonc');
-    await writeFile(local, '{"activeProfiles":["work"]}');
+    await writeFile(local, '{"activeProfiles":["edited-profile","work"]}');
     await api('/instance/dispose', 'POST');
     const activated = await api<Agent[]>('/agent');
     for (const before of baseline.filter((item) => item.native)) {

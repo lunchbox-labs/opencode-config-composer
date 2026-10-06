@@ -29,6 +29,7 @@ import {
   planChange,
   plannedChoices,
   reloadConfiguration,
+  saveFilePlan,
   savePlan,
 } from './storage.ts';
 import { configurationDirectory } from './configuration.ts';
@@ -36,6 +37,8 @@ import { verifySharedFilesystem } from './connection.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveProfileRuntime } from './composition/runtime.ts';
 import { openEffective } from './tui/compose.ts';
+import { openAuthoring } from './tui/authoring.ts';
+import { type DefinitionChange, planDefinition, previewDefinition } from './composition/authoring.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 const label = (choice: ModelChoice) =>
@@ -826,12 +829,113 @@ export function registerSettings(
       root,
     );
   };
+  const proposeDefinition = async (snapshot: Snapshot, change: DefinitionChange) => {
+    const isCurrent = navigation.checkpoint();
+    const plan = planDefinition(snapshot, change);
+    const preview = await previewDefinition(plan);
+    if (!isCurrent()) {
+      return;
+    }
+    const projection = (value: typeof preview) =>
+      JSON.stringify({
+        model: value.resolved.model,
+        small_model: value.resolved.small_model,
+        choices: value.resolved.choices,
+        profiles: value.sources.activeProfiles,
+      });
+    const changed = Object.entries(preview.resolved.choices).filter(
+      ([name, choice]) => JSON.stringify(choice) !== JSON.stringify(snapshot.resolved.choices[name]),
+    );
+    const affected = [
+      ...new Set([...Object.keys(snapshot.resolved.agent), ...Object.keys(preview.resolved.agent)]),
+    ].filter((name) => JSON.stringify(snapshot.resolved.agent[name]) !== JSON.stringify(preview.resolved.agent[name]));
+    confirm(
+      'Save composition definition?',
+      `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+        `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
+        `Commands: ${Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
+        `Active profiles: ${preview.sources.activeProfiles.join(' → ')}.\n` +
+        'Save preserves conversations. Reload saved settings to apply changes.',
+      async () => {
+        await refreshNative(snapshot);
+        const latest = await previewDefinition(plan);
+        if (projection(latest) !== projection(preview)) {
+          throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
+        }
+        const choices: ModelChoice[] = changed.map(([, choice]) => choice);
+        if (
+          change.registry === 'configurationPresets' &&
+          (change.operation === 'create' || change.operation === 'patch')
+        ) {
+          // Inactive presets have no affected agents, but their chosen model must still be available at save time.
+          choices.push(editorSettings(latest.sources, snapshot.nativeModels).modelPresets[change.name]);
+        }
+        if (choices.some((choice) => choice.model !== undefined)) {
+          const catalog = await models();
+          choices.forEach((choice) => validateChoice(choice, catalog));
+        }
+        if (api.lifecycle.signal.aborted) {
+          return;
+        }
+        await saveFilePlan(
+          plan,
+          async () => {
+            await previewDefinition(plan);
+          },
+          async () => {
+            const { assertCurrent } = await connection(snapshot.root);
+            return assertCurrent;
+          },
+        );
+        offerReload(true);
+      },
+    );
+  };
   const composeMenu = () =>
     menu(
       'Compose',
       [
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
+        {
+          title: 'Author groups, presets and profiles',
+          value: 'registry',
+          run: async () => {
+            const isCurrent = navigation.checkpoint();
+            const snapshot = await load();
+            if (!isCurrent()) {
+              return;
+            }
+            openAuthoring(snapshot, {
+              menu,
+              back: navigation.back,
+              refresh: navigation.refresh,
+              prompt: (title, value, confirmed) =>
+                navigation.prompt({
+                  title,
+                  value,
+                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                  onConfirm: (value) => run(() => confirmed(value)),
+                }),
+              propose: proposeDefinition,
+              groupModel: selectGroup,
+              createPreset: (selected) =>
+                selectModel('New configuration preset', {}, (choice) => {
+                  if (choice.model === undefined || choice.model === '') {
+                    throw new SettingsError('Choose a concrete model for the new preset.');
+                  }
+                  return selected({
+                    model: choice.model,
+                    ...(choice.variant === undefined ? {} : { variant: choice.variant }),
+                  });
+                }),
+              presetModel: (snapshot, name) =>
+                selectModel(name, snapshot.modelPresets[name], (choice) =>
+                  propose(snapshot, { kind: 'preset', name, choice }),
+                ),
+            });
+          },
+        },
         {
           title: 'Effective configuration and sources',
           value: 'effective',

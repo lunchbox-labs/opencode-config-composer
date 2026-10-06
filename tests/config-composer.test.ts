@@ -1281,3 +1281,156 @@ for (const section of ['models', 'groups']) {
     assert.equal(ui.title(), 'Compose');
   });
 }
+
+test('registry UI creates an inactive profile at an explicit source and retains activation', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('+create');
+  await ui.enter('review');
+  assert.equal(ui.title(), 'Save new definition in…');
+  await ui.select(join(root, 'config-composer.jsonc'));
+  assert.equal(ui.title(), 'Save composition definition?');
+  await ui.confirm();
+  const current = await loadSnapshot(root);
+  assert.deepEqual(current.sources.registry.profiles?.review, { layers: [] });
+  assert.deepEqual(current.sources.activeProfiles, ['work']);
+  assert.equal(ui.updates, 0);
+});
+
+test('profile layer edits retain order, preview impact, and can be cancelled without writes', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const before = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('work');
+  await ui.select('layers');
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('+save');
+  assert.equal(ui.title(), 'Save composition definition?');
+  await ui.cancel();
+  assert.equal(await readFile(path, 'utf8'), before);
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual(
+    (await loadSnapshot(root)).sources.registry.profiles?.work.layers?.map((layer) => layer.componentGroup),
+    ['reviewers', 'developers'],
+  );
+});
+
+test('registry UI renames an active group and its native memberships without changing model outcomes', async (t) => {
+  const root = await fixture(t);
+  const before = await loadSnapshot(root);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('componentGroups');
+  await ui.select('developers');
+  await ui.select('rename');
+  await ui.enter('coding');
+  assert.equal(ui.title(), 'Save composition definition?');
+  await ui.confirm();
+  const after = await loadSnapshot(root);
+  assert.equal(after.sources.registry.componentGroups?.developers, undefined);
+  assert.deepEqual(after.nativeAgents.builtin.groups, ['coding']);
+  assert.equal(after.resolved.agent.builtin.model, before.resolved.agent.builtin.model);
+  assert.equal(after.resolved.agent['nested/pinned'].model, before.resolved.agent['nested/pinned'].model);
+});
+
+test('registry confirmation counts agents returning to native fallback when layers are removed', async (t) => {
+  const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      componentGroups: {
+        developers: {},
+        reviewers: {},
+        'custom-team': {},
+        work: { agents: ['build'], configuration: { model: 'example/fast' } },
+      },
+      profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('work');
+  await ui.select('layers');
+  await ui.select('0');
+  await ui.select('remove');
+  await ui.select('+save');
+  assert.match(ui.message(), /1 agent configuration previews change/);
+  assert.match(ui.message(), /native fallback/);
+});
+
+test('group member picker repairs unavailable members and keeps component names separate from actions', async (t) => {
+  const root = await fixture(t);
+  const native = parseConfig(await readFile(join(root, 'opencode.jsonc'), 'utf8'));
+  Object.assign(native.agent as Record<string, unknown>, { dormant: { disable: true } });
+  await writeFile(join(root, 'opencode.jsonc'), JSON.stringify(native));
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      components: { agents: { '+save': { prompt: 'Body' } } },
+      componentGroups: { developers: {}, reviewers: {}, 'custom-team': {}, work: { agents: ['dormant', 'removed'] } },
+      profiles: {},
+      activeProfiles: [],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('componentGroups');
+  await ui.select('work');
+  await ui.select('agents');
+  await ui.select('member:dormant');
+  await ui.select('member:removed');
+  await ui.select('member:+save');
+  assert.equal(ui.title(), 'work: agents');
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.work.agents, ['+save']);
+});
+
+test('new configuration presets choose model settings before saving a valid definition', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('configurationPresets');
+  await ui.select('+create');
+  await ui.enter('quick');
+  await ui.select(join(root, 'config-composer.jsonc'));
+  await ui.select('example/fast');
+  await ui.select('');
+  assert.equal(ui.title(), 'Save composition definition?');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.configurationPresets?.quick, { model: 'example/fast' });
+});
+
+test('inactive preset creation rechecks provider availability before saving', async (t) => {
+  const root = await fixture(t);
+  const before = await readFile(join(root, 'config-composer.jsonc'), 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('configurationPresets');
+  await ui.select('+create');
+  await ui.enter('quick');
+  await ui.select(join(root, 'config-composer.jsonc'));
+  await ui.select('example/fast');
+  await ui.select('');
+  ui.setProviderError(true);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /Could not load provider models/);
+  assert.equal(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), before);
+  assert.equal(ui.updates, 0);
+});
