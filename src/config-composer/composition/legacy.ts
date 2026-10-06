@@ -12,7 +12,13 @@ import {
   resolveChoice,
   resolveGroup,
 } from '../settings.ts';
-import { type PermissionPolicy, type PermissionRule, compilePermissions, nativePermission } from './permissions.ts';
+import {
+  PermissionCompilationError,
+  type PermissionPolicy,
+  type PermissionRule,
+  compilePermissions,
+  nativePermission,
+} from './permissions.ts';
 import type { FieldOrigin, NativeInput, ResolvedComposition, SourceDocument } from './types.ts';
 
 function escapePointer(value: string): string {
@@ -253,7 +259,14 @@ function effectivePermissionOrigins(
   }
   if (settings.permission !== undefined) {
     global.push({ policy: settings.permission, pointer: '/agent/permission', sourceId: source.id });
-    applyPermissionOrigins(provenance, '/permission', global);
+    try {
+      applyPermissionOrigins(provenance, '/permission', global);
+    } catch (error) {
+      if (!(error instanceof PermissionCompilationError)) {
+        throw error;
+      }
+      global.pop();
+    }
   }
   const names = new Set([...Object.keys(native.agent ?? {}), ...Object.keys(settings.agentOverrides ?? {})]);
   for (const name of names) {
@@ -288,7 +301,14 @@ function effectivePermissionOrigins(
         sourceId: source.id,
       });
     }
-    applyPermissionOrigins(provenance, pointer, layers);
+    try {
+      applyPermissionOrigins(provenance, pointer, layers);
+    } catch (error) {
+      if (!(error instanceof PermissionCompilationError)) {
+        throw error;
+      }
+      // Runtime retains native agent permissions and inherits the applied global policy.
+    }
   }
 }
 

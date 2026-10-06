@@ -194,12 +194,33 @@ three contributions in order. The compiler replays the covering rules inside the
 later block without broadening its matches.
 
 Some partially overlapping repeated name globs remain unsupported by this
-compiler and produce a compilation error before configuration mutation. This includes `webfetc?`, then `webfetch`,
-then `webfetc?`; it is a compilation limitation, not a claim that every rejected
-case is impossible in native configuration. Use concrete permission names for
-these contributions. Repeated globs whose only star is the special trailing
-`" *"` support disjoint or universal intervening contributions. Target-pattern
-wildcards remain supported.
+compiler, including `webfetc?`, then `webfetch`, then `webfetc?`. This is a
+compilation limitation, not a claim that every rejected case is impossible in
+native configuration. Use concrete permission names for these contributions.
+Repeated globs whose only star is the special trailing `" *"` support disjoint
+or universal intervening contributions. Target-pattern wildcards remain supported.
+
+When permission composition is unsupported, Composer warns and continues:
+
+- An affected agent skips **all** its Composer group and agent-override permission
+  contributions. Its original native agent permissions remain, inheriting the
+  successfully applied global policy and native defaults as usual.
+- If the Composer global contribution cannot be composed with native globals,
+  that whole contribution is skipped. Native globals remain, and each agent's
+  Composer permissions are still compiled independently against that fallback.
+- Other agents' valid permissions, models, prompts, and unrelated settings still
+  apply. No session rules are changed and no additional tool blocking is added.
+
+**Fallback can be more permissive, including missing intended deny rules.**
+Warnings identify the affected scope, configuration path and JSON pointers,
+conflicting permission names, skipped contribution, and fallback. They are sent
+to stderr for CLI/headless operators and through OpenCode's TUI toast event.
+Startup toast delivery is asynchronous to avoid blocking host initialization;
+active warnings are repeated once when an affected session is first used.
+Identical warnings are deduplicated within a plugin instance and session;
+changed warnings and successful recompilation produce updates. Reload creates a
+new plugin instance and reevaluates warnings. Compilation diagnostics are not
+silently converted into approximate permission rules.
 
 These settings overlay runtime configuration without writing native files.
 Configure them in the settings file and reload OpenCode to apply changes.

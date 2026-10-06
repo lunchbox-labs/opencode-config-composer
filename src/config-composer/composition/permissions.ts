@@ -1,6 +1,8 @@
 import { homedir } from 'node:os';
 import { SettingsError, record } from '../settings.ts';
 
+export class PermissionCompilationError extends Error {}
+
 export type PermissionAction = 'allow' | 'ask' | 'deny';
 export type PermissionPolicy = Record<string, PermissionAction | Record<string, PermissionAction>>;
 
@@ -237,7 +239,7 @@ export function compilePermissions(layers: readonly PermissionPolicy[]): {
           continue;
         }
         if (!covers(intervening.permission, block.permission)) {
-          throw new SettingsError(
+          throw new PermissionCompilationError(
             `Unsupported permission compilation for interleaved ${block.permission} blocks across ${intervening.permission}. This compiler cannot yet preserve this ordering in native configuration. Use concrete permission names for this contribution.`,
           );
         }

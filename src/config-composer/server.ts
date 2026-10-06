@@ -9,7 +9,7 @@ import {
   resolveChoice,
 } from './settings.ts';
 import { loadConfiguration } from './configuration.ts';
-import { composePermissions, nativePermission } from './composition/permissions.ts';
+import { PermissionCompilationError, composePermissions, nativePermission } from './composition/permissions.ts';
 import { composePrompts, expandIncludes } from './prompts.ts';
 import { resolveNativeDefaults } from './composition/defaults.ts';
 
@@ -17,11 +17,35 @@ function agentConfigurations(value: unknown): value is Record<string, AgentSetti
   return record(value) && Object.values(value).every(record);
 }
 
-const ConfigComposerPlugin: Plugin = async (_input, options) => {
+const ConfigComposerPlugin: Plugin = async (pluginInput, options) => {
   let { settings } = await loadConfiguration(options);
   const defaults = new WeakMap<object, { native: NativeModels; applied: NativeModels }>();
   let agents: Partial<Record<string, AgentSettings>> = {};
   let choices: Partial<Record<string, EffectiveChoice>> = {};
+  let warnings = new Map<string, string>();
+  const sessionWarnings = new Map<string, string>();
+  const notify = async (message: string, recovery = false, deferred = false) => {
+    // stderr remains visible to CLI/headless operators even with no TUI client.
+    console.error(`[Config Composer] ${message}`);
+    try {
+      const delivery = pluginInput.client.tui.showToast({
+        body: {
+          title: 'Config Composer permissions',
+          message,
+          variant: recovery ? 'info' : 'warning',
+          duration: 15000,
+        },
+      });
+      if (deferred) {
+        // SDK routes await instance initialization; the config hook must return first.
+        delivery.catch(() => undefined);
+      } else {
+        await delivery;
+      }
+    } catch {
+      // Notification transport failures must not discard successfully compiled settings.
+    }
+  };
   const globalPermissions = new WeakMap<object, { native: unknown; applied: unknown }>();
   const authored = new WeakMap<
     AgentSettings,
@@ -37,6 +61,20 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
     }
   >();
   return {
+    'chat.message': async (input, output) => {
+      const messages = [...warnings]
+        .filter(([scope]) => scope === 'global' || scope === `agent:${output.message.agent}`)
+        .map(([, message]) => message);
+      const message = messages.join('\n');
+      const previous = sessionWarnings.get(input.sessionID);
+      if (message !== previous && (message !== '' || previous !== undefined)) {
+        await notify(
+          message === '' ? 'Permission composition warnings resolved for this session.' : message,
+          message === '',
+        );
+      }
+      sessionWarnings.set(input.sessionID, message);
+    },
     'tool.execute.after': async (input, output) => {
       if (input.tool !== 'skill') {
         return;
@@ -55,7 +93,7 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
       if (!agentConfigurations(configured)) {
         throw new SettingsError('An agent configuration must be an object.');
       }
-      const nextSettings = (await loadConfiguration(options)).settings;
+      const { settings: nextSettings, file } = await loadConfiguration(options);
       const { groups, modelPresets } = nextSettings;
       const previousDefaults = defaults.get(config);
       const native: NativeModels = {};
@@ -75,7 +113,31 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
         previousGlobal !== undefined && config.permission === previousGlobal.applied
           ? previousGlobal.native
           : config.permission;
-      const globalPolicy = composePermissions([nativePermission(nativeGlobal), nextSettings.permission ?? {}]);
+      const nextWarnings = new Map<string, string>();
+      const compile = (scope: string, locations: string[], layers: Parameters<typeof composePermissions>[0]) => {
+        try {
+          return composePermissions(layers);
+        } catch (error) {
+          if (!(error instanceof PermissionCompilationError)) {
+            throw error;
+          }
+          const fallback =
+            scope === 'global'
+              ? 'The Composer global permission contribution was not applied; native global permissions remain. Independent agent policies still apply.'
+              : 'All Composer group and override permission contributions for this agent were not applied; native agent permissions and the successfully applied global policy remain.';
+          nextWarnings.set(
+            scope,
+            `${scope === 'global' ? 'Global scope' : `Agent ${scope.slice(6)}`}: ${error.message} Sources: ${locations.join(', ')}. ${fallback} Fallback may be more permissive, including missing intended deny rules. Other settings continue to apply.`,
+          );
+          return undefined;
+        }
+      };
+      const globalPolicy =
+        compile(
+          'global',
+          ['native /permission', `${file.path}#/agent/permission`],
+          [nativePermission(nativeGlobal), nextSettings.permission ?? {}],
+        ) ?? nativePermission(nativeGlobal);
       const staged = Object.fromEntries(
         Object.entries(configured).map(([name, agent]) => {
           const previous = authored.get(agent);
@@ -104,7 +166,8 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
         Object.entries(staged)
           .filter(([, agent]) => agent.disable !== true)
           .map(([name, agent]) => {
-            const layers = agentGroups(agent, groups).flatMap((group) =>
+            const membership = agentGroups(agent, groups);
+            const layers = membership.flatMap((group) =>
               groups[group].permission === undefined ? [] : [groups[group].permission],
             );
             const override = nextSettings.agentOverrides?.[name]?.permission;
@@ -112,7 +175,19 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
             return [
               name,
               layers.length > 0 || override !== undefined
-                ? composePermissions([globalPolicy, explicit, ...layers, ...(override === undefined ? [] : [override])])
+                ? (compile(
+                    `agent:${name}`,
+                    [
+                      'effective global /permission',
+                      `native /agent/${name}/permission`,
+                      ...membership.map(
+                        (group) =>
+                          `${file.path}#/agent/groups/${group.replaceAll('~', '~0').replaceAll('/', '~1')}/permission`,
+                      ),
+                      ...(override === undefined ? [] : [`${file.path}#/agent/overrides/${name}/permission`]),
+                    ],
+                    [globalPolicy, explicit, ...layers, ...(override === undefined ? [] : [override])],
+                  ) ?? agent.permission)
                 : agent.permission,
             ];
           }),
@@ -188,6 +263,17 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
       }
       agents = configured;
       choices = nextChoices;
+      for (const [scope, message] of nextWarnings) {
+        if (warnings.get(scope) !== message) {
+          await notify(message, false, true);
+        }
+      }
+      for (const scope of warnings.keys()) {
+        if (!nextWarnings.has(scope)) {
+          await notify(`Permission composition warning resolved for ${scope}.`, true, true);
+        }
+      }
+      warnings = nextWarnings;
     },
     // eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning parameter hook.
     'chat.params': async (input, output) => {

@@ -9,6 +9,7 @@ import {
   type PermissionPolicy,
   composePermissions,
   explainPermission,
+  nativePermission,
 } from '../src/config-composer/composition/permissions.ts';
 import { type AgentSettings, readSettings } from '../src/config-composer/settings.ts';
 import server from '../src/config-composer/server.ts';
@@ -434,7 +435,7 @@ test('scalar-only permission origins retain overwritten native candidates', () =
   assert.equal(result.provenance['/permission/webfetch'].overwritten[0]?.operation, 'native');
 });
 
-test('unsupported wildcard interleaving throws before mutating the config object', async (t) => {
+test('unsupported agent policy falls back while preserving global policy and delivering deduplicated warnings', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'composer-permission-shape-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, 'config-composer.jsonc');
@@ -445,20 +446,52 @@ test('unsupported wildcard interleaving throws before mutating the config object
         permission: { bash: 'allow' },
         groups: {
           earlier: { permission: { 'webfetc?': { a: 'deny' } } },
-          middle: { permission: { webfetch: 'allow' } },
+          middle: { permission: { webfetch: 'allow' }, model: 'fixture/kept' },
           later: { permission: { 'webfetc?': { b: 'deny' } } },
         },
       },
     }),
   );
-  const hooks = await server.server({} as PluginInput, { configFile: path });
+  const toasts: unknown[] = [];
+  const stderr = t.mock.method(console, 'error', () => undefined);
+  const input = {
+    client: {
+      tui: {
+        showToast: async (value: unknown) => {
+          toasts.push(value);
+          return {};
+        },
+      },
+    },
+  } as unknown as PluginInput;
+  const hooks = await server.server(input, { configFile: path });
   const config = {
     permission: { bash: 'deny' as const },
     agent: { worker: { groups: ['earlier', 'middle', 'later'] } },
   };
-  const before = structuredClone(config);
-  await assert.rejects(hooks.config!(config), /Unsupported permission compilation/);
-  assert.deepEqual(config, before);
+  await hooks.config!(config);
+  assert.deepEqual(config.permission, { bash: 'allow' });
+  assert.deepEqual(config.agent.worker, { groups: ['earlier', 'middle', 'later'], model: 'fixture/kept' });
+  assert.equal(toasts.length, 1);
+  assert.equal(stderr.mock.callCount(), 1);
+  assert.match(JSON.stringify(toasts), /worker.*webfetc\?.*webfetch/);
+  assert.ok(JSON.stringify(toasts).includes(path));
+  assert.match(JSON.stringify(toasts), /more permissive/);
+  await hooks.config!(config);
+  assert.equal(toasts.length, 1);
+  const deliver = hooks['chat.message']!;
+  const messageInput = { sessionID: 'session-one' } as Parameters<typeof deliver>[0];
+  const messageOutput = { message: { agent: 'worker' }, parts: [] } as unknown as Parameters<typeof deliver>[1];
+  await deliver(messageInput, messageOutput);
+  await deliver(messageInput, messageOutput);
+  assert.equal(toasts.length, 2, 'active warning is replayed once per session');
+  config.agent.worker.groups = [];
+  await hooks.config!(config);
+  assert.equal(toasts.length, 3);
+  assert.match(JSON.stringify(toasts.at(-1)), /resolved/);
+  await deliver(messageInput, messageOutput);
+  assert.equal(toasts.length, 4);
+  assert.match(JSON.stringify(toasts.at(-1)), /resolved for this session/);
 });
 
 test('generated wildcard keys retain authored provenance and overwritten candidates', () => {
@@ -484,4 +517,32 @@ test('generated wildcard keys retain authored provenance and overwritten candida
   assert.equal(origin.pointer, '/agent/groups/last/permission/mcp_*/b');
   assert.equal(origin.sourceId, source.id);
   assert.equal(origin.overwritten[0]?.pointer, '/agent/groups/first/permission/mcp_*/b');
+});
+
+test('unsupported global contribution preserves native fallback and independent agent policy and model', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-global-fallback-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.mock.method(console, 'error', () => undefined);
+  const path = join(root, 'config-composer.jsonc');
+  const value = {
+    agent: {
+      permission: { webfetch: 'allow', 'webfetc?': { b: 'deny' } },
+      groups: { good: { permission: { bash: 'allow' }, model: 'fixture/model' } },
+    },
+  };
+  await writeFile(path, JSON.stringify(value));
+  const hooks = await server.server({} as PluginInput, { configFile: path });
+  const config = {
+    permission: { bash: 'deny' as const, 'webfetc?': { a: 'deny' as const } },
+    agent: { worker: { groups: ['good'] } },
+  };
+  await hooks.config!(config);
+  assert.deepEqual(config.permission, { bash: 'deny', 'webfetc?': { a: 'deny' } });
+  const agent: AgentSettings = config.agent.worker;
+  assert.equal(explainPermission(nativePermission(agent.permission), 'bash', 'anything').action, 'allow');
+  assert.equal(agent.model, 'fixture/model');
+  const source = { id: 'composer', path, text: JSON.stringify(value), fingerprint: 'fixture', writable: true, value };
+  assert.doesNotThrow(() =>
+    resolveLegacy(source, { permission: config.permission, agent: { worker: { groups: ['good'] } } }),
+  );
 });

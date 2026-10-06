@@ -142,11 +142,17 @@ test(
       limit: { context: 8192, output: 256 },
       variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } },
     };
+    const unsupportedLayers: PermissionPolicy[] = [
+      { 'webfetc?': { a: 'deny' } },
+      { webfetch: 'allow' },
+      { 'webfetc?': { b: 'deny' }, skill: 'deny' },
+    ];
     const permissionCases: {
       name: string;
       layers: PermissionPolicy[];
       action: 'allow' | 'ask' | 'deny';
       probe?: 'allow' | 'ask';
+      unsupported?: boolean;
     }[] = [
       {
         name: 'later-allow',
@@ -205,6 +211,12 @@ test(
         ],
         action: 'allow',
       },
+      ...(['deny', 'allow'] as const).map((action) => ({
+        name: `unsupported-${action}`,
+        layers: unsupportedLayers,
+        action,
+        unsupported: true,
+      })),
       { name: 'native-fallback', layers: [{ skill: { 'other-*': 'allow' } }], action: 'allow' },
       { name: 'group-over-native', layers: [{ skill: 'allow' }], action: 'allow' },
       { name: 'native-default-allow', layers: [], action: 'allow', probe: 'allow' },
@@ -233,7 +245,7 @@ test(
             {
               mode: 'primary',
               groups: layers.map((_, index) => `${name}-${index}`),
-              ...(name === 'native-fallback'
+              ...(name === 'native-fallback' || name === 'unsupported-allow'
                 ? { permission: { skill: 'allow' } }
                 : name === 'group-over-native'
                   ? { permission: { skill: 'deny' } }
@@ -395,6 +407,26 @@ test(
         };
       }[];
     }
+    const eventAbort = new AbortController();
+    t.after(() => eventAbort.abort());
+    let eventText = '';
+    const eventResponse = await fetch(`${baseURL}/global/event`, { signal: eventAbort.signal });
+    assert.ok(eventResponse.ok && eventResponse.body !== null);
+    const eventReader = eventResponse.body.getReader();
+    const collectEvents = async () => {
+      try {
+        for (;;) {
+          const item = await eventReader.read();
+          if (item.done) {
+            break;
+          }
+          eventText += new TextDecoder().decode(item.value);
+        }
+      } catch {
+        /* Abort ends the isolated event subscription. */
+      }
+    };
+    collectEvents().catch(() => undefined);
     const agents = await api<Agent[]>('/agent');
     const effective = await api<{
       permission: PermissionPolicy;
@@ -416,18 +448,23 @@ test(
     for (const fixture of permissionCases) {
       const global = composePermissions([config.permission, composer.agent.permission]);
       const explicit: PermissionPolicy =
-        fixture.name === 'native-fallback'
+        fixture.name === 'native-fallback' || fixture.name === 'unsupported-allow'
           ? { skill: 'allow' }
           : fixture.name === 'group-over-native'
             ? { skill: 'deny' }
             : {};
-      const policy = composePermissions([global, explicit, ...fixture.layers]);
+      const policy =
+        fixture.unsupported === true
+          ? composePermissions([global, explicit])
+          : composePermissions([global, explicit, ...fixture.layers]);
       if (fixture.name.includes('-domain-')) {
         assert.equal(policy.skill, undefined, 'native proof must exercise wildcard replay without an exact-tool block');
       }
       // /config's response schema enumerates known keys first; /agent exposes
       // the ordered rules actually used by native permission evaluation.
-      if (fixture.probe === undefined) {
+      if (fixture.unsupported === true) {
+        assert.deepEqual(effective.agent[fixture.name].permission ?? {}, explicit);
+      } else if (fixture.probe === undefined) {
         assert.deepEqual(effective.agent[fixture.name].permission, policy);
       } else {
         assert.deepEqual(effective.agent[fixture.name].permission ?? {}, {});
@@ -441,7 +478,7 @@ test(
       );
       const actual = agents.find((agent) => agent.name === fixture.name)?.permission;
       assert.ok(actual !== undefined);
-      if (fixture.probe === undefined) {
+      if (fixture.probe === undefined && fixture.unsupported !== true) {
         assert.deepEqual(
           actual.filter((rule) => rule.permission !== 'external_directory').slice(-emitted.length),
           emitted,
@@ -487,6 +524,11 @@ test(
       const messages = await api<Message[]>(`/session/${session.id}/message`);
       const toolName = fixture.probe === undefined ? 'skill' : `permission_default_${fixture.probe}`;
       const tool = messages.flatMap((message) => message.parts).find((part) => part.tool === toolName);
+      if (fixture.name === 'unsupported-deny') {
+        assert.equal(tool, undefined, 'inherited global deny keeps skill unavailable');
+        assert.equal(actual.findLast((rule) => rule.permission === 'sk*' && rule.pattern === '*')?.action, 'deny');
+        continue;
+      }
       assert.equal(
         tool?.state?.status,
         fixture.action === 'deny' ? 'error' : 'completed',
@@ -496,6 +538,9 @@ test(
         assert.match(tool.state.error ?? '', /rule which prevents you from using this specific tool call/);
       }
     }
+    assert.match(output, /Agent unsupported-allow:.*Fallback may be more permissive/);
+    assert.match(eventText, /tui.toast.show/);
+    assert.match(eventText, /Agent unsupported-allow:.*Fallback may be more permissive/);
     assert.equal(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), nativeBytes);
     for (const name of ['plan', 'build']) {
       const rules = agents.find((agent) => agent.name === name)?.permission;
@@ -702,5 +747,35 @@ test(
     );
     assert.match(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), /^\/\/ Native integration fixture/);
     assert.match(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8'), /^\/\/ Dedicated settings/);
+
+    // Global compilation failure preserves native globals and valid independent agents.
+    const brokenGlobal = {
+      ...composer,
+      agent: { ...composer.agent, permission: { webfetch: 'allow', 'webfetc?': { b: 'deny' }, skill: 'deny' } },
+    };
+    await writeFile(settingsPath, JSON.stringify(brokenGlobal));
+    const nativeFallback = { ...config, permission: { ...config.permission, 'webfetc?': { a: 'deny' } } };
+    await writeFile(join(configRoot, 'opencode.jsonc'), JSON.stringify(nativeFallback));
+    await reload();
+    const fallbackConfig = await api<{
+      permission: PermissionPolicy;
+      agent: Record<string, { permission?: PermissionPolicy }>;
+    }>('/config');
+    assert.deepEqual(fallbackConfig.permission, nativeFallback.permission);
+    // /config serializes known tool names before arbitrary keys; real evaluation
+    // below verifies the ordered native rules instead of that response order.
+    assert.deepEqual(fallbackConfig.agent['later-allow'].permission?.skill, { 'included-*': 'deny', '*': 'allow' });
+    const preserved = await api<{ id: string }>('/session', { title: 'Global failure independent policy' });
+    await api(`/session/${preserved.id}/message`, {
+      agent: 'later-allow',
+      parts: [{ type: 'text', text: 'Load included-skill now.' }],
+    });
+    const preservedMessages = await api<Message[]>(`/session/${preserved.id}/message`);
+    assert.equal(
+      preservedMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill')?.state?.status,
+      'completed',
+    );
+    assert.match(output, /Global scope:.*native global permissions remain/);
+    assert.match(eventText, /Global scope:.*native global permissions remain/);
   },
 );
