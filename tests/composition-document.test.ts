@@ -330,3 +330,26 @@ test('permission preview contracts distinguish an explicit ask from native fallb
   assert.equal(matched.fallback, undefined);
   assert.equal(invalid.action, 'ask');
 });
+
+test('invalid registry-name diagnostics include the escaped offending property', () => {
+  for (const [input, pointer] of [
+    [{ componentGroups: { 'Bad/Name': {} } }, '/componentGroups/Bad~1Name'],
+    [{ componentGroups: { 'bad~name': {} } }, '/componentGroups/bad~0name'],
+    [{ profiles: { 'Bad/Name': {} } }, '/profiles/Bad~1Name'],
+    [{ profiles: { 'bad~name': {} } }, '/profiles/bad~0name'],
+    [{ components: { agents: { '../bad~name': { prompt: 'Work' } } } }, '/components/agents/..~1bad~0name'],
+    [{ components: { skills: { '../bad~name': { file: './SKILL.md' } } } }, '/components/skills/..~1bad~0name'],
+    [{ components: { commands: { '../bad~name': { template: 'Work' } } } }, '/components/commands/..~1bad~0name'],
+    [{ components: { prompts: { '../bad~name': { text: 'Work' } } } }, '/components/prompts/..~1bad~0name'],
+  ] as const) {
+    assert.throws(
+      () => readCompositionDocument(input, 'source.jsonc'),
+      (error: unknown) => {
+        assert.ok(error instanceof CompositionValidationError);
+        assert.equal(error.diagnostic.sourceId, 'source.jsonc');
+        assert.equal(error.diagnostic.pointer, pointer);
+        return true;
+      },
+    );
+  }
+});
