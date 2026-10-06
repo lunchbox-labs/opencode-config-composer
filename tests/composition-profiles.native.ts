@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { installPackage } from './install-package.ts';
 import type * as Storage from '../src/config-composer/storage.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
+import type * as Activation from '../src/config-composer/composition/activation.ts';
 import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import { nativeAgentNames } from '../src/config-composer/composition/runtime.ts';
 
@@ -25,7 +26,7 @@ test(
     await mkdir(join(project, '.opencode'), { recursive: true });
     await mkdir(join(root, 'library/checks'), { recursive: true });
     const installed = await installPackage(configRoot);
-    const { loadSnapshot, planChange, savePlan, saveFilePlan } = (await import(
+    const { loadSnapshot, planChange, savePlan, saveFilePlan, previewFilePlan, reloadConfiguration } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
     )) as typeof Storage;
     const { planDefinition, previewDefinition } = (await import(
@@ -44,6 +45,18 @@ test(
       }
     });
     await writeFile(join(project, 'native-agent-prompt.txt'), 'Native project JSON body.\n');
+    const { planScope } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/activation.js')).href
+    )) as typeof Activation;
+    const activate = async (profiles?: string[]) => {
+      const plan = planScope(await loadSnapshot(configRoot, project, undefined, project, '/'), 'local', {
+        operation: 'selection',
+        profiles,
+      });
+      await saveFilePlan(plan, async () => {
+        await previewFilePlan(plan);
+      });
+    };
     const projectJson = JSON.stringify({
       $schema: 'https://opencode.ai/config.json',
       agent: {
@@ -197,6 +210,27 @@ test(
       options: Record<string, unknown>;
       model?: { providerID: string; modelID: string };
     }
+    const sharedPath = join(configRoot, 'config-composer.jsonc');
+    const sharedText = await readFile(sharedPath, 'utf8');
+    await rm(sharedPath);
+    const emptyBaseline = readRuntimeBaseline(await api('/config'), { root: project, directory: project }, configRoot);
+    const emptySnapshot = await loadSnapshot(configRoot, project, emptyBaseline, project, '/');
+    assert.equal(emptySnapshot.sources.documents.length, 0);
+    const firstSource = planScope(emptySnapshot, 'shared', { operation: 'create' });
+    await saveFilePlan(firstSource, async () => {
+      await previewFilePlan(firstSource);
+    });
+    const savedEmpty = await loadSnapshot(configRoot, project, emptyBaseline, project, '/');
+    await reloadConfiguration(savedEmpty, async (plugin) => {
+      await api('/global/config', 'PATCH', { plugin });
+    });
+    assert.equal(
+      readRuntimeBaseline(await api('/config'), { root: project, directory: project }, configRoot).model,
+      'fixture/native',
+    );
+    assert.equal(await readFile(sharedPath, 'utf8'), '{}\n');
+    await writeFile(sharedPath, sharedText);
+    await api('/instance/dispose', 'POST');
     const baseline = await api<Agent[]>('/agent');
     const conversation = await api<{ id: string; title: string }>('/session', 'POST', {
       title: 'Existing project conversation',
@@ -296,8 +330,7 @@ test(
       });
     }
     assert.deepEqual((await loadSnapshot(configRoot, project, undefined, project, '/')).sources.activeProfiles, []);
-    const local = join(project, '.opencode/config-composer.local.jsonc');
-    await writeFile(local, '{"activeProfiles":["edited-profile","work"]}');
+    await activate(['edited-profile', 'work']);
     await api('/instance/dispose', 'POST');
     const activated = await api<Agent[]>('/agent');
     for (const before of baseline.filter((item) => item.native)) {
@@ -343,10 +376,13 @@ test(
     assert.equal(commands.find((item) => item.name === 'review')?.agent, 'reviewer');
     const skills = await api<{ name: string; location: string }[]>('/skill');
     assert.ok(skills.some((item) => item.name === 'checks' && item.location === join(root, 'library/checks/SKILL.md')));
-    await writeFile(local, '{"activeProfiles":[]}');
+    await activate([]);
     await api('/instance/dispose', 'POST');
     const cleared = await api<Agent[]>('/agent');
     assert.deepEqual(cleared, baseline, 'empty local selection restores the exact native registry');
+    await activate();
+    await api('/instance/dispose', 'POST');
+    assert.deepEqual(await api<Agent[]>('/agent'), baseline, 'absent local selection inherits empty shared selection');
     const retained = await api<{ id: string; title: string }>(`/session/${conversation.id}`);
     assert.equal(retained.id, conversation.id);
     assert.equal(retained.title, conversation.title);

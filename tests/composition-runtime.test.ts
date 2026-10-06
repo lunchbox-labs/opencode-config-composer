@@ -527,3 +527,38 @@ test('externally edited generated commands retain their template after deselecti
   await f.hooks.config!(config);
   assert.deepEqual(config.command!.example, { template: 'Body', description: 'External description' });
 });
+
+test('an installation without optional sources publishes a native baseline for first-source creation', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-bootstrap-runtime-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const previous = process.env.OPENCODE_CONFIG_DIR;
+  process.env.OPENCODE_CONFIG_DIR = root;
+  t.after(() => {
+    if (previous === undefined) {
+      Reflect.deleteProperty(process.env, 'OPENCODE_CONFIG_DIR');
+    } else {
+      process.env.OPENCODE_CONFIG_DIR = previous;
+    }
+  });
+  const { packageName } = await import('../src/config-composer/package-name.ts');
+  const { readRuntimeBaseline } = await import('../src/config-composer/composition/runtime-baseline.ts');
+  const hooks = await server.server({ directory: root, worktree: root } as PluginInput);
+  const config: Config = {
+    plugin: [packageName],
+    model: 'fixture/native',
+    agent: { worker: { prompt: 'Native body.' } },
+  };
+  await hooks.config!(config);
+  assert.deepEqual(readRuntimeBaseline(config, { root, directory: root }), {
+    model: 'fixture/native',
+    agent: { worker: { prompt: 'Native body.' } },
+  });
+  await assert.rejects(
+    server.server({ directory: root, worktree: root } as PluginInput, {
+      configFile: join(root, 'explicitly-missing.jsonc'),
+    }),
+    /Cannot|missing|read|exist/i,
+  );
+  await writeFile(join(root, 'config-composer.jsonc'), '{broken');
+  await assert.rejects(hooks.config!(config), /JSONC|syntax|invalid/i);
+});

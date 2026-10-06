@@ -2,7 +2,7 @@ import { verifyNativeAgents } from './composition/native-baseline.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
 import type { Config, SessionStatus } from '@opencode-ai/sdk/v2';
 import { dialogNavigation } from '../tui/navigation.ts';
@@ -22,6 +22,7 @@ import {
 } from './settings.ts';
 import {
   type Change,
+  type FilePlan,
   type Snapshot,
   type StoredAgent,
   affectedGroups,
@@ -30,6 +31,7 @@ import {
   memberships,
   planChange,
   plannedChoices,
+  previewFilePlan,
   reloadConfiguration,
   saveFilePlan,
   savePlan,
@@ -41,7 +43,9 @@ import { editorSettings } from './composition/editor.ts';
 import { resolveProfileRuntime } from './composition/runtime.ts';
 import { openEffective } from './tui/compose.ts';
 import { openAuthoring } from './tui/authoring.ts';
-import { type DefinitionChange, planDefinition, previewDefinition } from './composition/authoring.ts';
+import { type DefinitionChange, planDefinition } from './composition/authoring.ts';
+import { planScope } from './composition/activation.ts';
+import { openActivation } from './tui/activation.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 const label = (choice: ModelChoice) =>
@@ -187,13 +191,39 @@ export function registerSettings(
     assertCurrent();
     return { root, client, assertCurrent };
   };
+  const currentProject = (root: string) => {
+    const path = api.state.path as { worktree?: string; directory?: string };
+    return resolve(
+      typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
+        ? path.worktree
+        : (path.directory ?? root),
+    );
+  };
+  const authorizePlan = async (plan: FilePlan) => {
+    const { assertCurrent, client } = await connection(plan.snapshot.root);
+    const projectWrite = plan.edits.some(
+      (edit) => edit.file.writeRoot !== undefined && edit.file.writeRoot !== plan.snapshot.root,
+    );
+    const assertProject = () => {
+      assertCurrent();
+      if (projectWrite && currentProject(plan.snapshot.root) !== plan.snapshot.sourceContext.root) {
+        throw new SettingsError('The current project changed. Reopen the settings editor.');
+      }
+    };
+    assertProject();
+    if (projectWrite) {
+      const verified = await verifySharedFilesystem(api, plan.snapshot.scopeRoot, plan.snapshot.sourceContext.root);
+      if (verified !== client) {
+        throw new SettingsError('The server connection changed. Reopen the editor.');
+      }
+    }
+    assertProject();
+    return assertProject;
+  };
   const load = async (reloading = false) => {
     const { root } = await connection();
     const path = api.state.path as { worktree?: string; directory?: string };
-    const project =
-      typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
-        ? path.worktree
-        : (path.directory ?? root);
+    const project = currentProject(root);
     const baseline = await readNative();
     const snapshot = await loadSnapshot(
       root,
@@ -430,10 +460,7 @@ export function registerSettings(
         if (api.lifecycle.signal.aborted) {
           return;
         }
-        await savePlan(plan, async () => {
-          const { assertCurrent } = await connection(snapshot.root);
-          return assertCurrent;
-        });
+        await savePlan(plan, () => authorizePlan(plan));
         offerReload(true);
       },
     );
@@ -848,10 +875,9 @@ export function registerSettings(
       root,
     );
   };
-  const proposeDefinition = async (snapshot: Snapshot, change: DefinitionChange) => {
+  const proposeComposition = async (snapshot: Snapshot, plan: FilePlan, change?: DefinitionChange) => {
     const isCurrent = navigation.checkpoint();
-    const plan = planDefinition(snapshot, change);
-    const preview = await previewDefinition(plan);
+    const preview = await previewFilePlan(plan);
     if (!isCurrent()) {
       return;
     }
@@ -884,7 +910,7 @@ export function registerSettings(
       ...new Set([...Object.keys(snapshot.resolved.agent), ...Object.keys(preview.resolved.agent)]),
     ].filter((name) => JSON.stringify(snapshot.resolved.agent[name]) !== JSON.stringify(preview.resolved.agent[name]));
     confirm(
-      'Save composition definition?',
+      change === undefined ? 'Save profile selection?' : 'Save composition definition?',
       `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
         `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
         `Changed global models: ${globals.length === 0 ? 'none' : globals.map(({ field, model }) => `${field}: ${model}`).join(', ')}.\n` +
@@ -894,13 +920,13 @@ export function registerSettings(
         'Save preserves conversations. Reload saved settings to apply changes.',
       async () => {
         await refreshNative(snapshot);
-        const latest = await previewDefinition(plan);
+        const latest = await previewFilePlan(plan);
         if (projection(latest) !== projection(preview)) {
           throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
         }
         const choices: ModelChoice[] = [...changed.map(([, choice]) => choice), ...globals, ...commands];
         if (
-          change.registry === 'configurationPresets' &&
+          change?.registry === 'configurationPresets' &&
           (change.operation === 'create' || change.operation === 'patch')
         ) {
           // Inactive presets have no affected agents, but their chosen model must still be available at save time.
@@ -917,25 +943,40 @@ export function registerSettings(
           plan,
           async () => {
             await refreshNative(snapshot);
-            if (projection(await previewDefinition(plan)) !== projection(preview)) {
+            if (projection(await previewFilePlan(plan)) !== projection(preview)) {
               throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
             }
           },
-          async () => {
-            const { assertCurrent } = await connection(snapshot.root);
-            return assertCurrent;
-          },
+          () => authorizePlan(plan),
         );
         offerReload(true);
       },
     );
   };
+  const proposeDefinition = (snapshot: Snapshot, change: DefinitionChange) =>
+    proposeComposition(snapshot, planDefinition(snapshot, change), change);
   const composeMenu = () =>
     menu(
       'Compose',
       [
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
+        {
+          title: 'Profile activation and scope files',
+          value: 'activation',
+          run: async () => {
+            const isCurrent = navigation.checkpoint();
+            const snapshot = await load();
+            if (!isCurrent()) {
+              return;
+            }
+            openActivation(snapshot, {
+              menu,
+              back: navigation.back,
+              propose: (scope, change) => proposeComposition(snapshot, planScope(snapshot, scope, change)),
+            });
+          },
+        },
         {
           title: 'Author groups, presets and profiles',
           value: 'registry',

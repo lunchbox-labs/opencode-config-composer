@@ -26,6 +26,8 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           : process.cwd(),
     baseFile: typeof options.configFile === 'string' ? options.configFile : undefined,
     baseExplicit: options.configFile !== undefined,
+    // An optional empty installation must expose native state so the editor can create its first source.
+    allowEmpty: true,
   };
   let sources = await loadCompositionSources(context);
   let agents: Partial<Record<string, AgentSettings>> = {};

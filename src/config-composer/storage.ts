@@ -1,4 +1,4 @@
-import { lstat, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
@@ -52,6 +52,7 @@ export interface SourceFile {
   writable?: boolean;
   canonicalPath?: string;
   aliases?: string[];
+  writeRoot?: string;
 }
 export interface AgentFile {
   file: SourceFile;
@@ -69,6 +70,7 @@ export interface StoredAgent {
 }
 export interface Snapshot {
   root: string;
+  scopeRoot: string;
   configFile: SourceFile;
   config: Record<string, unknown>;
   settingsFile: SourceFile;
@@ -100,6 +102,7 @@ export type Change =
 export interface FileEdit {
   file: SourceFile;
   text: string;
+  create?: boolean;
 }
 export interface FilePlan {
   snapshot: Snapshot;
@@ -269,7 +272,7 @@ async function observedFile(root: string, original: SourceFile): Promise<SourceF
     }
   }
   if (original.writable !== false) {
-    return sourceFile(root, original.path);
+    return sourceFile(original.writeRoot ?? root, original.path);
   }
   const canonical = await realpath(original.path);
   if (canonical !== (original.canonicalPath ?? original.path)) {
@@ -299,6 +302,7 @@ export async function loadSnapshot(
   nativeWorktree = projectRoot,
 ): Promise<Snapshot> {
   const root = await realpath(directory);
+  const scopeRoot = await realpath(projectRoot);
   const entries = await readdir(root);
   const configs = entries.filter((name) => ['opencode.json', 'opencode.jsonc'].includes(name));
   if (entries.includes('config.json')) {
@@ -330,12 +334,13 @@ export async function loadSnapshot(
     throw new SettingsError('Config Composer plugin options support only configFile and an optional reloadToken.');
   }
   const sourceContext = {
-    root: projectRoot,
+    root: resolve(projectRoot),
     baseFile: configurationPath(
       typeof options.configFile === 'string' ? options.configFile : 'config-composer.jsonc',
       root,
     ),
     baseExplicit: typeof options.configFile === 'string',
+    allowEmpty: true,
   };
   const sources = await loadCompositionSources(sourceContext);
   const compositionFiles: SourceFile[] = [];
@@ -345,21 +350,29 @@ export async function loadSnapshot(
       throw new SettingsError('Composition sources changed while loading. Reopen the editor.');
     }
     const rel = relative(root, source.id);
+    const projectScope =
+      sourceContext.root === scopeRoot &&
+      ['config-composer.jsonc', 'config-composer.local.jsonc'].some(
+        (name) => source.id === join(scopeRoot, '.opencode', name),
+      );
     compositionFiles.push({
       ...file,
       canonicalPath: source.id,
       aliases: [...sources.paths].flatMap(([path, canonical]) =>
         canonical === source.id && path !== source.id ? [path] : [],
       ),
-      writable: source.writable && !rel.startsWith('..') && !isAbsolute(rel),
+      writable: source.writable && (projectScope || (!rel.startsWith('..') && !isAbsolute(rel))),
+      ...(projectScope ? { writeRoot: scopeRoot } : {}),
       mode: file.mode & 0o777,
     });
   }
-  const preferred = sources.scopes.find((source) => source.id === sourceContext.baseFile) ?? sources.scopes[0];
-  const settingsFile = compositionFiles.find((file) => file.path === preferred.id);
-  if (settingsFile === undefined) {
-    throw new SettingsError('No composition source is available for the editor.');
-  }
+  const preferred = sources.scopes.find((source) => source.id === sourceContext.baseFile) ?? sources.scopes.at(0);
+  const settingsFile = compositionFiles.find((file) => file.path === preferred?.id) ?? {
+    path: sourceContext.baseFile,
+    text: '{}\n',
+    mode: 0o600,
+    writable: false,
+  };
   const nativeModels: EditorNativeBaseline = native ?? {
     model: typeof config.model === 'string' ? config.model : undefined,
     small_model: typeof config.small_model === 'string' ? config.small_model : undefined,
@@ -488,6 +501,7 @@ export async function loadSnapshot(
   }
   return {
     root,
+    scopeRoot,
     configFile,
     config,
     settingsFile,
@@ -924,7 +938,7 @@ export async function plannedChoices(
   return choices;
 }
 
-async function atomicWrite(path: string, text: string, mode: number): Promise<void> {
+async function atomicWrite(path: string, text: string, mode: number, create = false): Promise<void> {
   const temporary = join(dirname(path), `.config-composer-${randomUUID()}.tmp`);
   try {
     const file = await open(temporary, 'wx', mode);
@@ -936,7 +950,12 @@ async function atomicWrite(path: string, text: string, mode: number): Promise<vo
     } finally {
       await file.close();
     }
-    await rename(temporary, path);
+    if (create) {
+      // Linking the completed temporary file publishes it atomically without replacing a concurrent file.
+      await link(temporary, path);
+    } else {
+      await rename(temporary, path);
+    }
   } finally {
     await unlink(temporary).catch(() => undefined);
   }
@@ -973,7 +992,11 @@ export async function previewFilePlan(
     overlays.set(edit.file.path, edit.text);
     overlays.set(edit.file.canonicalPath ?? edit.file.path, edit.text);
   }
-  const sources = await loadCompositionSources(plan.snapshot.sourceContext, overlays);
+  const sources = await loadCompositionSources(
+    plan.snapshot.sourceContext,
+    overlays,
+    new Set(plan.edits.filter((edit) => edit.create === true).map((edit) => edit.file.path)),
+  );
   const agent = await previewNativeAgents(plan.snapshot, overlays);
   const resolved = await resolveProfileRuntime(sources, { ...plan.snapshot.nativeModels, agent }, overlays);
   return { sources, resolved };
@@ -992,6 +1015,7 @@ export async function saveFilePlan(
     throw new SettingsError('Another settings edit is active, or a stale .config-composer.lock needs attention.');
   });
   const applied: FileEdit[] = [];
+  const createdDirectories: string[] = [];
   try {
     const assertAuthorized = await authorize?.();
     await observedComposition(plan.snapshot.sources);
@@ -1005,16 +1029,54 @@ export async function saveFilePlan(
     await observedSourceList(plan.snapshot);
     await validate();
     observedNativeVariables(plan.snapshot.nativeVariables);
+    await observedComposition(plan.snapshot.sources);
+    for (const original of plan.snapshot.files) {
+      if ((await observedFile(plan.snapshot.root, original)).text !== original.text) {
+        throw new SettingsError('Settings changed during validation. Reopen the editor.');
+      }
+    }
     for (const edit of plan.edits) {
       if (edit.file.writable === false) {
         throw new SettingsError(`Read-only composition source ${edit.file.path}.`);
       }
       assertAuthorized?.();
-      const before = await sourceFile(plan.snapshot.root, edit.file.path);
-      if (before.text !== edit.file.text || before.writable === false) {
-        throw new SettingsError('Settings changed or became read-only before saving. Reopen the editor.');
+      const writeRoot = edit.file.writeRoot ?? plan.snapshot.root;
+      const projectScope = ['config-composer.jsonc', 'config-composer.local.jsonc'].some(
+        (name) => edit.file.path === join(plan.snapshot.scopeRoot, '.opencode', name),
+      );
+      if (
+        (writeRoot !== plan.snapshot.root && (writeRoot !== plan.snapshot.scopeRoot || !projectScope)) ||
+        (await realpath(writeRoot)) !== writeRoot
+      ) {
+        throw new SettingsError('The composition write directory changed or is outside the selected scope.');
       }
-      await atomicWrite(edit.file.path, edit.text, edit.file.mode);
+      if (edit.create === true) {
+        if (!projectScope && edit.file.path !== join(plan.snapshot.root, 'config-composer.jsonc')) {
+          throw new SettingsError('Create a fixed shared, project, or local composition source first.');
+        }
+        if (projectScope) {
+          const parent = dirname(edit.file.path);
+          await mkdir(parent, { mode: 0o700 }).then(
+            () => createdDirectories.push(parent),
+            (error: unknown) => {
+              if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) {
+                throw error;
+              }
+            },
+          );
+        }
+      }
+      if (projectScope && (await realpath(dirname(edit.file.path))) !== dirname(edit.file.path)) {
+        throw new SettingsError('The project composition directory is a symbolic link or changed identity.');
+      }
+      if (edit.create !== true) {
+        const before = await sourceFile(writeRoot, edit.file.path);
+        if (before.text !== edit.file.text || before.writable === false) {
+          throw new SettingsError('Settings changed or became read-only before saving. Reopen the editor.');
+        }
+      }
+      assertAuthorized?.();
+      await atomicWrite(edit.file.path, edit.text, edit.file.mode, edit.create);
       applied.push(edit);
     }
   } catch (error) {
@@ -1025,10 +1087,17 @@ export async function saveFilePlan(
           incomplete = true;
           continue;
         }
-        await atomicWrite(edit.file.path, edit.file.text, edit.file.mode);
+        if (edit.create === true) {
+          await unlink(edit.file.path);
+        } else {
+          await atomicWrite(edit.file.path, edit.file.text, edit.file.mode);
+        }
       } catch {
         incomplete = true;
       }
+    }
+    for (const directory of createdDirectories.reverse()) {
+      await rmdir(directory).catch(() => undefined);
     }
     if (incomplete) {
       throw new SettingsError(

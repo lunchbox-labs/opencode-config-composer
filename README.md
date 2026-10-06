@@ -174,7 +174,15 @@ Clearing a profile override therefore restores the native fallback, including `o
 The matching Composer server plugin must be loaded. Different client/server native agent inputs or later
 plugin changes block editing with reload guidance. Runtime baseline metadata is never written to source files;
 reload accepts saved native edits that have not yet reached the running server.
-Project/local source creation and profile activation controls are separate follow-ups.
+
+The activation screen explicitly selects shared, project, or local scope. An ordered local list replaces
+an earlier selection; an absent key inherits, and an empty list selects no profiles. Later explicit
+selections are shown as masking earlier scopes. Saving never deletes conversations; reload remains explicit.
+Missing fixed scope files can be created as new JSONC destinations, including the first optional source.
+With no optional sources, the server preserves native configuration and publishes the editor baseline;
+explicitly configured missing files and malformed sources still fail validation.
+New files are published without replacing concurrent files, and project writes require their own shared
+filesystem check. Native project agent files and external imports remain read-only.
 
 
 Use `/agent-models` for global defaults, presets, groups, and individual overrides.

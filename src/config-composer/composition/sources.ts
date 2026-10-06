@@ -16,6 +16,7 @@ export interface ProjectContext {
   root: string;
   baseFile?: string;
   baseExplicit: boolean;
+  allowEmpty?: boolean;
 }
 
 export interface ProfileOccurrence {
@@ -60,6 +61,7 @@ function relativeFile<T extends { file?: string }>(value: T, path: string): T {
 export async function loadCompositionSources(
   context: ProjectContext,
   overlays: ReadonlyMap<string, string> = new Map(),
+  creations: ReadonlySet<string> = new Set(),
 ): Promise<LoadedSources> {
   const documents = new Map<string, CompositionSourceDocument>();
   const paths = new Map<string, string | undefined>();
@@ -80,18 +82,26 @@ export async function loadCompositionSources(
     reference?: Pick<FieldOrigin, 'sourceId' | 'pointer'>,
   ): Promise<CompositionSourceDocument | undefined> {
     const report = (message: string): never => fail(message, reference?.sourceId ?? path, reference?.pointer ?? '');
+    let virtual = false;
     try {
       await lstat(path);
     } catch (error) {
-      if (optional && error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        paths.set(path, undefined);
-        return undefined;
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        if (creations.has(path) && overlays.has(path)) {
+          virtual = true;
+        } else if (optional) {
+          paths.set(path, undefined);
+          return undefined;
+        } else {
+          report(`Could not read composition source ${path}.`);
+        }
+      } else {
+        report(`Could not read composition source ${path}.`);
       }
-      report(`Could not read composition source ${path}.`);
     }
     let canonical: string;
     try {
-      canonical = await realpath(path);
+      canonical = virtual ? resolve(path) : await realpath(path);
     } catch {
       return report(`Could not resolve composition source ${path}.`);
     }
@@ -100,11 +110,13 @@ export async function loadCompositionSources(
     if (cached !== undefined) {
       return cached;
     }
-    const file = await configurationFile(canonical).catch((error: unknown) =>
-      report(
-        `Could not read composition source ${path}: ${error instanceof Error ? error.message : 'unreadable file'}`,
-      ),
-    );
+    const file = virtual
+      ? { text: overlays.get(path) ?? '', mode: 0o600 }
+      : await configurationFile(canonical).catch((error: unknown) =>
+          report(
+            `Could not read composition source ${path}: ${error instanceof Error ? error.message : 'unreadable file'}`,
+          ),
+        );
     file.text = overlays.get(canonical) ?? file.text;
     totalBytes += Buffer.byteLength(file.text, 'utf8');
     if (totalBytes > 8 * 1024 * 1024) {
@@ -243,7 +255,7 @@ export async function loadCompositionSources(
     }
     scopes.push(source);
   }
-  if (scopes.length === 0) {
+  if (scopes.length === 0 && context.allowEmpty !== true) {
     fail('No Config Composer configuration source was found.');
   }
   freeze(provenance);

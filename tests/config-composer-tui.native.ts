@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { installPackage } from './install-package.ts';
 
-for (const scope of ['shared', 'project-only'] as const) {
+for (const scope of ['shared', 'project-only', 'empty'] as const) {
   test(`OpenCode renders both Composer menus with ${scope} sources`, { timeout: 140_000 }, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'composer-tui-native-'));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -52,14 +52,16 @@ for (const scope of ['shared', 'project-only'] as const) {
         agent: { worker: { mode: 'primary', groups: ['workers'], prompt: 'Reply briefly.' } },
       }),
     );
-    await writeFile(
-      join(scope === 'shared' ? configRoot : join(project, '.opencode'), 'config-composer.jsonc'),
-      JSON.stringify({
-        componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
-        profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
-        activeProfiles: ['work'],
-      }),
-    );
+    if (scope !== 'empty') {
+      await writeFile(
+        join(scope === 'shared' ? configRoot : join(project, '.opencode'), 'config-composer.jsonc'),
+        JSON.stringify({
+          componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
+          profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
+          activeProfiles: ['work'],
+        }),
+      );
+    }
     await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [installed.directory] }));
     const env: NodeJS.ProcessEnv = {
       ...process.env,

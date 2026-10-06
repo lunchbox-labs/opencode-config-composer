@@ -567,6 +567,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   };
   let frozenConfig: unknown;
   let providerError = false;
+  let projectProofError = false;
   let providerGate: (() => Promise<void>) | undefined;
   let proofGate: (() => Promise<void>) | undefined;
   const controller = new AbortController();
@@ -578,7 +579,13 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   const commands: { name: string; slashName: string; run: () => void | Promise<void> }[] = [];
   const toasts: { message: string }[] = [];
   const api = {
-    state: { path: { config: serverDirectory } },
+    state: {
+      path: {
+        config: serverDirectory,
+        directory: undefined as string | undefined,
+        worktree: undefined as string | undefined,
+      },
+    },
     route: { current: { name: 'home' } },
     lifecycle: {
       signal: controller.signal,
@@ -626,6 +633,9 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       file: {
         read: async (input: { path: string }) => {
           await proofGate?.();
+          if (projectProofError && input.path.startsWith(api.state.path.directory)) {
+            throw new Error('Project proof failed');
+          }
           return {
             data: { type: 'text', content: await readFile(join(serverRoot, relative(root, input.path)), 'utf8') },
           };
@@ -733,6 +743,13 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
     },
     get updates() {
       return updates;
+    },
+    setProject(value: string) {
+      api.state.path.directory = value;
+      api.state.path.worktree = value;
+    },
+    setProjectProofError(value: boolean) {
+      projectProofError = value;
     },
     setProviderError(value: boolean) {
       providerError = value;
@@ -1543,4 +1560,105 @@ test('reload accepts saved native edits while normal preview rejects the stale r
     (parseConfig(await readFile(path, 'utf8')).agent as Record<string, { model: string }>).builtin.model,
     'example/next',
   );
+});
+
+test('profile activation UI distinguishes local none from inheritance and preserves cancellation', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('local');
+  await ui.select('none');
+  assert.match(ui.message(), /local profile selection: none/);
+  await ui.cancel();
+  await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+  await ui.select('none');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, []);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('local');
+  await ui.select('inherit');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, ['work']);
+});
+
+test('ordered activation editor reorders unique pending profiles before saving', async (t) => {
+  const root = await fixture(t);
+  const value = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
+  (value.profiles as Record<string, unknown>).review = { layers: [] };
+  await writeFile(join(root, 'config-composer.jsonc'), JSON.stringify(value));
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('local');
+  await ui.select('ordered');
+  await ui.select('+add');
+  assert.ok(
+    ui.dialog !== undefined && 'options' in ui.dialog && !ui.dialog.options.some((option) => option.value === 'work'),
+  );
+  await ui.select('review');
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, ['review', 'work']);
+});
+
+test('project writes require project filesystem proof after the installation proof succeeds', async (t) => {
+  const root = await fixture(t);
+  const project = await mkdtemp(join(tmpdir(), 'composer-ui-project-'));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  const ui = uiHarness(root);
+  ui.setProject(project);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('project');
+  await ui.select('create');
+  ui.setProjectProofError(true);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /shared filesystem/);
+  await assert.rejects(readFile(join(project, '.opencode/config-composer.jsonc')), /ENOENT/);
+});
+
+test('first-source creation makes a project definition destination available without changing conversations', async (t) => {
+  const root = await fixture(t);
+  const project = await mkdtemp(join(tmpdir(), 'composer-ui-first-source-'));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  await rm(join(root, 'config-composer.jsonc'));
+  const ui = uiHarness(root);
+  ui.setProject(project);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('project');
+  await ui.select('create');
+  await ui.confirm();
+  const source = join(project, '.opencode/config-composer.jsonc');
+  assert.deepEqual(parseConfig(await readFile(source, 'utf8')), {});
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('+create');
+  await ui.enter('review');
+  await ui.select(source);
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root, project)).sources.registry.profiles?.review, { layers: [] });
+  assert.deepEqual((await loadSnapshot(root, project)).sources.activeProfiles, []);
+  assert.equal(ui.updates, 0);
+});
+
+test('changing projects before confirmation rejects the previous project scope write', async (t) => {
+  const root = await fixture(t);
+  const project = await mkdtemp(join(tmpdir(), 'composer-ui-switched-project-'));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  const ui = uiHarness(root);
+  ui.setProject(project);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('local');
+  await ui.select('none');
+  ui.setProject(root);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /project changed/);
+  await assert.rejects(readFile(join(project, '.opencode/config-composer.local.jsonc')), /ENOENT/);
 });

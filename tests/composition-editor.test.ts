@@ -388,7 +388,7 @@ test('an absent optional shared file permits project-only editor snapshots and n
   const snapshot = await loadSnapshot(root, project);
   assert.equal(snapshot.sourceContext.baseExplicit, false);
   assert.equal(snapshot.settingsFile.path, source);
-  assert.equal(snapshot.settingsFile.writable, false);
+  assert.equal(snapshot.settingsFile.writable, true);
   await savePlan(planChange(snapshot, { kind: 'global', field: 'model', model: 'fixture/changed' }));
   assert.equal((await loadSnapshot(root, project)).config.model, 'fixture/changed');
   await writeFile(
