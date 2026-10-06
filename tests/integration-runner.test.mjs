@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { nativePackage } from '../scripts/integration.mjs';
+import { nativePackage, ripgrepPackage } from '../scripts/integration.mjs';
 import { isolatedEnvironment } from './integration/harness.ts';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -13,6 +13,14 @@ test('integration runner selects native Linux and Windows binaries and rejects u
   assert.deepEqual(nativePackage('win32', 'x64'), { name: 'opencode-windows-x64', executable: 'opencode.exe' });
   assert.throws(() => nativePackage('darwin', 'x64'), /Linux and Windows/);
   assert.throws(() => nativePackage('linux', 'arm64'), /x64/);
+});
+
+test('native ripgrep prerequisites use pinned platform binaries and release checksums', () => {
+  assert.equal(ripgrepPackage('win32').executable, 'rg.exe');
+  assert.equal(ripgrepPackage('linux').executable, 'rg');
+  assert.match(ripgrepPackage('win32').sha256, /^[a-f0-9]{64}$/);
+  assert.match(ripgrepPackage('linux').sha256, /^[a-f0-9]{64}$/);
+  assert.throws(() => ripgrepPackage('darwin'), /Linux or Windows/);
 });
 
 test('native child environment excludes inherited credentials and personal configuration', () => {
