@@ -572,6 +572,13 @@
         },
         "agents": {
           "$ref": "#/$defs/agentConfiguration"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/permissionRule"
+          },
+          "maxItems": 1024
         }
       },
       "description": "Native runtime model defaults plus settings applied to all selected agents before profile contributions."
@@ -595,6 +602,13 @@
             "$ref": "#/$defs/agentConfiguration"
           },
           "maxProperties": 1024
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/permissionRule"
+          },
+          "maxItems": 1024
         }
       },
       "description": "Runtime model defaults and settings keyed by selected agent. Applied after profile layers; document project overrides precede local overrides."

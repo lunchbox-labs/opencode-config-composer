@@ -298,7 +298,7 @@ test('nested preset origins point to authored fields and preserve native overwri
   assert.equal(other.provenance['/agent/build/model'].overwritten[0].operation, 'native');
 });
 
-test('permission contributions retain authored order and canonical origins without claiming compilation', async (t) => {
+test('permission contributions retain authored order and canonical origins through compilation', async (t) => {
   const f = await fixture(t, {
     defaults: { agents: { permissions: [{ tool: 'bash', action: 'deny' }] } },
     componentGroups: {
@@ -324,9 +324,11 @@ test('permission contributions retain authored order and canonical origins witho
       '/configurationPresets/loose/permissions/0/action',
     ],
   );
-  const config = {};
-  await assert.rejects(f.hooks.config!(config), /permission compiler/);
-  assert.deepEqual(config, {}, 'staging atomicity only: the native host can still continue after this error');
+  const config: Config = {};
+  await f.hooks.config!(config);
+  assert.deepEqual(agent(config, 'build')?.permission, {
+    bash: { '*': 'deny', 'git *': 'ask', 'git status': 'allow' },
+  });
 });
 
 test('prompt-only component settings do not pin an inherited model against later profile layers', async (t) => {

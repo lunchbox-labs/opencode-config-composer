@@ -2,6 +2,7 @@ import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
 import { isDeepStrictEqual } from 'node:util';
 import { type AgentSettings, type EffectiveChoice, SettingsError, record } from './settings.ts';
+import { permissionNotifications } from './composition/permission-warnings.ts';
 import { publishRuntimeBaseline } from './composition/runtime-baseline.ts';
 import { MembershipValidationError } from './composition/membership.ts';
 import { expandIncludes } from './prompts.ts';
@@ -31,6 +32,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     allowEmpty: true,
   };
   let sources = await loadCompositionSources(context);
+  const notifications = permissionNotifications(input.client);
   let agents: Partial<Record<string, AgentSettings>> = {};
   let choices: Partial<Record<string, EffectiveChoice & ResolvedModelSettings>> = {};
   interface Authored {
@@ -66,13 +68,17 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     const result = { ...value };
     if (previous !== undefined) {
       for (const key of [...new Set([...Object.keys(previous.native), ...Object.keys(previous.applied)])]) {
-        if (isDeepStrictEqual(value[key], previous.applied[key])) {
+        if (
+          key === 'permission'
+            ? JSON.stringify(value[key]) === JSON.stringify(previous.applied[key])
+            : isDeepStrictEqual(value[key], previous.applied[key])
+        ) {
           if (Object.hasOwn(previous.native, key)) {
             result[key] = previous.native[key];
           } else {
             Reflect.deleteProperty(result, key);
           }
-        } else if (recursive && record(value[key]) && record(previous.applied[key])) {
+        } else if (key !== 'permission' && recursive && record(value[key]) && record(previous.applied[key])) {
           const restored = restore(
             value[key],
             {
@@ -92,6 +98,9 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     return result;
   }
   return {
+    'chat.message': async (input, output) => {
+      await notifications.session(input.sessionID, output.message.agent);
+    },
     'tool.execute.after': async (input, output) => {
       if (input.tool !== 'skill') {
         return;
@@ -111,7 +120,10 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         throw new SettingsError('An agent configuration must be an object.');
       }
       const previous = configurations.get(config);
-      const nativeGlobals = restore({ model: config.model, small_model: config.small_model }, previous);
+      const nativeGlobals = restore(
+        { model: config.model, small_model: config.small_model, permission: config.permission },
+        previous,
+      );
       const staged: Record<string, AgentSettings> = {};
       const owned: Record<string, AgentSettings> = {};
       for (const [name, value] of Object.entries(configured)) {
@@ -149,13 +161,6 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
         throw error;
       }
-      // Staging guard only: OpenCode catches config-hook errors and may continue without Composer.
-      // This is not fail-closed enforcement; do not release until failure behavior is integrated.
-      if (resolved.permissions.length !== 0) {
-        throw new SettingsError(
-          'Selected profiles contain permission contributions. This runtime requires the canonical permission compiler before these profiles can be activated.',
-        );
-      }
       const previousResources = resources.get(config);
       const nativeCommands = restore(config.command ?? {}, previousResources?.commands);
       if (!commandConfigurations(nativeCommands)) {
@@ -186,6 +191,11 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           Reflect.deleteProperty(configured, name);
         }
       }
+      if (resolved.permission === undefined) {
+        delete config.permission;
+      } else {
+        Object.assign(config, { permission: resolved.permission });
+      }
       const authored = new Map<string, Authored>();
       for (const [name, value] of Object.entries(resolved.agent)) {
         const existing = configured[name];
@@ -209,8 +219,12 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       }
       config.agent = configured;
       configurations.set(config, {
-        native: nativeGlobals,
-        applied: { model: config.model, small_model: config.small_model },
+        native: structuredClone(nativeGlobals),
+        applied: structuredClone({
+          model: config.model,
+          small_model: config.small_model,
+          permission: config.permission,
+        }),
         added: new Set(Object.keys(resolved.agent).filter((name) => !Object.hasOwn(staged, name))),
         agents: authored,
       });
@@ -232,6 +246,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         nativeGlobals,
         staged,
       );
+      await notifications.applied(resolved.permissionWarnings);
     },
     // eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning parameter hook.
     'chat.params': async (input, output) => {

@@ -10,11 +10,11 @@ The npm package name is **`@lunchbox-labs/opencode-config-composer`**.
 
 The canonical composition format is specified in [the schema contract](docs/composition-schema.md).
 `schema.json` describes that format, including components, mixed groups, presets, and named profiles.
-The draft server and model/membership editors consume this format and explicit imports. Profile/component
-authoring screens and native permission compilation/failure handling remain incomplete, so this branch is not release-ready. OpenCode can catch
-a config-hook error and continue with native settings; rejecting a permission profile is not fail-closed
-enforcement. The setup examples below describe the preceding released format, which the canonical
-server rejects with migration guidance. Use the schema contract for canonical configuration.
+The draft server and composition editors consume this format and explicit imports. Native permission
+compilation uses the ordered canonical contributions. Unsupported scopes warn and continue with the
+fallback described below. Scoped apply and the final integration acceptance suite remain incomplete,
+so this branch is not release-ready. The setup examples below describe the preceding released format,
+which the canonical server rejects with migration guidance. Use the schema contract for canonical configuration.
 
 The model editor updates only model/reference/variant fields in canonical `componentGroups` and
 `configurationPresets`, retaining their permissions, parameters, prompt settings, and component membership.
@@ -158,7 +158,7 @@ Use `/compose` to open the composition hub. It links the model and membership ed
 saved preview of active profiles, replay order, resolved fields, source paths, references, and overwritten
 origins. Back and Escape return across sections; `/agent-models` and `/agent-groups` remain available.
 The preview distinguishes saved composition from the running configuration and session model selections.
-Ordered permission contributions are inspectable, with enforcement integration still pending.
+Ordered permission contributions, compiled policies, native origins, and compilation warnings are inspectable.
 
 The prompt screen selects an explicit writable JSONC source and target, then edits ordered multiline
 prepend/append fragments. Fragments can contain include markers or a complete `@source/file.md` shorthand.
@@ -213,11 +213,28 @@ until explicitly selected through a profile layer.
 Configured match previews can inspect one definition or an active agent's complete contribution sequence.
 They identify the latest matching rule and its source, including earlier matching candidates. A later
 `allow` can replace an earlier `deny`; a later nonmatch leaves the earlier match intact. No Composer match
-defers to native globals/defaults without guessing their action. These previews do not prove enforcement:
-this draft still cannot apply profiles with permission contributions until the native compiler and host
-failure policy are integrated. Saving and previewing rules do not reload the running server.
-Permission saves show a saved-only result. Explicit Reload rejects selected permission contributions
-before contacting the server, preserving the current running configuration while authoring continues.
+defers to native permissions without guessing their action. These previews describe configured contributions;
+native defaults and remembered session approvals can change the effective result. Saves preserve the running
+configuration until explicit Reload. Review includes any compilation warning for the candidate.
+
+Global rules use `defaults.permissions` and `overrides.permissions`. Active profile `overrides.permissions`
+replay in profile order between scoped defaults and scoped overrides. `defaults.agents.permissions` applies
+only to selected agents. Agent contributions compile after the applied global policy and native agent rules.
+An unmatched contribution retains those fallbacks. Compiled provenance retains authored array pointers,
+including for generated wildcard keys; failed scopes retain native origins.
+
+Unsupported native ordering or a rule shape that the pinned host cannot express skips **all Composer
+permission contributions for that scope**. An affected agent retains its native permission object and the
+successfully applied global policy. An affected global scope retains native global permissions; independent
+agent policies still compile. Models, prompts, commands, skills, and other valid policies continue to apply.
+Fallback can be more permissive and omit intended deny rules. Composer does not alter session rules or
+introduce additional tool blocking. Use concrete tool names to resolve unsupported wildcard interleaving.
+
+Warnings name the scope, source paths, JSON pointers, conflict, and fallback. They appear on stderr and as
+native TUI toast events. Startup delivery is nonblocking. Active warnings replay when an affected session is
+used; identical warnings are deduplicated per instance/session, with change and recovery notifications.
+Reload starts a new instance and may repeat an active warning. A failed notification transport does not
+prevent other settings from applying; stderr remains available to headless clients.
 
 The hub's definition editor creates, renames, and deletes component groups, configuration presets, and profiles.
 New definitions require an explicit existing writable JSONC destination and do not activate profiles.

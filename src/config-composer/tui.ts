@@ -40,7 +40,11 @@ import {
 } from './storage.ts';
 import { configurationDirectory } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
-import { type EditorNativeBaseline, readRuntimeBaseline } from './composition/runtime-baseline.ts';
+import {
+  type EditorNativeBaseline,
+  readRuntimeBaseline,
+  sameNativePermissionOrder,
+} from './composition/runtime-baseline.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveProfileRuntime } from './composition/runtime.ts';
 import { openEffective } from './tui/compose.ts';
@@ -107,7 +111,10 @@ export function registerSettings(
   };
   const refreshNative = async (snapshot: Snapshot) => {
     const models = await readNative();
-    if (!isDeepStrictEqual(snapshot.nativeModels.agent, models.agent)) {
+    if (
+      !isDeepStrictEqual(snapshot.nativeModels.agent, models.agent) ||
+      !sameNativePermissionOrder(snapshot.nativeModels, models)
+    ) {
       throw new SettingsError(
         'Native agent settings changed on the server. Reopen the editor and review the new preview.',
       );
@@ -908,7 +915,6 @@ export function registerSettings(
       title: string;
       details: string;
       validate?: (preview: Awaited<ReturnType<typeof previewFilePlan>>) => Promise<void>;
-      savedMessage?: string;
     },
   ) => {
     const isCurrent = navigation.checkpoint();
@@ -923,6 +929,9 @@ export function registerSettings(
         choices: value.resolved.choices,
         agent: value.resolved.agent,
         permissions: value.resolved.permissions,
+        globalPermissions: value.resolved.globalPermissions,
+        permission: value.resolved.permission,
+        permissionWarnings: value.resolved.permissionWarnings,
         skillPaths: value.resolved.skillPaths,
         commands: value.resolved.commands,
         profiles: value.sources.activeProfiles,
@@ -959,9 +968,8 @@ export function registerSettings(
         `Changed command models: ${commands.length === 0 ? 'none' : commands.map(({ name, model }) => `${name}: ${model}`).join(', ')}.\n` +
         `Commands: ${Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
         `Active profiles: ${preview.sources.activeProfiles.join(' → ')}.\n` +
-        (review?.savedMessage === undefined
-          ? 'Save preserves conversations. Reload saved settings to apply changes.'
-          : 'Save preserves conversations and records authoring changes only. Selected permission contributions cannot be applied by this draft.'),
+        `${preview.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}\n` +
+        'Save preserves conversations. Reload saved settings to apply changes.',
       async () => {
         await refreshNative(snapshot);
         const latest = await previewFilePlan(plan);
@@ -996,11 +1004,7 @@ export function registerSettings(
           },
           () => authorizePlan(plan),
         );
-        if (review?.savedMessage !== undefined) {
-          navigation.alert({ title: 'Configured permission rules saved', message: review.savedMessage });
-        } else {
-          offerReload(true);
-        }
+        offerReload(true);
       },
     );
   };
@@ -1030,7 +1034,8 @@ export function registerSettings(
       return;
     }
     const assertBaseline = async () => {
-      if (!isDeepStrictEqual(await readNative(), baseline)) {
+      const current = await readNative();
+      if (!isDeepStrictEqual(current, baseline) || !sameNativePermissionOrder(current, baseline)) {
         throw new SettingsError(
           'Native server inputs changed. Reopen the repair editor and review the candidate again.',
         );
@@ -1194,7 +1199,7 @@ export function registerSettings(
         {
           title: 'Ordered permission rules and configured previews',
           value: 'permissions',
-          description: 'Authoring only; native enforcement integration is pending',
+          description: 'Ordered rules, native compilation, and scope-specific fallback warnings',
           run: async () => {
             const isCurrent = navigation.checkpoint();
             const snapshot = await load();
@@ -1225,7 +1230,6 @@ export function registerSettings(
                 proposeComposition(snapshot, planPermissions(snapshot, target, rules), undefined, {
                   title: 'Save configured permission rules?',
                   details: `${permissionStatus}\n\n${rules === undefined ? 'Remove local contributions.' : rules.map((rule, index) => `${index + 1}. ${rule.tool} ${rule.pattern ?? '*'} → ${rule.action}`).join('\n')}`,
-                  savedMessage: `${permissionStatus}\n\nThe JSONC rules were saved for authoring. The running configuration and conversations are unchanged. Remove selected permission contributions or deactivate their profiles before using Reload in this draft.`,
                 }),
               preview: async (target, rules) => {
                 const current = navigation.checkpoint();
@@ -1251,7 +1255,7 @@ export function registerSettings(
                       const result = previewPermission(contributions, agent, tool, input);
                       navigation.alert({
                         title: 'Configured permission match',
-                        message: `${permissionStatus}\n\n${result.fallback === 'native' ? 'No Composer rule matches. Defer to native globals/defaults; no native action is inferred.' : `${result.action}: ${result.matched.permission} ${result.matched.pattern}\n${result.origin?.sourceId ?? ''}#${result.origin?.pointer ?? ''}\nEarlier matching contributions: ${result.origin?.overwritten.map((origin) => `${origin.sourceId ?? ''}#${origin.pointer}`).join(', ') ?? 'none'}`}`,
+                        message: `${permissionStatus}\n\n${result.fallback === 'native' ? 'No Composer rule matches. Defer to native globals/defaults; no native action is inferred.' : `${result.action}: ${result.matched.permission} ${result.matched.pattern}\n${result.origin?.sourceId ?? ''}#${result.origin?.pointer ?? ''}\nEarlier matching contributions: ${result.origin?.overwritten.map((origin) => `${origin.sourceId ?? ''}#${origin.pointer}`).join(', ') ?? 'none'}`}\n\n${candidate.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}`,
                       });
                     }),
                   );
@@ -1262,11 +1266,24 @@ export function registerSettings(
                     description: 'Excludes other layers and active selections',
                     run: () => testMatch('local', local),
                   },
+                  {
+                    title: 'Global configured rules',
+                    value: '+global',
+                    run: () =>
+                      testMatch(
+                        'global',
+                        candidate.resolved.globalPermissions.map((item) => ({ ...item, agent: 'global' })),
+                      ),
+                  },
                   ...candidate.resolved.selectedAgents.map((agent) => ({
                     title: agent,
                     value: `agent:${agent}`,
                     description: 'All configured active contributions in replay order',
-                    run: () => testMatch(agent, candidate.resolved.permissions),
+                    run: () =>
+                      testMatch(agent, [
+                        ...candidate.resolved.globalPermissions.map((item) => ({ ...item, agent })),
+                        ...candidate.resolved.permissions,
+                      ]),
                   })),
                 ]);
               },

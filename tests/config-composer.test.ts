@@ -1281,7 +1281,7 @@ test('compose permission inspection preserves ordered contributions and states t
   await ui.select('effective');
   await ui.select('+permissions');
   assert.ok(ui.message().indexOf('bash * → deny') < ui.message().indexOf('bash git * → allow'));
-  assert.match(ui.message(), /compilation and failure handling are not integrated/);
+  assert.match(ui.message(), /native defaults and session approvals are outside this preview/);
   assert.equal(ui.updates, 0);
 });
 
@@ -1785,7 +1785,7 @@ test('permission UI edits, reorders and previews rules without saving cancelled 
   await ui.enter('git status');
   assert.match(ui.message(), /deny: bash git \*/);
   assert.match(ui.message(), /Earlier matching contributions/);
-  assert.match(ui.message(), /cannot apply/);
+  assert.match(ui.message(), /unsupported scope/);
   await ui.escape();
   await ui.escape();
   await ui.escape();
@@ -1794,7 +1794,7 @@ test('permission UI edits, reorders and previews rules without saving cancelled 
   await ui.select('earlier');
   await ui.select('+save');
   assert.ok(ui.message().indexOf('bash git * → deny') < ui.message().indexOf('* * → allow'));
-  assert.doesNotMatch(ui.message(), /Reload saved settings to apply/);
+  assert.match(ui.message(), /Reload saved settings to apply/);
   await ui.cancel();
   assert.equal(await readFile(path, 'utf8'), original);
   await ui.select('+save');
@@ -1803,8 +1803,7 @@ test('permission UI edits, reorders and previews rules without saving cancelled 
     { tool: 'bash', pattern: 'git *', action: 'deny' },
     { tool: '*', action: 'allow' },
   ]);
-  assert.equal(ui.title(), 'Configured permission rules saved');
-  assert.match(ui.message(), /running configuration and conversations are unchanged/);
+  assert.equal(ui.title(), 'Settings saved');
   assert.equal(ui.updates, 0);
 });
 

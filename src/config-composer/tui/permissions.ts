@@ -1,8 +1,13 @@
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
 import type { Snapshot } from '../storage.ts';
 import { definitionDestinations } from '../composition/authoring.ts';
-import { type ConfigurationTarget, configurationTargets } from '../composition/parameter-authoring.ts';
-import { localPermissionRules, permissionRules, permissionStatus } from '../composition/permission-authoring.ts';
+import type { ConfigurationTarget } from '../composition/parameter-authoring.ts';
+import {
+  localPermissionRules,
+  permissionRules,
+  permissionStatus,
+  permissionTargets,
+} from '../composition/permission-authoring.ts';
 import type { PermissionRule } from '../composition/types.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
@@ -148,7 +153,7 @@ export function openPermissions(snapshot: Snapshot, ui: PermissionUi): void {
             description: 'Create an inactive reusable preset without a model binding',
             run: () => ui.prompt('Permission preset name', '', (name) => ui.create(file.path, name)),
           },
-          ...configurationTargets(snapshot, file.path).map((target) => ({
+          ...permissionTargets(snapshot, file.path).map((target) => ({
             title: target.label,
             value: JSON.stringify(target.path),
             description: `/${target.path.join('/')}`,

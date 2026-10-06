@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { packageName } from '../src/config-composer/package-name.ts';
 import {
+  editJson,
   loadSnapshot,
   parseConfig,
   previewFilePlan,
@@ -68,15 +69,14 @@ test('configured permission preview keeps earlier matches until a later match wi
       activeProfiles: ['work'],
     }),
   );
-  const snapshot = await loadSnapshot(root);
+  let snapshot = await loadSnapshot(root);
   let updates = 0;
-  await assert.rejects(
-    reloadConfiguration(snapshot, async () => {
-      updates++;
-    }),
-    /cannot apply/,
-  );
-  assert.equal(updates, 0);
+  await reloadConfiguration(snapshot, async (plugins) => {
+    updates++;
+    await writeFile(snapshot.configFile.path, editJson(snapshot.configFile.text, ['plugin'], plugins));
+  });
+  assert.equal(updates, 1);
+  snapshot = await loadSnapshot(root);
   const target = configurationTargets(snapshot, path).find((item) => item.label === 'Group: work')!;
   assert.equal(previewPermission(snapshot.resolved.permissions, 'build', 'bash', 'git').action, 'deny');
   assert.equal(previewPermission(snapshot.resolved.permissions, 'build', 'bash', 'npm test').action, 'ask');

@@ -451,6 +451,7 @@ export async function loadEditorSnapshot(
     writable: false,
   };
   const nativeModels: EditorNativeBaseline = native ?? {
+    permission: config.permission,
     model: typeof config.model === 'string' ? config.model : undefined,
     small_model: typeof config.small_model === 'string' ? config.small_model : undefined,
   };
@@ -1010,7 +1011,7 @@ export async function plannedChoices(
     change.kind === 'global'
       ? { ...native, [change.field]: change.model }
       : change.kind === 'all'
-        ? { model: change.choice.model, small_model: change.choice.model }
+        ? { ...native, model: change.choice.model, small_model: change.choice.model }
         : native;
   const reads = planReadCollector(plan);
   const resolved = await resolveProfileRuntime(sources, { ...defaults, agent: agents }, overlays, reads.read);
@@ -1363,11 +1364,6 @@ export async function reloadConfiguration(
       }
     }
     await observedSourceList(snapshot);
-    if (snapshot.resolved.permissions.length > 0) {
-      throw new SettingsError(
-        'Selected profiles contain permission contributions that this draft cannot apply. Remove those contributions or deactivate their profiles before reloading; native compiler integration is pending.',
-      );
-    }
     const original = await sourceFile(snapshot.root, snapshot.configFile.path);
     if (original.text !== snapshot.configFile.text) {
       throw new SettingsError('Settings changed. Reopen the editor before reloading.');
