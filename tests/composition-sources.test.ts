@@ -192,3 +192,60 @@ test('unreadable imports and unknown profile references retain the declaring sou
   await writeFile(imported, '{}');
   await assert.rejects(loadCompositionSources(f.context), at(f.baseFile, '/activeProfiles/0'));
 });
+
+test('a base file naming local scope retains local precedence after canonical deduplication', async (t) => {
+  const f = await fixture(t);
+  const project = join(f.project, '.opencode/config-composer.jsonc');
+  const local = join(f.project, '.opencode/config-composer.local.jsonc');
+  await writeFile(project, '{"profiles":{"project":{}},"activeProfiles":["project"]}');
+  for (const selection of [[], ['local']]) {
+    await writeFile(local, JSON.stringify({ profiles: { local: {} }, activeProfiles: selection }));
+    const result = await loadCompositionSources({ ...f.context, baseFile: local });
+    assert.deepEqual(result.activeProfiles, selection);
+    assert.deepEqual(
+      result.scopes.map((scope) => scope.id),
+      [project, local],
+    );
+    assert.equal(result.documents.length, 2);
+  }
+});
+
+test('definition origins are deeply frozen and repeated profile occurrences own their replay metadata', async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.project, '.opencode/config-composer.jsonc'), '{"activeProfiles":["review","coding"]}');
+  const result = await loadCompositionSources(f.context);
+  const definition = result.provenance['/profiles/base'];
+  assert.ok(Object.isFrozen(result.provenance));
+  assert.ok(Object.isFrozen(definition));
+  assert.ok(Object.isFrozen(definition.references));
+  assert.ok(Object.isFrozen(definition.overwritten));
+  assert.throws(() => {
+    definition.sourceId = 'changed';
+  }, TypeError);
+  const first = result.orderedProfiles[0].origin;
+  const repeated = result.orderedProfiles[2].origin;
+  first.sourceId = 'replay annotation';
+  first.references.push('replay reference');
+  first.overwritten.push({ ...first, references: [], overwritten: [] });
+  assert.equal(repeated.sourceId, definition.sourceId);
+  assert.deepEqual(repeated.references, []);
+  assert.deepEqual(repeated.overwritten, []);
+  assert.deepEqual(definition.references, []);
+});
+
+test('cycle and repeated-import diagnostics identify the declaring import field', async (t) => {
+  const f = await fixture(t);
+  const imported = join(f.root, 'shared/profiles/work.jsonc');
+  const at = (sourceId: string, pointer: string) => (error: unknown) => {
+    assert.ok(error instanceof CompositionValidationError);
+    assert.equal(error.diagnostic.sourceId, sourceId);
+    assert.equal(error.diagnostic.pointer, pointer);
+    return true;
+  };
+  await writeFile(f.baseFile, '{"imports":["./profiles/work.jsonc"]}');
+  await writeFile(imported, '{"imports":["../config-composer.jsonc"]}');
+  await assert.rejects(loadCompositionSources(f.context), at(imported, '/imports/0'));
+  await writeFile(imported, '{}');
+  await writeFile(f.baseFile, '{"imports":["./profiles/work.jsonc","./profiles/../profiles/work.jsonc"]}');
+  await assert.rejects(loadCompositionSources(f.context), at(f.baseFile, '/imports/1'));
+});
