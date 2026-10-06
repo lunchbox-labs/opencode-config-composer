@@ -154,7 +154,20 @@ export async function nativeHarness(t: TestContext, name: string) {
       await writeFile(join(diagnostics, `${name}.log`), Buffer.from(output).subarray(-65_536));
       await writeFile(
         join(diagnostics, `${name}-requests.txt`),
-        Buffer.from(JSON.stringify(requests, null, 2)).subarray(-65_536),
+        Buffer.from(
+          JSON.stringify(
+            requests.map(({ tools, ...request }) => ({
+              ...request,
+              // Tool schemas are repeated in every request and crowd out the actual
+              // permission/tool results. Keep the names and complete message bodies.
+              tools: Array.isArray(tools)
+                ? tools.map((tool: { function?: { name?: string } }) => tool.function?.name)
+                : tools,
+            })),
+            null,
+            2,
+          ),
+        ).subarray(-65_536),
       );
     }
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

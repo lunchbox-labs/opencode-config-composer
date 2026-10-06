@@ -292,7 +292,11 @@ test(
         const messages = await api<Message[]>(`/session/${session.id}/message`);
         const tool = messages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
         assert.ok(tool?.state !== undefined, `${action}: ${JSON.stringify(messages)}`);
-        assert.equal(tool.state.status, action === 'deny' ? 'error' : 'completed');
+        assert.equal(
+          tool.state.status,
+          action === 'deny' ? 'error' : 'completed',
+          `${action}: ${JSON.stringify(tool.state)}`,
+        );
         if (action === 'deny') {
           assert.match(tool.state.error ?? '', /rule which prevents you from using this specific tool call/);
           assert.ok(!JSON.stringify(requests.slice(before)).includes('EXPANDED_SKILL_SECRET'));

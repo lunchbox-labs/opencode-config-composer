@@ -57,7 +57,7 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | Compose TUI and provenance | Real terminal navigation, inspection, selection, save/apply and error flows | Await integration of [#32](https://github.com/lunchbox-labs/opencode-config-composer/pull/32) and the final profile UI |
 | Automatic source discovery | Discovery boundaries and precedence | Deferred; explicit imports come first |
 
-Final acceptance must cover group presets, Composer permission/model overlays and deterministic ordering across both built-in JSONC and custom frontmatter membership, while preserving unspecified native behavior.
+Final acceptance must cover actual tool decisions after invalid or unsupported configuration (including swallowed host hook errors), group presets, Composer permission/model overlays and deterministic ordering across both built-in JSONC and custom frontmatter membership, while preserving unspecified native behavior.
 
 The final feature integration PR must complete the applicable pending rows against
 real implementations before claiming full feature coverage. This infrastructure PR
