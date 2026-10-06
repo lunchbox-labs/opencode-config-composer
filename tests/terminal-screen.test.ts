@@ -43,3 +43,19 @@ test('native select readiness waits beyond autocomplete and first paint for focu
   await write('/compose');
   assert.equal(search.echoed('/compose'), true);
 });
+
+test('native filtered selection becomes ready only after its highlighted paint', async (t) => {
+  const screen = new headless.Terminal({ cols: 180, rows: 55, allowProposedApi: true });
+  t.after(() => screen.dispose());
+  const search = terminalSearch(screen);
+  const write = (text: string) => new Promise<void>((resolve) => screen.write(text, resolve));
+  const label = 'Save ordered fragments';
+  await write(
+    '\x1b[48;2;20;20;20m\x1b[18;65HSave ordered fragments\x1b[20;63H● Save ordered fragments…\x1b[18;87H\x1b[?25h',
+  );
+  assert.equal(search.echoed(label), true);
+  assert.equal(search.selected(label, label), false, 'the current-value dot cannot establish filtered selection');
+  await write('\x1b[48;2;250;180;130m\x1b[20;63H  Save ordered fragments…\x1b[48;2;20;20;20m\x1b[18;87H');
+  assert.equal(search.selected(label, label), true, 'the actual highlight arrives one frame after the query echo');
+  assert.equal(search.selected('Add multiline fragment', label), false);
+});

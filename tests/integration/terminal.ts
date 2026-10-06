@@ -136,6 +136,9 @@ export async function nativeTerminal(
     await press(`\x15${query}`);
     await waitInput(() => search.echoed(query), `the select query ${JSON.stringify(query)}`);
     await wait([label]);
+    // Query echo can precede the filtered selection's next paint. Wait for the
+    // actual native row highlight before Enter; the current-value dot is unrelated.
+    await waitInput(() => search.selected(label, query), `the highlighted option ${JSON.stringify(label)}`);
     await press('\r', ...next);
   };
   const command = async (name: string, ...labels: string[]) => {

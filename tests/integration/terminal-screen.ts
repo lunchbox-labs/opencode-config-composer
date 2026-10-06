@@ -34,6 +34,33 @@ export function terminalSearch(screen: Terminal) {
     Array.from({ length: screen.rows }, (_, row) => screen.buffer.active.getLine(row)?.translateToString() ?? '').some(
       (line) => /^\s+Search(?: fields)?…\s*$/.test(line),
     );
+  const selected = (label: string, query: string) => {
+    if (!echoed(query)) {
+      return false;
+    }
+    const buffer = screen.buffer.active;
+    const column = buffer.cursorX - query.length;
+    const input = buffer.getLine(buffer.cursorY)!.getCell(column)!;
+    for (let row = buffer.cursorY + 1; row < screen.rows; row++) {
+      const line = buffer.getLine(row)!;
+      if (line.translateToString(false, column, column + label.length) !== label) {
+        continue;
+      }
+      const first = line.getCell(column)!;
+      const last = line.getCell(column + label.length - 1)!;
+      // Native selection is a highlighted row. The dot marks the current value,
+      // and can remain on another option while filtering changes selection.
+      if (
+        first.getBgColorMode() !== 0 &&
+        first.getBgColorMode() === last.getBgColorMode() &&
+        first.getBgColor() === last.getBgColor() &&
+        (first.getBgColorMode() !== input.getBgColorMode() || first.getBgColor() !== input.getBgColor())
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
   const promptFocused = () => {
     const buffer = screen.buffer.active;
     return (
@@ -48,5 +75,6 @@ export function terminalSearch(screen: Terminal) {
     echoed,
     pending,
     promptFocused,
+    selected,
   };
 }

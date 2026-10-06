@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { type ChildProcess, execFile, spawn } from 'node:child_process';
+import { type ChildProcess, execFile } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import type { TestContext } from 'node:test';
 import { installPackage } from '../install-package.ts';
 import { stopProcess } from './process.ts';
-import { registerProcess } from './resources.ts';
+import { launchNativeHost } from './native-host.ts';
 
 // Only OS launch settings and network transport for host dependency installation are inherited.
 // Provider credentials and personal OpenCode configuration are never inherited.
@@ -277,19 +277,7 @@ export async function nativeHarness(t: TestContext, name: string) {
     };
     await prepareConfigurationDependencies();
     let launchOutput = '';
-    child = spawn(
-      process.env.OPENCODE_BIN ?? 'opencode',
-      ['serve', '--hostname', '127.0.0.1', '--port', '0', '--print-logs'],
-      {
-        cwd: project,
-        env: environment,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-      },
-    );
-    if (child.pid !== undefined) {
-      unregister = registerProcess(child.pid, root);
-    }
+    ({ child, unregister } = launchNativeHost(project, environment, root));
     let launchError: Error | undefined;
     child.on('error', (error) => {
       launchError = error;
