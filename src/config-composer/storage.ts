@@ -213,6 +213,12 @@ function nativeAgentsFromLayers(
       if (batch === undefined) {
         contribute(name, settings, layer, markdown);
       } else {
+        const previous = pending.get(name);
+        if (previous !== undefined) {
+          throw new SettingsError(
+            `Duplicate native agent identity ${name} in ${previous.layer.file.path} and ${layer.file.path}. Keep one definition in this native directory before editing; OpenCode file traversal order can vary.`,
+          );
+        }
         pending.set(name, { settings, layer, markdown });
       }
     }

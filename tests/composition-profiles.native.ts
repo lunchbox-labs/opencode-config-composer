@@ -89,6 +89,8 @@ test(
         agent: { plan: { model: 'fixture/pinned' } },
       }),
     );
+    await assert.rejects(loadSnapshot(configRoot, project, undefined, project, '/'), /Duplicate native agent identity/);
+    await rm(join(project, '.opencode/agent/project-md.md'));
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       XDG_CONFIG_HOME: join(root, 'config'),
