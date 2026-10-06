@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import type { Hooks, PluginInput } from '@opencode-ai/plugin';
 import type {
+  TuiDialogAlertProps,
   TuiDialogConfirmProps,
   TuiDialogPromptProps,
   TuiDialogSelectProps,
@@ -556,7 +557,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   type PromptDialog = Omit<TuiDialogPromptProps, 'onConfirm'> & {
     onConfirm?: (value: string) => void | Promise<void>;
   };
-  let dialog: SelectDialog | ConfirmDialog | PromptDialog | undefined;
+  let dialog: SelectDialog | ConfirmDialog | PromptDialog | TuiDialogAlertProps | undefined;
   let onClose: (() => void) | undefined;
   const clear = () => {
     onClose?.();
@@ -593,6 +594,9 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
     },
     ui: {
       DialogSelect: (props: SelectDialog) => {
+        dialog = props;
+      },
+      DialogAlert: (props: TuiDialogAlertProps) => {
         dialog = props;
       },
       DialogConfirm: (props: ConfirmDialog) => {
@@ -698,6 +702,8 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
     get dialog() {
       return dialog;
     },
+    title: () => dialog?.title,
+    message: () => (dialog !== undefined && 'message' in dialog ? dialog.message : ''),
     get toasts() {
       return toasts;
     },
@@ -1138,3 +1144,140 @@ test('TUI membership mutations keep Back and Escape on live parent menus without
   assert.equal(await readFile(path, 'utf8'), original);
   assert.equal(ui.toasts.length, 0);
 });
+
+test('compose navigation preserves Back across existing editor sections and their slash aliases', async (t) => {
+  const root = await fixture(t);
+  const before = await readFile(join(root, 'config-composer.jsonc'), 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  assert.equal(ui.title(), 'Compose');
+  await ui.select('groups');
+  assert.equal(ui.title(), 'Agent groups');
+  await ui.select('developers');
+  assert.equal(ui.title(), 'Group: developers');
+  await ui.select('\u0000back');
+  await ui.select('\u0000back');
+  assert.equal(ui.title(), 'Compose');
+  await ui.select('models');
+  assert.equal(ui.title(), 'Agent models: scope');
+  await ui.escape();
+  assert.equal(ui.title(), 'Compose');
+  await ui.escape();
+  assert.equal(Boolean(ui.dialog), false);
+  await ui.command('config-composer.membership');
+  assert.equal(ui.title(), 'Agent groups');
+  await ui.escape();
+  assert.equal(ui.dialog, undefined);
+  assert.equal(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), before);
+});
+
+test('compose inspection shows canonical selection, origins and source editability without writing files', async (t) => {
+  const root = await fixture(t);
+  const before = await readFile(join(root, 'config-composer.jsonc'), 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('effective');
+  assert.equal(ui.title(), 'Saved composition preview');
+  await ui.select('+profiles');
+  assert.match(ui.message(), /work/);
+  assert.match(ui.message(), /project-wide/);
+  await ui.escape();
+  await ui.select('/agent/builtin/model');
+  assert.match(ui.message(), /example\/fast/);
+  assert.match(ui.message(), /componentGroups\/developers\/configuration\/model/);
+  assert.match(ui.message(), /Saved preview/);
+  await ui.escape();
+  await ui.select('+sources');
+  assert.match(ui.message(), /config-composer.jsonc/);
+  assert.match(ui.message(), /Writable/);
+  assert.match(ui.message(), /running configuration may differ/);
+  assert.equal(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), before);
+  assert.equal(ui.updates, 0);
+});
+
+for (const section of ['groups', 'models', 'effective']) {
+  test(`closing Compose while ${section} loads does not reopen the cancelled view`, async (t) => {
+    const ui = uiHarness(await fixture(t));
+    await ui.command('config-composer.compose');
+    const gate = ui.delayProofAfter(0);
+    const pending = ui.select(section);
+    await gate.requested;
+    await ui.escape();
+    gate.resolve();
+    await pending;
+    assert.equal(ui.dialog, undefined);
+    assert.equal(ui.updates, 0);
+  });
+}
+
+test('compose permission inspection preserves ordered contributions and states the integration boundary', async (t) => {
+  const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      componentGroups: {
+        developers: {
+          agents: ['build'],
+          configuration: {
+            permissions: [
+              { tool: 'bash', action: 'deny' },
+              { tool: 'bash', pattern: 'git *', action: 'allow' },
+            ],
+          },
+        },
+        reviewers: {},
+        'custom-team': {},
+      },
+      profiles: { work: { layers: [{ componentGroup: 'developers' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('effective');
+  await ui.select('+permissions');
+  assert.ok(ui.message().indexOf('bash * → deny') < ui.message().indexOf('bash git * → allow'));
+  assert.match(ui.message(), /compilation and failure handling are not integrated/);
+  assert.equal(ui.updates, 0);
+});
+
+test('compose inspection includes pinned component models even when field origin is unavailable', async (t) => {
+  const root = await fixture(t);
+  await writeFile(join(root, 'component.md'), '---\nmodel: example/pinned\nvariant: high\n---\nPinned prompt');
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      components: { agents: { 'team/worker': { file: './component.md' } } },
+      componentGroups: {
+        developers: {},
+        reviewers: {},
+        'custom-team': {},
+        work: { agents: ['team/worker'], configuration: { model: 'example/fast' } },
+      },
+      profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('effective');
+  await ui.select('/agent/team~1worker/model');
+  assert.match(ui.message(), /example\/pinned/);
+  assert.match(ui.message(), /origin unavailable/);
+  await ui.escape();
+  await ui.select('/agent/team~1worker/variant');
+  assert.match(ui.message(), /high/);
+});
+
+for (const section of ['models', 'groups']) {
+  test(`Compose reload links preserve Back through the ${section} section`, async (t) => {
+    const ui = uiHarness(await fixture(t));
+    await ui.command('config-composer.compose');
+    await ui.select('reload');
+    await ui.select(section);
+    await ui.select('\u0000back');
+    assert.equal(ui.title(), 'Settings saved');
+    await ui.escape();
+    assert.equal(ui.title(), 'Compose');
+  });
+}

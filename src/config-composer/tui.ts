@@ -35,6 +35,7 @@ import { configurationDirectory } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveProfileRuntime } from './composition/runtime.ts';
+import { openEffective } from './tui/compose.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 const label = (choice: ModelChoice) =>
@@ -345,9 +346,9 @@ export function registerSettings(
         },
         { title: 'Apply on next restart', value: 'later', run: navigation.close },
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Mutually linked menu callbacks run after all handlers initialize.
-        { title: 'Agent groups', value: 'groups', run: groupsMenu },
+        { title: 'Agent groups', value: 'groups', run: () => groupsMenu(false) },
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Mutually linked menu callbacks run after all handlers initialize.
-        { title: 'Agent models', value: 'models', run: modelsMenu },
+        { title: 'Agent models', value: 'models', run: () => modelsMenu(false) },
       ],
       undefined,
       root,
@@ -730,8 +731,12 @@ export function registerSettings(
       },
       ...agentOptions(snapshot, members(snapshot, name)).map((option) => ({ ...option, category: 'Members' })),
     ]);
-  const groupsMenu = async () => {
+  const groupsMenu = async (root = true) => {
+    const isCurrent = navigation.checkpoint();
     const snapshot = await load();
+    if (!isCurrent()) {
+      return;
+    }
     menu(
       'Agent groups',
       [
@@ -750,11 +755,15 @@ export function registerSettings(
         { title: 'All agents', value: '+agents', run: () => menu('Agents', agentOptions(snapshot, snapshot.agents)) },
       ],
       undefined,
-      true,
+      root,
     );
   };
-  const modelsMenu = async () => {
+  const modelsMenu = async (root = true) => {
+    const isCurrent = navigation.checkpoint();
     const snapshot = await load();
+    if (!isCurrent()) {
+      return;
+    }
     menu(
       'Agent models: scope',
       [
@@ -814,11 +823,45 @@ export function registerSettings(
         { title: 'Reload saved settings…', value: '+reload', run: () => offerReload() },
       ],
       undefined,
-      true,
+      root,
     );
   };
+  const composeMenu = () =>
+    menu(
+      'Compose',
+      [
+        { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
+        { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
+        {
+          title: 'Effective configuration and sources',
+          value: 'effective',
+          description: 'Inspect saved profiles, layer order, field origins, and source files',
+          run: async () => {
+            const isCurrent = navigation.checkpoint();
+            const snapshot = await load();
+            if (isCurrent()) {
+              openEffective(snapshot, navigation);
+            }
+          },
+        },
+        { title: 'Reload saved settings…', value: 'reload', run: () => offerReload() },
+      ],
+      undefined,
+      true,
+    );
   const unregister = api.keymap.registerLayer({
     commands: [
+      {
+        name: 'config-composer.compose',
+        title: 'Compose configuration',
+        category: 'Config',
+        namespace: 'palette',
+        slashName: 'compose',
+        run: () => {
+          navigation.reset();
+          return run(composeMenu);
+        },
+      },
       {
         name: 'config-composer.models',
         title: 'Agent models',
@@ -827,7 +870,7 @@ export function registerSettings(
         slashName: 'agent-models',
         run: () => {
           navigation.reset();
-          return run(modelsMenu);
+          return run(() => modelsMenu());
         },
       },
       {
@@ -838,7 +881,7 @@ export function registerSettings(
         slashName: 'agent-groups',
         run: () => {
           navigation.reset();
-          return run(groupsMenu);
+          return run(() => groupsMenu());
         },
       },
       {

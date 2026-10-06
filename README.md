@@ -152,6 +152,13 @@ and excessive depth or size are rejected. Limits are 64 KiB per snippet, 256 KiB
 
 ## Settings editor
 
+Use `/compose` to open the composition hub. It links the model and membership editors and a read-only
+saved preview of active profiles, replay order, resolved fields, source paths, references, and overwritten
+origins. Back and Escape return across sections; `/agent-models` and `/agent-groups` remain available.
+The preview distinguishes saved composition from the running configuration and session model selections.
+Ordered permission contributions are inspectable, with enforcement integration still pending.
+
+
 Use `/agent-models` for global defaults, presets, groups, and individual overrides.
 Use `/agent-groups` for ordered memberships. Model and variant choices come from the provider API.
 Review the proposed scope and retained pins before saving. The editor preserves prompts, comments,
