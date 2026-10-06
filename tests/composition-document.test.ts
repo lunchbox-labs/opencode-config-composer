@@ -330,3 +330,45 @@ test('permission preview contracts distinguish an explicit ask from native fallb
   assert.equal(matched.fallback, undefined);
   assert.equal(invalid.action, 'ask');
 });
+
+test('local absolute drive and UNC paths remain valid across composition path fields', () => {
+  const paths = [
+    String.raw`C:\Users\example\config\definitions.jsonc`,
+    'd:/work/config/definitions.jsonc',
+    String.raw`\\server\share\config\definitions.jsonc`,
+    '//server/share/config/definitions.jsonc',
+    String.raw`\\?\C:\work\definitions.jsonc`,
+  ];
+  for (const path of paths) {
+    const input = {
+      imports: [path],
+      sourceDirectories: { library: path },
+      components: {
+        agents: { worker: { file: path } },
+        commands: { check: { file: path } },
+        skills: { check: { file: path } },
+        prompts: { guidance: { file: path } },
+      },
+    };
+    assert.equal(validate(input), true, `${path}: ${JSON.stringify(validate.errors)}`);
+    assert.deepEqual(readCompositionDocument(input), input);
+  }
+});
+
+test('local drive exceptions do not admit remote URL schemes or drive-relative paths', () => {
+  for (const path of [
+    'https://example.org/definitions.jsonc',
+    'HTTP://example.org/definitions.jsonc',
+    'ssh://host/definitions.jsonc',
+    's3://bucket/definitions.jsonc',
+    'file:///C:/work/definitions.jsonc',
+    'custom+remote://host/definitions.jsonc',
+    'c://host/definitions.jsonc',
+    'C:relative/definitions.jsonc',
+    'data:definitions.jsonc',
+  ]) {
+    const input = { imports: [path] };
+    assert.equal(validate(input), false, path);
+    assert.throws(() => readCompositionDocument(input), CompositionValidationError, path);
+  }
+});
