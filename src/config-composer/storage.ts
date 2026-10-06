@@ -38,6 +38,11 @@ import { editorSettings } from './composition/editor.ts';
 import { resolveGroupAgentNames } from './composition/membership.ts';
 import { packageName } from './package-name.ts';
 import { type NativeAgentLayer, loadNativeProjectSources } from './composition/native-sources.ts';
+import {
+  type NativeVariables,
+  observedNativeVariables,
+  substituteNativeConfig,
+} from './composition/native-variables.ts';
 
 export interface SourceFile {
   path: string;
@@ -78,6 +83,7 @@ export interface Snapshot {
   nativeAgents: Record<string, AgentSettings>;
   nativeModels: NativeModels;
   nativeLayers: NativeAgentLayer[];
+  nativeVariables: NativeVariables;
   nativeDirectory: string;
   nativeWorktree: string;
 }
@@ -158,10 +164,12 @@ function mergeNative(base: AgentSettings, next: AgentSettings): AgentSettings {
   return result;
 }
 
-function nativeAgentsFromLayers(
+async function nativeAgentsFromLayers(
   layers: NativeAgentLayer[],
+  variables: NativeVariables,
   overlays: ReadonlyMap<string, string> = new Map(),
-): Map<string, StoredAgent> {
+  capture = false,
+): Promise<Map<string, StoredAgent>> {
   const agents = new Map<string, StoredAgent>();
   let batch: string | undefined;
   const pending = new Map<string, { settings: AgentSettings; layer: NativeAgentLayer; markdown?: AgentFile }>();
@@ -190,7 +198,7 @@ function nativeAgentsFromLayers(
     }
     const file = { ...layer.file, text: overlays.get(layer.file.path) ?? layer.file.text };
     if (layer.kind === 'config') {
-      const config = parseConfig(file.text);
+      const config = parseConfig(await substituteNativeConfig(file, variables, capture, overlays));
       for (const [name, value] of Object.entries(record(config.agent) ? config.agent : {})) {
         if (!record(value)) {
           throw new SettingsError('An agent configuration must be an object.');
@@ -428,7 +436,13 @@ export async function loadSnapshot(
   if (!custom) {
     nativeLayers.push(...projectSources.directories);
   }
-  const agents = nativeAgentsFromLayers(nativeLayers);
+  const nativeVariables: NativeVariables = { environment: new Map(), files: new Map(), documents: new Map() };
+  const agents = await nativeAgentsFromLayers(nativeLayers, nativeVariables, undefined, true);
+  for (const dependency of nativeVariables.files.values()) {
+    if (!files.some((file) => file.path === dependency.path)) {
+      files.push(dependency);
+    }
+  }
   const nativeAgents = Object.fromEntries([...agents].map(([name, agent]) => [name, agent.settings]));
   const available = { ...Object.fromEntries(nativeAgentNames.map((name) => [name, {}])), ...nativeAgents };
   for (const definitions of [
@@ -473,6 +487,7 @@ export async function loadSnapshot(
     .sort((a, b) => a.name.localeCompare(b.name));
   enabled.forEach((agent) => agentGroups(agent.settings));
   const resolved = await resolveProfileRuntime(sources, { ...nativeModels, agent: nativeAgents }, overlays);
+  observedNativeVariables(nativeVariables);
   await observedComposition(sources);
   for (const file of files) {
     if ((await observedFile(root, file)).text !== file.text) {
@@ -496,6 +511,7 @@ export async function loadSnapshot(
     nativeAgents,
     nativeModels,
     nativeLayers,
+    nativeVariables,
     nativeDirectory,
     nativeWorktree,
   };
@@ -852,7 +868,9 @@ export async function plannedChoices(
   const overlays = new Map(plan.edits.map((edit) => [edit.file.path, edit.text]));
   const sources = await loadCompositionSources(snapshot.sourceContext, overlays);
   const agents = Object.fromEntries(
-    [...nativeAgentsFromLayers(snapshot.nativeLayers, overlays)].map(([name, agent]) => [name, agent.settings]),
+    [...(await nativeAgentsFromLayers(snapshot.nativeLayers, snapshot.nativeVariables, overlays))].map(
+      ([name, agent]) => [name, agent.settings],
+    ),
   );
   const defaults =
     change.kind === 'global'
@@ -927,6 +945,7 @@ async function atomicWrite(path: string, text: string, mode: number): Promise<vo
 }
 
 async function observedSourceList(snapshot: Snapshot): Promise<void> {
+  observedNativeVariables(snapshot.nativeVariables);
   const current = await loadSnapshot(
     snapshot.root,
     snapshot.sourceContext.root,
@@ -958,7 +977,7 @@ export async function previewFilePlan(
   }
   const sources = await loadCompositionSources(plan.snapshot.sourceContext, overlays);
   const agent = Object.fromEntries(
-    [...nativeAgentsFromLayers(plan.snapshot.nativeLayers, overlays)].map(([name, item]) => [name, item.settings]),
+    [...(await nativeAgentsFromLayers(plan.snapshot.nativeLayers, plan.snapshot.nativeVariables, overlays))].map(([name, item]) => [name, item.settings]),
   );
   const resolved = await resolveProfileRuntime(sources, { ...plan.snapshot.nativeModels, agent }, overlays);
   return { sources, resolved };
@@ -989,6 +1008,7 @@ export async function saveFilePlan(
     // Detect newly added agents before approving a group-wide preview.
     await observedSourceList(plan.snapshot);
     await validate();
+    observedNativeVariables(plan.snapshot.nativeVariables);
     for (const edit of plan.edits) {
       if (edit.file.writable === false) {
         throw new SettingsError(`Read-only composition source ${edit.file.path}.`);
@@ -1045,6 +1065,7 @@ export async function reloadConfiguration(
     throw new SettingsError('Another settings edit is active. Reload after it finishes.');
   });
   try {
+    observedNativeVariables(snapshot.nativeVariables);
     await observedComposition(snapshot.sources);
     for (const file of snapshot.files) {
       if ((await observedFile(snapshot.root, file)).text !== file.text) {
@@ -1079,6 +1100,7 @@ export async function reloadConfiguration(
     }
     const plugins: unknown[] = config.plugin;
     await update(plugins);
+    observedNativeVariables(snapshot.nativeVariables);
     await observedComposition(snapshot.sources);
     for (const file of snapshot.files) {
       if (file.path !== original.path && (await observedFile(snapshot.root, file)).text !== file.text) {
