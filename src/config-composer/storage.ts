@@ -655,11 +655,7 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     if (change.kind === 'override' && (change.choice.model === undefined || change.choice.model === '')) {
       values.variant = undefined;
     }
-    const componentOverride =
-      agent.component === true &&
-      change.kind === 'override' &&
-      typeof change.choice.model === 'string' &&
-      change.choice.model !== '';
+    const componentOverride = agent.component === true && change.kind === 'override';
     const document = componentOverride ? undefined : agent.markdown?.document.clone();
     const options: unknown = agent.settings.options;
     if (change.kind === 'membership') {
