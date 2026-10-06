@@ -402,8 +402,8 @@ function uiHarness(root: string) {
     },
     client: {
       file: {
-        read: async (input: { path: string }) => ({
-          data: { type: 'text', content: await readFile(input.path, 'utf8') },
+        read: async (input: { path: string; directory: string }) => ({
+          data: { type: 'text', content: await readFile(join(input.directory, input.path), 'utf8') },
         }),
       },
       config: {
