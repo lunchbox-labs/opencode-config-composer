@@ -27,6 +27,8 @@ const suites = {
     'tests/integration/lifecycle.integration.ts',
   ],
   canonical: ['tests/integration/canonical.integration.ts', 'tests/integration/canonical-regressions.integration.ts'],
+  terminal: ['tests/integration/terminal.integration.ts'],
+  editor: ['tests/integration/activation.integration.ts', 'tests/integration/authoring.integration.ts'],
   cleanup: ['tests/integration/cleanup.integration.mjs'],
 };
 
@@ -154,7 +156,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|core|canonical|cleanup]',
+    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);

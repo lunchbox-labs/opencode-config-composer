@@ -11,14 +11,16 @@ Before host startup, the harness installs the matching public `@opencode-ai/plug
 dependency in the fixture's shared and existing project configuration directories.
 OpenCode normally initializes those dependencies during its first request; preparing
 them separately keeps cold Windows dependency installation outside request deadlines.
-Native plugin loading and composition still run normally.
+When source creation adds a configuration directory after startup, the same dependency
+preparation runs before the next explicit reload. Cancelled creation still leaves the
+source absent. Native plugin loading and composition run normally.
 
 The **Integration** workflow runs the same functional cases on `ubuntu-latest` and
-`windows-latest` for pull requests and pushes to `main`. Each platform runs three suites
-(`core`, `canonical` and `cleanup`) so fresh Windows package installations fit the job limits.
+`windows-latest` for pull requests and pushes to `main`. Each platform runs five suites
+(`core`, `canonical`, `editor`, `terminal` and `cleanup`) so fresh Windows package installations fit the job limits.
 A partition check ensures every portable test file runs exactly once per platform.
-Run one suite locally with `npm run test:integration -- --suite core`, `--suite canonical`
-or `--suite cleanup`; the default command runs all three. Manual dispatch is also
+Run one suite locally with `npm run test:integration -- --suite core`, `--suite canonical`,
+`--suite editor`, `--suite terminal` or `--suite cleanup`; the default command runs all five. Manual dispatch is also
 available after the workflow reaches the default branch. All matrix jobs finish
 independently. New pushes cancel obsolete integration runs for that pull request.
 The existing **Check** workflow remains unchanged.
@@ -42,9 +44,12 @@ are deleted after the host stops, including on failures. The outer runner owns a
 separate fixture root and tracks detached test runners and native hosts so its deadline or cancellation
 can clean up even when test hooks never run.
 
-The persistence tests import the **installed** editor implementation and connect its
+The persistence, activation and registry tests import the **installed** editor implementation and connect its
 reload callback to the real OpenCode API. They exercise the storage used by the TUI;
-they do not establish that every interactive menu action works. No source implementation
+they do not establish UI confirmation, catalog validation or filesystem authorization by themselves.
+The terminal suite separately uses node-pty (PTY on Linux, ConPTY on Windows) and a headless
+VT terminal to drive the installed `/compose` interface. Assertions read the current screen,
+saved JSONC, native state and actual provider requests after explicit reload. No source implementation
 is substituted, and no unimplemented feature is represented by a skipped test.
 
 ## Coverage matrix
@@ -53,7 +58,7 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | --- | --- | --- |
 | Built package and pinned host | Installed tarball, native version check, separate consumer dependency tree | Both platforms; package/declaration checks also run in Check |
 | Dedicated/custom settings | Custom plugin options, settings-relative source paths, preserved JSONC comments | Both platforms |
-| Components and explicit imports | Installed runtime activates imported agents, commands, skills and named prompts; paths resolve from their declaring files; unimported files stay inactive | Both platforms; automatic discovery remains deferred |
+| Components and explicit imports | Installed runtime activates imported agents, commands, skills and named prompts; paths resolve from their declaring files; unimported files stay inactive | Both platforms; automatic Composer bundle discovery remains deferred |
 | Canonical profiles | Ordered `activeProfiles` replay parent chains; local selection replaces shared selection, absence inherits, and `[]` disables; profile overrides and targeted presets affect actual requests | Both platforms |
 | Model presets and ordered groups | Captured model/variant requests; preset-reference chains; native agent pins; profile order wins over membership order | Both platforms |
 | Built-in/custom membership | Native build/plan/explore JSONC membership, inline components and custom frontmatter; installed membership editor; unchanged native fields/permissions and no shadow agent files | Both platforms; Composer permission overlays remain pending |
@@ -73,18 +78,28 @@ is substituted, and no unimplemented feature is represented by a skipped test.
 | Import alias identity | Retargeting a directory symlink/junction rejects stale reload before its token is written; reopening applies the new source and leaves the previous target untouched | Both platforms |
 | Interrupted runs | Outer numeric timeout and SIGINT/SIGTERM handlers terminate a real native host and a blocked nested test runner, removing their fixtures without test hooks | Both platforms; the Windows regression emits Node signal events because `process.kill()` terminates directly on Windows |
 | Invalid/concurrent edits | Read-only import edits, referenced-preset deletion, invalid model input, missing imports, lock collisions, stale snapshots and malformed JSONC reject; file bytes and locks are checked; failed prompt composition leaves native settings unmodified | Both platforms; exhaustive rollback/fault combinations remain focused unit tests |
-| Terminal menus | Packaged entrypoint and existing menus render through a real pseudo-terminal | Existing Linux Check only; Windows terminal driving and complete interaction/save/reload flows remain open |
+| Terminal authoring and apply | Real keyboard navigation creates the first shared source, a group, a preset and a profile; edits membership and ordered layers; saves without applying, then reloads and captures the changed model in the retained conversation | Both platforms; existing Linux Check smoke tests remain |
+| Registry authoring | Installed create/patch/rename/delete operations across imported JSONC and Markdown; reference rewrites, read-only references, stale snapshots, original native baseline fallback and retained messages | Both platforms; API coverage is distinct from terminal confirmation/catalog/authorization |
+| Activation and source creation | Empty installation, cancelled first-source preview, create-only publication, shared/project/local ordered replacement, absence inheritance, explicit empty selection, add/reorder/remove in the terminal | Both platforms |
+| Source-addition race | A native Markdown agent appears inside asynchronous validation; save rejects and the proposed local selection file remains absent | Both platforms |
 | Composer permission compilation and failure policy | Actual tool decisions for ordered canonical rules, invalid/unsupported configuration and host hook errors | Pending compiler integration; required before final acceptance |
-| Compose TUI and provenance | Real terminal navigation, inspection, profile/component/permission authoring, selection, save/apply and error flows | Pending [#32](https://github.com/lunchbox-labs/opencode-config-composer/pull/32) and final canonical UI |
-| Automatic source discovery | Discovery boundaries and precedence | Deferred; explicit imports are the implemented contract |
+| Compose hub and provenance | Real terminal inspection of selected/replayed profiles, resolved field value, origin and overwritten contributions, writable/read-only files; no file changes or provider requests from inspection | Both platforms |
+| Broader configuration editors | Parameter, permission and prompt/source authoring through the terminal, with apply and error flows | Pending implementation and final acceptance |
+| Native project discovery | Native JSONC and Markdown sources, ancestor paths outside Git, environment/file substitutions, duplicate detection, native pins and unchanged declaring bytes | Both platforms |
+| Automatic Composer bundle discovery | Discovery boundaries and precedence for optional bundles | Deferred; Composer bundles use explicit imports |
 
 The canonical scenarios depend on the schema, source loader, runtime and editor stack
 in [#36](https://github.com/lunchbox-labs/opencode-config-composer/pull/36),
 [#38](https://github.com/lunchbox-labs/opencode-config-composer/pull/38),
 [#39](https://github.com/lunchbox-labs/opencode-config-composer/pull/39) and
 [#40](https://github.com/lunchbox-labs/opencode-config-composer/pull/40).
+Native discovery and the terminal authoring/activation scenarios additionally depend on
+[#42](https://github.com/lunchbox-labs/opencode-config-composer/pull/42),
+[#43](https://github.com/lunchbox-labs/opencode-config-composer/pull/43),
+[#44](https://github.com/lunchbox-labs/opencode-config-composer/pull/44) and
+[#45](https://github.com/lunchbox-labs/opencode-config-composer/pull/45).
 
-Final feature acceptance must complete the pending permission and TUI rows against
+Final feature acceptance must complete the pending permission and broader-editor rows against
 real implementations. Permission acceptance must include actual tool decisions after
 invalid or unsupported configuration, ordered presets and overlays across native built-in
 JSONC and custom frontmatter memberships, while preserving unspecified native behavior.
@@ -93,15 +108,16 @@ No skipped placeholder test stands in for those missing capabilities.
 OpenCode 1.18.34 catches plugin configuration-hook errors and can continue with native
 settings. The invalid-include case verifies that Composer applies no partial prompt or
 model overlay and that a corrected reload recovers. It does **not** establish that the
-host blocks subsequent model requests after such an error. Invalid JSONC rejected by
+host blocks subsequent model requests after such an error. The editor also rejects an invalid prompt include before applying it; a separate native
+global-config update exercises the real hook error. Invalid JSONC rejected by
 the editor before reload leaves the previous active settings in effect.
 
 ## Diagnostics and limits
 
 Failure artifacts contain only bounded runner/host logs, synthetic request captures,
-and version metadata in `integration-results/`. Each log/capture is capped at 64 KiB;
-the seven native fixtures plus runner log and version metadata produce less than 1 MiB
-before compression. Databases, dependency
+current terminal screens, bounded VT transcripts and version metadata in `integration-results/`.
+Each log/capture/screen is capped at 64 KiB. Each matrix job contains only its suite’s
+synthetic diagnostics. Databases, dependency
 trees and caches are excluded. CI uploads these files only on failure with three-day
 retention. Successful runs upload nothing. No Actions cache is configured.
 
@@ -113,8 +129,9 @@ Install, request, individual test and process limits
 are shorter. TAP output records failures immediately, including before an outer timeout.
 This workflow adds no required-check
 or branch-protection rules. Linux verification locally cannot substitute for the Windows
-CI result. The terminal smoke test uses POSIX pseudo-terminal APIs and is deliberately
-outside this portable functional suite; no Linux command is presented as Windows coverage.
+CI result. The older Check terminal smoke test uses POSIX APIs; the separate Integration terminal
+suite drives both platforms through node-pty. Windows terminal support is verified by
+its own CI job.
 
 Timeout and cancellation cleanup stops the test process tree before terminating any
 registered detached test runners and native hosts and deleting their fixture roots. SIGINT and SIGTERM

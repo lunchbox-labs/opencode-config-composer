@@ -1,0 +1,107 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { setTimeout } from 'node:timers/promises';
+import * as pty from 'node-pty';
+import headless from '@xterm/headless';
+import type { nativeHarness } from './harness.ts';
+import { killProcessTree } from './process.ts';
+import { registerProcess } from './resources.ts';
+
+export async function nativeTerminal(
+  host: Awaited<ReturnType<typeof nativeHarness>>,
+  sessionID?: string,
+  name = 'compose-terminal',
+) {
+  const screen = new headless.Terminal({ cols: 180, rows: 55, scrollback: 0, allowProposedApi: true });
+  const child = pty.spawn(
+    process.env.OPENCODE_BIN ?? 'opencode',
+    ['attach', host.url, '--dir', host.project, ...(sessionID === undefined ? [] : ['--session', sessionID])],
+    {
+      name: 'xterm-256color',
+      cols: 180,
+      rows: 55,
+      cwd: host.project,
+      env: { ...host.environment, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+    },
+  );
+  const unregister = registerProcess(child.pid, host.root);
+  let transcript = '';
+  let revision = 0;
+  let exited = false;
+  const text = () =>
+    Array.from({ length: screen.rows }, (_, row) => screen.buffer.active.getLine(row)?.translateToString() ?? '').join(
+      '\n',
+    );
+  // xterm answers native device/cursor queries while reconstructing the actual current screen.
+  screen.onData((data) => child.write(data));
+  child.onData((data) => {
+    transcript = (transcript + data).slice(-65_536);
+    screen.write(data, () => revision++);
+  });
+  child.onExit(() => {
+    exited = true;
+  });
+  let stopped = false;
+  let detach = () => {};
+  const stop = async () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    try {
+      const diagnostics = process.env.INTEGRATION_ARTIFACT_DIR;
+      if (diagnostics !== undefined) {
+        await mkdir(diagnostics, { recursive: true });
+        await writeFile(join(diagnostics, `${name}.txt`), Buffer.from(text()).subarray(-65_536));
+        await writeFile(join(diagnostics, `${name}-vt.txt`), Buffer.from(transcript).subarray(-65_536));
+      }
+    } finally {
+      try {
+        // Reap the group even if its leader exited; retain emergency ownership on failure.
+        await killProcessTree(child.pid);
+        unregister();
+      } finally {
+        try {
+          // Windows ConPTY owns worker/socket resources even after native process exit.
+          child.kill();
+        } finally {
+          detach();
+          screen.dispose();
+        }
+      }
+    }
+  };
+  detach = host.beforeStop(stop);
+  const wait = async (labels: string[], after = -1) => {
+    for (let attempt = 0; attempt < 600; attempt++) {
+      assert.equal(exited, false, `Native terminal exited:\n${text()}\n${transcript.slice(-4000)}`);
+      if (
+        revision > after &&
+        labels.every((label) => text().replace(/\s+/g, ' ').includes(label.replace(/\s+/g, ' ')))
+      ) {
+        return;
+      }
+      await setTimeout(50);
+    }
+    assert.fail(`Native terminal did not render ${JSON.stringify(labels)}:\n${text()}`);
+  };
+  const press = async (keys: string, ...labels: string[]) => {
+    const before = revision;
+    child.write(keys);
+    if (labels.length > 0) {
+      await wait(labels, before);
+    }
+  };
+  const choose = async (label: string, ...next: string[]) => {
+    // Select dialogs expose a search input. Clear its current query, find the exact
+    // visible action, then submit through the real terminal keyboard path.
+    await press(`\x15${label}`, label);
+    await press('\r', ...next);
+  };
+  const command = async (name: string, ...labels: string[]) => {
+    await press(name, name);
+    await press('\r', ...labels);
+  };
+  return { text, wait, press, choose, command, stop };
+}

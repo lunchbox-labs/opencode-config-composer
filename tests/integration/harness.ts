@@ -69,6 +69,7 @@ export async function nativeHarness(t: TestContext, name: string) {
   let exited: Promise<unknown> | undefined;
   let baseURL: string | undefined;
   let unregister: (() => void) | undefined;
+  const consumers = new Set<() => Promise<void>>();
   const provider = createServer((request, response) => {
     const reply = async () => {
       assert.equal(request.url, '/v1/chat/completions');
@@ -140,17 +141,28 @@ export async function nativeHarness(t: TestContext, name: string) {
     });
   });
   const stop = async () => {
+    const results = await Promise.allSettled([...consumers].map((cleanup) => cleanup()));
     if (child !== undefined && exited !== undefined) {
       await stopProcess(child, exited);
       unregister?.();
     }
     child = undefined;
     baseURL = undefined;
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((result): unknown => result.reason),
+        'Fixture consumers failed to stop',
+      );
+    }
   };
   t.after(async () => {
-    await stop();
-    provider.closeAllConnections();
-    provider.close();
+    try {
+      await stop();
+    } finally {
+      provider.closeAllConnections();
+      provider.close();
+    }
     const diagnostics = process.env.INTEGRATION_ARTIFACT_DIR;
     if (diagnostics !== undefined) {
       await mkdir(diagnostics, { recursive: true });
@@ -224,10 +236,11 @@ export async function nativeHarness(t: TestContext, name: string) {
     assert.equal(metadata.version, manifest.engines.opencode);
     prepared.add(directory);
   };
-  const start = async () => {
-    assert.equal(child, undefined, 'stop the host before restarting');
+  let environment = isolatedEnvironment(root);
+  const prepareConfigurationDependencies = async () => {
     const preparations = await Promise.allSettled([
       prepareDependencies(configRoot),
+      prepareDependencies(join(root, '.opencode')),
       prepareDependencies(join(project, '.opencode')),
     ]);
     for (const result of preparations) {
@@ -235,13 +248,30 @@ export async function nativeHarness(t: TestContext, name: string) {
         throw result.reason;
       }
     }
+  };
+  const start = async (
+    options: { variables?: Record<string, string>; configContent?: Record<string, unknown> } = {},
+  ) => {
+    assert.equal(child, undefined, 'stop the host before restarting');
+    assert.ok(
+      Object.keys(options.variables ?? {}).every((name) => name.startsWith('COMPOSER_FIXTURE_')),
+      'only explicit synthetic fixture variables may supplement the isolated environment',
+    );
+    environment = {
+      ...isolatedEnvironment(root),
+      ...options.variables,
+      ...(options.configContent === undefined
+        ? {}
+        : { OPENCODE_CONFIG_CONTENT: JSON.stringify(options.configContent) }),
+    };
+    await prepareConfigurationDependencies();
     let launchOutput = '';
     child = spawn(
       process.env.OPENCODE_BIN ?? 'opencode',
       ['serve', '--hostname', '127.0.0.1', '--port', '0', '--print-logs'],
       {
         cwd: project,
-        env: isolatedEnvironment(root),
+        env: environment,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
       },
@@ -293,6 +323,18 @@ export async function nativeHarness(t: TestContext, name: string) {
     get pid() {
       return child?.pid;
     },
+    get url() {
+      assert.ok(baseURL !== undefined, 'start the native host first');
+      return baseURL;
+    },
+    get environment() {
+      return { ...environment };
+    },
+    beforeStop(cleanup: () => Promise<void>) {
+      consumers.add(cleanup);
+      return () => consumers.delete(cleanup);
+    },
+    prepareConfigurationDependencies,
     root,
     project,
     configRoot,

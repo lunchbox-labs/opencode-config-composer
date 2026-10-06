@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -392,15 +393,40 @@ test(
       assert.ok((await api<Message[]>(`/session/${saved.session.id}/message`)).length >= 4);
     });
     await t.test(
-      'failed prompt composition leaves native settings unmodified and a corrected reload recovers',
-      async () => {
+      'editor rejects an invalid include; native hook failure is atomic and corrected reload recovers',
+      async (t) => {
         const bodyPath = join(configRoot, 'settings', 'prompts', 'body.md');
         const goodBody = await readFile(bodyPath, 'utf8');
-        const before = requests.length;
         const snapshot = await storage.loadSnapshot(configRoot);
+        const nativeReload = async () => {
+          const config = storage.parseConfig(await readFile(nativePath, 'utf8'));
+          const plugins = config.plugin as [string, Record<string, unknown>][];
+          const token = randomUUID();
+          plugins[snapshot.pluginIndex][1].reloadToken = token;
+          // Like a native configuration edit, this invalidates the global cache.
+          // Instance disposal alone retains cached globals from the previous composition.
+          await api('/global/config', { plugin: plugins }, 'PATCH');
+          for (let attempt = 0; attempt < 200; attempt++) {
+            if (JSON.stringify(await api('/config')).includes(token)) {
+              return;
+            }
+            await setTimeout(50);
+          }
+          assert.fail('Native global reload did not expose its new token');
+        };
+        t.after(async () => {
+          await writeFile(bodyPath, goodBody);
+          await nativeReload();
+          await api('/agent');
+        });
+        const before = requests.length;
+        const activeBefore = await agent();
         await writeFile(bodyPath, '{{include:@shared/../outside.md}}');
         await assert.rejects(storage.loadSnapshot(configRoot), /include|source|path/i);
-        await reload(snapshot);
+        await assert.rejects(reload(snapshot), /include|source|path/i);
+        assert.deepEqual(await agent(), activeBefore, 'editor rejection preserves the running configuration');
+        // Native reload can still load externally edited files independently of the editor.
+        await nativeReload();
         // OpenCode catches config-hook errors. Verify transactional composition rather
         // than claiming that the host prevents later requests with native settings.
         const rejected = await agent();
@@ -410,6 +436,7 @@ test(
         assert.ok((await agent('pinned')).prompt?.includes('GROUP_START') !== true);
         assert.equal(requests.length, before, 'reading configuration makes no provider request');
         await writeFile(bodyPath, goodBody);
+        await nativeReload();
         await reload();
         assert.equal((await send()).message.info.modelID, 'alpha');
       },
