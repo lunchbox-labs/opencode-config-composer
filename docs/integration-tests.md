@@ -7,6 +7,11 @@ and installs the tarball in temporary consumer projects. It also installs and ch
 the real ripgrep 15.1.0 binary used by the pinned host on both platforms before startup,
 so reload cannot interrupt OpenCode’s lazy dependency download. Set `OPENCODE_BIN` to an
 existing binary to avoid downloading it; a version mismatch fails the run.
+Before host startup, the harness installs the matching public `@opencode-ai/plugin`
+dependency in the fixture's shared and existing project configuration directories.
+OpenCode normally initializes those dependencies during its first request; preparing
+them separately keeps cold Windows dependency installation outside request deadlines.
+Native plugin loading and composition still run normally.
 
 The **Integration** workflow runs the same functional cases on `ubuntu-latest` and
 `windows-latest` for pull requests and pushes to `main`. Manual dispatch is also

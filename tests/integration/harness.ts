@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
+import { promisify } from 'node:util';
 import type { TestContext } from 'node:test';
 import { installPackage } from '../install-package.ts';
 import { stopProcess } from './process.ts';
@@ -182,8 +183,41 @@ export async function nativeHarness(t: TestContext, name: string) {
   await once(provider, 'listening');
   const address = provider.address();
   assert.ok(address !== null && typeof address !== 'string');
+  const prepared = new Set<string>();
+  const prepareDependencies = async (directory: string) => {
+    if (prepared.has(directory) || (await stat(directory).catch(() => undefined))?.isDirectory() !== true) {
+      return;
+    }
+    const npm = process.env.npm_execpath;
+    assert.ok(npm !== undefined, 'run native tests through npm run');
+    const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
+      engines: { opencode: string };
+    };
+    // The real host installs this package in each config directory and waits for it
+    // before loading plugins. Cold Windows installs can exceed a request deadline.
+    // Install the genuine pinned dependency up front; retain native loading/validation.
+    await promisify(execFile)(
+      process.execPath,
+      [
+        npm,
+        'install',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+        '--save-exact',
+        `@opencode-ai/plugin@${manifest.engines.opencode}`,
+      ],
+      { cwd: directory, timeout: 120_000 },
+    );
+    const metadata = JSON.parse(
+      await readFile(join(directory, 'node_modules/@opencode-ai/plugin/package.json'), 'utf8'),
+    ) as { version: string };
+    assert.equal(metadata.version, manifest.engines.opencode);
+    prepared.add(directory);
+  };
   const start = async () => {
     assert.equal(child, undefined, 'stop the host before restarting');
+    await Promise.all([prepareDependencies(configRoot), prepareDependencies(join(project, '.opencode'))]);
     let launchOutput = '';
     child = spawn(
       process.env.OPENCODE_BIN ?? 'opencode',
