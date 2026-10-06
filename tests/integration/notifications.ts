@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
@@ -20,6 +21,7 @@ export async function nativeNotifications(
   const toasts: NativeToast[] = [];
   let pending = '';
   let failure: unknown;
+  let barrier: string | undefined;
   const collecting = (async () => {
     for (;;) {
       const chunk = await reader.read();
@@ -41,6 +43,9 @@ export async function nativeNotifications(
           continue;
         }
         const event = JSON.parse(data) as GlobalEvent;
+        if (event.payload.type === 'tui.toast.show' && event.payload.properties.title === 'Integration event barrier') {
+          barrier = event.payload.properties.message;
+        }
         if (
           event.payload.type === 'tui.toast.show' &&
           event.payload.properties.title === 'Config Composer permissions'
@@ -76,5 +81,22 @@ export async function nativeNotifications(
     }
     assert.fail(`Expected native permission notification; received ${JSON.stringify(toasts.slice(after))}`);
   };
-  return { toasts, wait };
+  const flush = async () => {
+    const marker = randomUUID();
+    await host.api('/tui/show-toast', {
+      title: 'Integration event barrier',
+      message: marker,
+      variant: 'info',
+      duration: 1,
+    });
+    for (let attempt = 0; attempt < 600; attempt++) {
+      assert.equal(failure, undefined);
+      if (barrier === marker) {
+        return;
+      }
+      await setTimeout(50);
+    }
+    assert.fail('Native event subscription did not receive the delivery barrier');
+  };
+  return { toasts, wait, flush };
 }

@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import type { nativeHarness } from './harness.ts';
+import type { PermissionRule } from '../../src/config-composer/composition/types.ts';
 
 type Host = Awaited<ReturnType<typeof nativeHarness>>;
 export type PermissionAction = 'allow' | 'ask' | 'deny';
@@ -17,6 +18,12 @@ interface ToolMessage {
   parts: { tool?: string; state?: { status: string; output?: string; error?: string } }[];
 }
 export const skillContent = 'PERMISSION_ACCEPTANCE_SKILL_CONTENT';
+export const unsupportedRules: PermissionRule[] = [
+  { tool: 'webfetc?', pattern: 'a', action: 'deny' },
+  { tool: 'webfetch', action: 'allow' },
+  { tool: 'webfetc?', pattern: 'b', action: 'deny' },
+  { tool: 'skill', pattern: 'included-skill', action: 'deny' },
+];
 export async function installSkill(host: Host) {
   const directory = join(host.configRoot, 'skills/included-skill');
   await mkdir(directory, { recursive: true });

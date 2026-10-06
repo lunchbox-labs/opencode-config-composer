@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 import { installedEditor } from './editor.ts';
 import { nativeHarness } from './harness.ts';
+import { bundledPermissions } from './bundled-permissions.ts';
 import { applyEdits, modify } from 'jsonc-parser';
 import type * as Storage from '../../src/config-composer/storage.ts';
 
@@ -186,6 +187,11 @@ test(
       'JSONC built-in membership and custom frontmatter share groups without replacing native behavior',
       async () => {
         const baseline = await api<Record<string, unknown>[]>('/agent');
+        const normalizeBundled = await bundledPermissions(host);
+        const behavior = (agent: Record<string, unknown>) => ({
+          ...agent,
+          permission: normalizeBundled(agent.permission as { permission: string; pattern: string; action: string }[]),
+        });
         for (const name of ['build', 'plan', 'explore']) {
           const original = baseline.find((item) => item.name === name);
           assert.ok(original?.native === true, `${name} must be native in the pinned host`);
@@ -202,8 +208,8 @@ test(
           const { model: _oldModel, variant: _oldVariant, options: _oldOptions, ...oldBehavior } = original;
           const { model: _model, variant: _variant, options: _options, ...nativeBehavior } = current;
           assert.deepEqual(
-            nativeBehavior,
-            oldBehavior,
+            behavior(nativeBehavior),
+            behavior(oldBehavior),
             `${name}: preserve all unspecified native fields and permission rules`,
           );
           assert.deepEqual((current.options as Record<string, unknown>).groups, ['workers']);

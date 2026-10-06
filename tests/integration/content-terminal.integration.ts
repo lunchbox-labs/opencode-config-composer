@@ -136,11 +136,7 @@ test(
     await terminal.choose('deny', 'Rule 3');
     await terminal.press('\x1b', '3. read *.md → deny');
     await terminal.choose('Save ordered rules', 'Save configured permission rules?', 'Configured preview only');
-    await terminal.press(
-      '\r',
-      'Configured permission rules saved',
-      'running configuration and conversations are unchanged',
-    );
+    await terminal.press('\r', 'Settings saved', 'Reload now', 'Apply on next restart');
     assert.deepEqual((await f.document(f.paths.shared)).configurationPresets!.checks.permissions, [
       { tool: 'bash', pattern: 'git status', action: 'allow' },
       { tool: 'bash', pattern: 'git *', action: 'deny' },

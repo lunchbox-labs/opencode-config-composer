@@ -5,14 +5,9 @@ import { join } from 'node:path';
 import type { CompositionDocument, PermissionRule } from '../../src/config-composer/composition/types.ts';
 import { compositionFixture } from './composition-fixture.ts';
 import { nativeNotifications } from './notifications.ts';
-import { type PermissionAgent, installSkill, nativeSkill } from './permission-fixture.ts';
+import { bundledPermissions } from './bundled-permissions.ts';
+import { type PermissionAgent, installSkill, nativeSkill, unsupportedRules } from './permission-fixture.ts';
 
-export const unsupportedRules: PermissionRule[] = [
-  { tool: 'webfetc?', pattern: 'a', action: 'deny' },
-  { tool: 'webfetch', action: 'allow' },
-  { tool: 'webfetc?', pattern: 'b', action: 'deny' },
-  { tool: 'skill', pattern: 'included-skill', action: 'deny' },
-];
 const skill = (action: PermissionRule['action']): PermissionRule[] => [
   { tool: 'skill', pattern: 'included-skill', action },
 ];
@@ -70,8 +65,21 @@ test(
     const original = await f.send();
     const agents = () => f.host.api<PermissionAgent[]>('/agent');
     const before = await agents();
+    const normalizeBundled = await bundledPermissions(f.host);
     const independent = Object.fromEntries(
-      ['build', 'custom'].map((name) => [name, before.find((agent) => agent.name === name)!.permission]),
+      ['build', 'custom'].map((name) => [
+        name,
+        normalizeBundled(before.find((agent) => agent.name === name)!.permission),
+      ]),
+    );
+    const initialProvenance = (await f.editor.snapshot()).resolved.provenance;
+    assert.equal(
+      initialProvenance['/agent/build/permission/skill/included-skill'].pointer,
+      '/configurationPresets/permit/permissions/0/action',
+    );
+    assert.equal(
+      initialProvenance['/agent/custom/permission/skill/included-skill'].pointer,
+      '/profiles/work/overrides/agents/custom/permissions/0/action',
     );
     assert.equal(
       before.find((agent) => agent.name === 'build')!.prompt ?? undefined,
@@ -97,10 +105,24 @@ test(
     assert.match(warning.message, /componentGroups\/broken\/configuration\/permissions/);
     assert.match(warning.message, /native agent permissions and the successfully applied global policy remain/);
     assert.match(warning.message, /more permissive, including missing intended deny rules/);
+    const fallbackProvenance = (await f.editor.snapshot()).resolved.provenance;
+    assert.equal(fallbackProvenance['/agent/fallback-allow/permission/skill/included-skill'].layer, 'native');
+    assert.equal(
+      fallbackProvenance['/agent/fallback-allow/permission/skill/included-skill'].pointer,
+      '/agent/fallback-allow/permission/skill/included-skill',
+    );
+    for (const name of ['build', 'custom']) {
+      const key = `/agent/${name}/permission/skill/included-skill`;
+      assert.deepEqual(
+        fallbackProvenance[key],
+        initialProvenance[key],
+        `${name}: independent compiled provenance remains intact`,
+      );
+    }
     for (const agent of await agents()) {
       if (Object.hasOwn(independent, agent.name)) {
         assert.deepEqual(
-          agent.permission,
+          normalizeBundled(agent.permission),
           independent[agent.name],
           `${agent.name}: preserve the complete independent ordered policy`,
         );
@@ -127,6 +149,7 @@ test(
       globalStart,
     );
     assert.deepEqual((await f.host.api<{ permission: unknown }>('/config')).permission, native.permission);
+    assert.equal((await f.editor.snapshot()).resolved.provenance['/permission/skill/included-skill'].layer, 'native');
     await nativeSkill(f.host, 'build', 'allow');
     await nativeSkill(f.host, 'custom', 'deny');
     await nativeSkill(f.host, 'fallback-global', 'ask');
@@ -147,7 +170,7 @@ test(
     );
     for (const agent of await agents()) {
       if (Object.hasOwn(independent, agent.name)) {
-        assert.deepEqual(agent.permission, independent[agent.name]);
+        assert.deepEqual(normalizeBundled(agent.permission), independent[agent.name]);
       }
     }
     assert.ok((await f.history(original.session.id)).some((message) => message.info.id === original.message.info.id));

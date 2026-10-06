@@ -404,6 +404,7 @@ test(
       (toast) =>
         toast.variant === 'warning' && /Agent unsupported-allow:.*Fallback may be more permissive/.test(toast.message),
     );
+    assert.match(host.stderr, /Agent unsupported-allow:.*Fallback may be more permissive/);
     assert.equal(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), nativeBytes);
     for (const name of ['plan', 'build']) {
       const rules = agents.find((agent) => agent.name === name)?.permission;
@@ -456,5 +457,6 @@ test(
     await notifications.wait(
       (toast) => toast.variant === 'warning' && /Global scope:.*native global permissions remain/.test(toast.message),
     );
+    assert.match(host.stderr, /Global scope:.*native global permissions remain/);
   },
 );

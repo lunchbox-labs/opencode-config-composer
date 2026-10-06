@@ -33,6 +33,7 @@ test('CI suites partition every portable integration file exactly once', async (
     'content',
     'content-terminal',
     'permissions',
+    'runtime-terminal',
   ].flatMap(integrationFiles);
   assert.equal(new Set(files).size, files.length, 'a portable case belongs to exactly one CI suite');
   assert.deepEqual(files.sort(), expected);

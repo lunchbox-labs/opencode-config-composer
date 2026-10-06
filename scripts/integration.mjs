@@ -36,7 +36,12 @@ const suites = {
     'tests/integration/permission-editor.integration.ts',
     'tests/integration/prompt-editor.integration.ts',
   ],
-  permissions: ['tests/canonical-permissions.native.ts', 'tests/integration/permission-runtime.integration.ts'],
+  permissions: [
+    'tests/canonical-permissions.native.ts',
+    'tests/integration/permission-runtime.integration.ts',
+    'tests/integration/permission-notifications.integration.ts',
+  ],
+  'runtime-terminal': ['tests/integration/runtime-terminal.integration.ts'],
 };
 
 export function integrationFiles(suite = 'all') {
