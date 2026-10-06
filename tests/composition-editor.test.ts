@@ -296,7 +296,7 @@ test('read-only component aliases allow unrelated edits but detect identity chan
 test('concrete component overrides preserve shared read-only Markdown and other component variants', async (t) => {
   const root = await fixture(t);
   const path = join(root, 'shared-agent.md');
-  const original = '---\nmodel: fixture/old\nvariant: low\n---\nShared body';
+  const original = '---\nmodel: fixture/old\nvariant: low\ngroups: [work]\n---\nShared body';
   await writeFile(path, original);
   await chmod(path, 0o444);
   await writeFile(

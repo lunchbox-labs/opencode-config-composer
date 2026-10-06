@@ -655,7 +655,12 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     if (change.kind === 'override' && (change.choice.model === undefined || change.choice.model === '')) {
       values.variant = undefined;
     }
-    const document = agent.markdown?.document.clone();
+    const componentOverride =
+      agent.component === true &&
+      change.kind === 'override' &&
+      typeof change.choice.model === 'string' &&
+      change.choice.model !== '';
+    const document = componentOverride ? undefined : agent.markdown?.document.clone();
     const options: unknown = agent.settings.options;
     if (change.kind === 'membership') {
       // A new ordered membership replaces lower-layer membership.
@@ -668,12 +673,7 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
       }
     }
     for (const [key, value] of Object.entries(values)) {
-      if (
-        agent.component === true &&
-        change.kind === 'override' &&
-        typeof change.choice.model === 'string' &&
-        change.choice.model !== ''
-      ) {
+      if (componentOverride) {
         continue;
       }
       if (agent.component === true && change.kind === 'membership' && document === undefined) {
