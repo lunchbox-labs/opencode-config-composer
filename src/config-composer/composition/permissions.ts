@@ -57,27 +57,6 @@ export function nativePermission(value: unknown): PermissionPolicy {
   return parsePermission(action(value) ? { '*': value } : value);
 }
 
-export function composePermissions(layers: readonly PermissionPolicy[]): PermissionPolicy {
-  const result = new Map<string, PermissionPolicy[string]>();
-  for (const layer of layers) {
-    for (const [permission, rules] of Object.entries(parsePermission(layer))) {
-      const previous = result.get(permission);
-      let next = rules;
-      if (record(previous) && record(rules)) {
-        const merged = new Map(Object.entries(previous));
-        for (const [pattern, rule] of Object.entries(rules)) {
-          merged.delete(pattern);
-          merged.set(pattern, rule);
-        }
-        next = Object.fromEntries(merged);
-      }
-      result.delete(permission);
-      result.set(permission, next);
-    }
-  }
-  return Object.fromEntries(result);
-}
-
 // Matches OpenCode 1.18.34's core wildcard evaluator, including bare commands.
 function matches(input: string, pattern: string): boolean {
   let escaped = pattern
@@ -89,6 +68,178 @@ function matches(input: string, pattern: string): boolean {
     escaped = escaped.slice(0, -3) + '( .*)?';
   }
   return new RegExp('^' + escaped + '$', process.platform === 'win32' ? 'si' : 's').test(input.replaceAll('\\', '/'));
+}
+
+export interface PermissionRule {
+  permission: string;
+  pattern: string;
+  action: PermissionAction;
+  layer: number;
+  scalar: boolean;
+}
+
+export interface PermissionBlock {
+  permission: string;
+  rules: PermissionRule[];
+  effective: PermissionRule[];
+  scalar: boolean;
+}
+
+const scalarPermissions = ['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'];
+
+function compact(permission: string, rules: PermissionRule[]): PermissionBlock {
+  const effective = new Map<string, PermissionRule>();
+  for (const rule of rules) {
+    if (rule.scalar) {
+      effective.clear();
+    }
+    effective.delete(rule.pattern);
+    effective.set(rule.pattern, rule);
+  }
+  const last = rules.at(-1);
+  const scalar = last?.scalar === true;
+  return { permission, rules, effective: [...effective.values()], scalar };
+}
+
+// Whether two native permission-name globs can match the same name. This is
+// an emptiness check, not a specificity ordering. Each transition advances a
+// pattern position; '*'/'*' self-loops need not consume for an existence test.
+function overlaps(left: string, right: string): boolean {
+  const variants = (pattern: string) => (pattern.endsWith(' *') ? [pattern, pattern.slice(0, -2)] : [pattern]);
+  return variants(left.replaceAll('\\', '/')).some((a) =>
+    variants(right.replaceAll('\\', '/')).some((b) => {
+      const cache = new Map<string, boolean>();
+      const visit = (i: number, j: number): boolean => {
+        const key = `${i}:${j}`;
+        const known = cache.get(key);
+        if (known !== undefined) {
+          return known;
+        }
+        let result: boolean;
+        if (i === a.length && j === b.length) {
+          result = true;
+        } else if (a[i] === '*') {
+          result = visit(i + 1, j) || (j < b.length && visit(i, j + 1));
+        } else if (b[j] === '*') {
+          result = visit(i, j + 1) || (i < a.length && visit(i + 1, j));
+        } else {
+          result =
+            i < a.length &&
+            j < b.length &&
+            (a[i] === '?' || b[j] === '?' || matches(a[i], b[j])) &&
+            visit(i + 1, j + 1);
+        }
+        cache.set(key, result);
+        return result;
+      };
+      return visit(0, 0);
+    }),
+  );
+}
+
+/** Lower ordered contributions without moving old matches past newer rules. */
+export function compilePermissions(layers: readonly PermissionPolicy[]): {
+  policy: PermissionPolicy;
+  blocks: PermissionBlock[];
+  rules: PermissionRule[];
+} {
+  const authored = layers
+    .flatMap((layer, index) =>
+      Object.entries(parsePermission(layer)).map(([permission, value]) => ({
+        permission,
+        rules: Object.entries(typeof value === 'string' ? { '*': value } : value).map(([pattern, action]) => ({
+          permission,
+          pattern,
+          action,
+          layer: index,
+          scalar: typeof value === 'string',
+        })),
+      })),
+    )
+    .filter((block) => block.rules.length > 0);
+  const rules = authored.flatMap((block) => block.rules);
+  const exact: string[] = [];
+  const ordered: { permission: string; rules: PermissionRule[] }[] = [];
+  for (const block of authored) {
+    if (!/[?*]/.test(block.permission) && !scalarPermissions.includes(block.permission)) {
+      if (!exact.some((name) => matches(name, block.permission))) {
+        exact.push(block.permission);
+      }
+      continue;
+    }
+    let blockRules = [...block.rules];
+    if (scalarPermissions.includes(block.permission)) {
+      const previous = ordered.findIndex((item) => item.permission === block.permission);
+      if (previous !== -1) {
+        blockRules = [...ordered[previous].rules, ...blockRules];
+        ordered.splice(previous, 1);
+      }
+    }
+    const previous = ordered.at(-1);
+    if (previous?.permission === block.permission) {
+      previous.rules.push(...blockRules);
+    } else {
+      ordered.push({ permission: block.permission, rules: blockRules });
+    }
+  }
+
+  const reserved = new Set(authored.map((block) => block.permission));
+  const emitted = new Set<string>();
+  const blocks: PermissionBlock[] = [];
+  for (let index = 0; index < ordered.length; index++) {
+    const block = ordered[index];
+    const later = ordered.findIndex((item, position) => position > index && item.permission === block.permission);
+    // A repeated '?' pattern has no distinct, equivalent native object key.
+    // It can be coalesced only across disjoint permission-name contributions.
+    const star = block.permission
+      .split('')
+      .findIndex(
+        (char, position) =>
+          char === '*' && !(position === block.permission.length - 1 && block.permission[position - 1] === ' '),
+      );
+    if (later !== -1 && star === -1) {
+      if (ordered.slice(index + 1, later).some((item) => overlaps(block.permission, item.permission))) {
+        throw new SettingsError(
+          `OpenCode cannot preserve interleaved permission blocks for ${block.permission} in one native object. Use concrete permission names for this contribution.`,
+        );
+      }
+      ordered[later].rules.unshift(...block.rules);
+      continue;
+    }
+    let permission = block.permission;
+    if (emitted.has(permission)) {
+      // Consecutive '*' tokens are equivalent in the native matcher. Only
+      // duplicate a star that is not the special optional trailing " *".
+      do {
+        permission = permission.slice(0, star) + '*' + permission.slice(star);
+      } while (reserved.has(permission) || emitted.has(permission));
+    }
+    emitted.add(permission);
+    blocks.push(compact(permission, block.rules));
+  }
+  // Exact tool blocks are evaluated last and include every wildcard rule that
+  // matched that name, in original layer order. Nothing else is broadened.
+  for (const permission of exact) {
+    blocks.push(
+      compact(
+        permission,
+        rules.filter((rule) => matches(permission, rule.permission)),
+      ),
+    );
+  }
+  const policy = Object.fromEntries(
+    blocks.map((block) => [
+      block.permission,
+      block.scalar
+        ? block.effective[0].action
+        : Object.fromEntries(block.effective.map((rule) => [rule.pattern, rule.action])),
+    ]),
+  );
+  return { policy, blocks, rules };
+}
+
+export function composePermissions(layers: readonly PermissionPolicy[]): PermissionPolicy {
+  return compilePermissions(layers).policy;
 }
 
 function expand(pattern: string): string {
@@ -107,10 +258,11 @@ export function explainPermission(
   permission: string,
   pattern: string,
 ): {
-  action: PermissionAction;
+  action?: PermissionAction;
+  fallback?: 'native';
   matched?: { permission: string; pattern: string };
 } {
-  let result: ReturnType<typeof explainPermission> = { action: 'ask' };
+  let result: ReturnType<typeof explainPermission> = { fallback: 'native' };
   for (const [name, value] of Object.entries(parsePermission(policy))) {
     if (!matches(permission, name)) {
       continue;

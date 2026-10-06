@@ -112,7 +112,7 @@ const ConfigComposerPlugin: Plugin = async (_input, options) => {
             return [
               name,
               layers.length > 0 || override !== undefined
-                ? composePermissions([globalPolicy, ...layers, explicit, ...(override === undefined ? [] : [override])])
+                ? composePermissions([globalPolicy, explicit, ...layers, ...(override === undefined ? [] : [override])])
                 : agent.permission,
             ];
           }),

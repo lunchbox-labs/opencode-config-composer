@@ -5,7 +5,11 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { PluginInput } from '@opencode-ai/plugin';
-import { composePermissions, explainPermission } from '../src/config-composer/composition/permissions.ts';
+import {
+  type PermissionPolicy,
+  composePermissions,
+  explainPermission,
+} from '../src/config-composer/composition/permissions.ts';
 import { type AgentSettings, readSettings } from '../src/config-composer/settings.ts';
 import server from '../src/config-composer/server.ts';
 
@@ -29,18 +33,18 @@ test('reverse order and exact-key reinsertion preserve last matching rule', () =
   });
 });
 
-test('scalar and map changes replace complete blocks without mutating inputs', () => {
+test('scalar contributions remain fallbacks beneath later partial maps', () => {
   const first = { bash: { 'git *': 'deny' as const } };
   assert.deepEqual(composePermissions([first, { bash: 'allow' }]), { bash: 'allow' });
   assert.deepEqual(composePermissions([{ bash: 'deny' }, { bash: { 'git *': 'allow' } }]), {
-    bash: { 'git *': 'allow' },
+    bash: { '*': 'deny', 'git *': 'allow' },
   });
   const result = composePermissions([first]);
   assert.notEqual(result.bash, first.bash);
   assert.deepEqual(first, { bash: { 'git *': 'deny' } });
 });
 
-test('outer wildcard and retained-block movement follow native block order', () => {
+test('outer wildcard remains later than an earlier rule in a subsequently mentioned tool', () => {
   assert.equal(
     explainPermission(composePermissions([{ bash: 'deny' }, { '*': 'allow' }]), 'bash', 'git').action,
     'allow',
@@ -51,8 +55,9 @@ test('outer wildcard and retained-block movement follow native block order', () 
   );
   const policy = composePermissions([{ bash: { 'git *': 'deny' }, '*': 'allow' }, { bash: { 'npm *': 'ask' } }]);
   assert.deepEqual(Object.keys(policy), ['*', 'bash']);
-  assert.equal(explainPermission(policy, 'bash', 'git').action, 'deny');
-  assert.deepEqual(explainPermission({}, 'bash', 'git'), { action: 'ask' });
+  assert.equal(explainPermission(policy, 'bash', 'git').action, 'allow');
+  assert.equal(explainPermission(policy, 'bash', 'npm install').action, 'ask');
+  assert.deepEqual(explainPermission({}, 'bash', 'git'), { fallback: 'native' });
 });
 
 test('explanation follows native wildcard, path normalization and home expansion', () => {
@@ -61,7 +66,7 @@ test('explanation follows native wildcard, path normalization and home expansion
     read: { '~/file': 'allow' as const, '$HOME/other': 'deny' as const },
   };
   assert.equal(explainPermission(policy, 'bat', 'a.b').action, 'deny');
-  assert.equal(explainPermission(policy, 'bat', 'axb').action, 'ask');
+  assert.equal(explainPermission(policy, 'bat', 'axb').action, undefined);
   assert.equal(explainPermission(policy, 'bat', 'line\nbreak').action, 'allow');
   assert.equal(explainPermission(policy, 'read', join(homedir(), 'file')).action, 'allow');
   assert.equal(explainPermission(policy, 'read', join(homedir(), 'other').replaceAll('/', '\\')).action, 'deny');
@@ -95,7 +100,7 @@ test('settings accept only valid ordered permission policies at all three locati
   assert.throws(() => composePermissions([{ '1': 'deny' }]));
 });
 
-test('runtime overlays globals and groups beneath explicit native and Composer agent permissions', async (t) => {
+test('runtime uses native permissions as fallbacks beneath Composer groups and overrides', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'composer-permissions-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, 'config-composer.jsonc');
@@ -122,8 +127,9 @@ test('runtime overlays globals and groups beneath explicit native and Composer a
   const config = { permission: { bash: { 'git *': 'deny' as const } }, agent: agents };
   await hooks.config!(config);
   assert.equal(explainPermission(config.permission, 'bash', 'git').action, 'allow');
-  assert.deepEqual(agents.worker.permission, { task: { '*': 'allow' }, bash: { '*': 'allow' } });
-  assert.deepEqual(agents.pinned.permission, { task: { '*': 'allow' }, bash: 'deny' });
+  assert.equal(explainPermission(agents.worker.permission as PermissionPolicy, 'bash', 'git status').action, 'allow');
+  assert.equal(explainPermission(agents.worker.permission as PermissionPolicy, 'task', 'worker').action, 'allow');
+  assert.equal(explainPermission(agents.pinned.permission as PermissionPolicy, 'bash', 'git').action, 'allow');
   assert.equal(agents.native.permission, untouched);
   assert.equal(agents.build.prompt, undefined);
   assert.equal(agents.off.permission, undefined);
@@ -214,12 +220,12 @@ test('permission provenance follows ordered global, group, native and Composer c
   assert.equal(origins['/permission/edit'].operation, 'native');
   const base = '/agent/team~1worker/permission';
   assert.equal(origins[`${base}/bash/*`].pointer, '/agent/overrides/team~1worker/permission/bash/*');
-  assert.equal(origins[`${base}/bash/npm *`].operation, 'native');
-  assert.equal(origins[`${base}/bash/npm *`].sourceId, undefined);
-  assert.equal(origins[`${base}/bash/npm *`].overwritten[0].pointer, '/agent/groups/base/permission/bash/npm *');
+  assert.equal(origins[`${base}/bash/npm *`].operation, 'set');
+  assert.equal(origins[`${base}/bash/npm *`].sourceId, source.id);
+  assert.equal(origins[`${base}/bash/npm *`].overwritten[0].pointer, '/agent/team~1worker/permission/bash/npm *');
   assert.deepEqual(origins[`${base}/bash`].references, [
     '/agent/permission/bash/git *',
-    '/agent/team~1worker/permission/bash/npm *',
+    '/agent/groups/base/permission/bash/npm *',
     '/agent/overrides/team~1worker/permission/bash/*',
   ]);
   assert.equal(origins[`${base}/bash`].operation, 'merge');
@@ -248,7 +254,155 @@ test('permission provenance removes replaced descendants and retains their overw
   const block = result.provenance['/agent/worker/permission/bash'];
   assert.equal(block.pointer, '/agent/groups/base/permission/bash');
   assert.equal(block.overwritten[0].pointer, '/agent/permission/bash');
-  assert.deepEqual(block.references, ['/agent/groups/base/permission/bash/other-*']);
+  assert.deepEqual(block.references, ['/agent/permission/bash', '/agent/groups/base/permission/bash/other-*']);
   assert.equal(result.provenance['/agent/worker/permission/bash/git *'], undefined);
   assert.equal(result.provenance['/agent/off/permission'], undefined);
+});
+
+test('strict layers preserve earlier group matches and only then use global fallback', () => {
+  const policy = composePermissions([
+    { skill: { '*': 'deny' }, read: 'ask' },
+    { skill: 'allow' },
+    { skill: { 'other-*': 'deny' } },
+  ]);
+  assert.equal(explainPermission(policy, 'skill', 'included-skill').action, 'allow');
+  assert.equal(explainPermission(policy, 'skill', 'other-skill').action, 'deny');
+  assert.equal(explainPermission(policy, 'read', 'notes.txt').action, 'ask');
+  assert.deepEqual(explainPermission(policy, 'bash', 'git status'), { fallback: 'native' });
+});
+
+test('interleaved wildcard tool contributions preserve their own order and exact tool exceptions', () => {
+  const policy = composePermissions([
+    { 'mcp_*': { a: 'deny' }, bash: { 'git *': 'deny' } },
+    { '*': 'allow' },
+    { 'mcp_*': { b: 'ask' }, bash: { 'npm *': 'ask' } },
+  ]);
+  assert.equal(explainPermission(policy, 'mcp_future_tool', 'a').action, 'allow');
+  assert.equal(explainPermission(policy, 'mcp_future_tool', 'b').action, 'ask');
+  assert.equal(explainPermission(policy, 'bash', 'git status').action, 'allow');
+  assert.equal(explainPermission(policy, 'bash', 'npm install').action, 'ask');
+});
+
+test('scalar-only native keys retain their position between wildcard contributions', () => {
+  const policy = composePermissions([
+    { 'webfetch*': { a: 'deny' } },
+    { webfetch: 'allow' },
+    { 'webfetch*': { b: 'ask' } },
+  ]);
+  assert.equal(policy.webfetch, 'allow');
+  assert.equal(explainPermission(policy, 'webfetch', 'a').action, 'allow');
+  assert.equal(explainPermission(policy, 'webfetch', 'b').action, 'ask');
+  assert.equal(explainPermission(policy, 'webfetch_extra', 'a').action, 'deny');
+});
+
+test('compiler never broadens an unrepresentable repeated question wildcard to a star', () => {
+  assert.throws(
+    () => composePermissions([{ 'webfetc?': { a: 'deny' } }, { webfetch: 'allow' }, { 'webfetc?': { b: 'deny' } }]),
+    /cannot preserve.*webfetc\?/i,
+  );
+  const policy = composePermissions([{ 'ba?': { a: 'deny' } }, { 'ba?': { b: 'allow' } }]);
+  assert.equal(explainPermission(policy, 'bat', 'a').action, 'deny');
+  assert.equal(explainPermission(policy, 'bat', 'b').action, 'allow');
+});
+
+test('compiled policies agree with last matching authored layers across tool and target overlaps', () => {
+  const candidates: PermissionPolicy[] = [
+    { bash: { 'git *': 'deny' } },
+    { '*': { '*': 'allow' } },
+    { bash: { 'npm *': 'ask' } },
+    { 'mcp_*': { '*': 'deny' } },
+    { 'mcp_*': { read: 'allow' } },
+    { '**': { read: 'ask' } },
+    { webfetch: 'allow' },
+    { 'web*': { read: 'deny' } },
+    { skill: 'allow' },
+    { skill: { 'other-*': 'deny' } },
+  ];
+  for (const first of candidates) {
+    for (const second of candidates) {
+      for (const third of candidates) {
+        const layers = [first, second, third];
+        const policy = composePermissions(layers);
+        for (const permission of ['bash', 'mcp_future', 'webfetch', 'skill', 'unknown']) {
+          for (const pattern of ['git status', 'npm install', 'read', 'other-skill']) {
+            const expected = layers
+              .map((layer) => explainPermission(layer, permission, pattern).action)
+              .findLast((value) => value !== undefined);
+            assert.equal(
+              explainPermission(policy, permission, pattern).action,
+              expected,
+              JSON.stringify({ layers, permission, pattern }),
+            );
+          }
+        }
+      }
+    }
+  }
+});
+
+test('scalar-only permission origins retain overwritten native candidates', () => {
+  const value = { agent: { permission: { webfetch: 'allow' } } };
+  const source = {
+    id: 'composer',
+    path: '/config/composer.jsonc',
+    text: JSON.stringify(value),
+    fingerprint: 'fixture',
+    writable: true,
+    value,
+  };
+  const result = resolveLegacy(source, { permission: { webfetch: 'deny' } });
+  assert.equal(result.provenance['/permission/webfetch'].sourceId, source.id);
+  assert.equal(result.provenance['/permission/webfetch'].overwritten[0]?.operation, 'native');
+});
+
+test('unsupported wildcard interleaving fails atomically rather than broadening permissions', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-permission-shape-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(
+    path,
+    JSON.stringify({
+      agent: {
+        permission: { bash: 'allow' },
+        groups: {
+          earlier: { permission: { 'webfetc?': { a: 'deny' } } },
+          middle: { permission: { webfetch: 'allow' } },
+          later: { permission: { 'webfetc?': { b: 'deny' } } },
+        },
+      },
+    }),
+  );
+  const hooks = await server.server({} as PluginInput, { configFile: path });
+  const config = {
+    permission: { bash: 'deny' as const },
+    agent: { worker: { groups: ['earlier', 'middle', 'later'] } },
+  };
+  const before = structuredClone(config);
+  await assert.rejects(hooks.config!(config), /cannot preserve/);
+  assert.deepEqual(config, before);
+});
+
+test('generated wildcard keys retain authored provenance and overwritten candidates', () => {
+  const value = {
+    agent: {
+      groups: {
+        first: { permission: { 'mcp_*': { b: 'deny' } } },
+        middle: { permission: { '*': 'allow' } },
+        last: { permission: { 'mcp_*': { b: 'ask' } } },
+      },
+    },
+  };
+  const source = {
+    id: 'composer',
+    path: '/config/composer.jsonc',
+    text: JSON.stringify(value),
+    fingerprint: 'fixture',
+    writable: true,
+    value,
+  };
+  const result = resolveLegacy(source, { agent: { worker: { groups: ['first', 'middle', 'last'] } } });
+  const origin = result.provenance['/agent/worker/permission/mcp_**/b'];
+  assert.equal(origin.pointer, '/agent/groups/last/permission/mcp_*/b');
+  assert.equal(origin.sourceId, source.id);
+  assert.equal(origin.overwritten[0]?.pointer, '/agent/groups/first/permission/mcp_*/b');
 });

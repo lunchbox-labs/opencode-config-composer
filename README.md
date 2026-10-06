@@ -168,25 +168,36 @@ Set agent-wide defaults in `agent.permission`, reusable policies in
 ```
 
 An agent with native `groups: [restricted, trusted]` allows `git status`:
-last matching rules win, even when they grant broader access. For agents with
-Composer contributions, the order is effective native global permissions,
-Composer agent-wide defaults, ordered groups, native agent permissions, then
-Composer agent overrides. Other agents retain native inheritance. Built-in
-agents can receive permission overrides without replacing their prompts.
+later matching contributions win, even when they grant broader access. Composer
+agent-wide defaults overlay native globals; native agent permissions remain
+fallbacks beneath ordered Composer groups and explicit Composer agent overrides.
+Other agents retain native inheritance. Built-in agents can receive permission
+overrides without replacing their prompts.
 
-A later scalar replaces the earlier value. Two pattern maps merge by exact
-key; scalar/map changes replace the entire block. A named tool block moves to
-the end, including its retained patterns. Repeated patterns move to the end of
-that block. A later outer `"*": "allow"` therefore overrides earlier tool
-blocks. Keep authored key order; integer-like keys are rejected because object
-enumeration cannot reliably preserve their order.
+A scalar is a wildcard contribution. A later partial map changes only matching
+requests: `skill: "allow"` followed by `skill: { "other-*": "deny" }` still allows
+other skills. A later nonmatching rule never resurrects an older decision.
+For example, `bash: { "git *": "deny" }`, then `"*": "allow"`, then
+`bash: { "npm *": "ask" }` allows `git status` and asks for `npm install`.
+
+Composer compiles this sequence into native rules, preserving layer order rather
+than moving retained tool rules past newer wildcard contributions. Keep authored
+key order; integer-like keys are rejected because object enumeration changes it.
 OpenCode 1.18.34 requires scalar actions for `todowrite`, `question`,
-`webfetch`, `websearch`, and `doom_loop`; Composer rejects pattern maps for these keys.
+`webfetch`, `websearch`, and `doom_loop`.
+
+Native objects cannot directly retain duplicate wildcard tool-name blocks.
+Composer handles `*` globs with equivalent native keys, but rejects interleaved
+repeated `?`-only tool-name globs across overlapping contributions instead of
+broadening their matches. Use concrete permission names for these contributions.
+The same restriction applies to repeated tool-name globs whose only star is the
+special trailing `" *"`. Target-pattern wildcards remain supported.
 
 These settings overlay runtime configuration without writing native files.
 Configure them in the settings file and reload OpenCode to apply changes.
-Configured-policy explanations exclude host-generated permissions and remembered
-approvals, which remain native OpenCode behavior.
+When no configured rule matches, explanations report native fallback; they do not
+invent an `ask` decision. Host defaults, generated permissions, and remembered
+approvals remain native OpenCode behavior.
 
 ## Settings editor
 

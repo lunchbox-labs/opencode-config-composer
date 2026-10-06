@@ -40,6 +40,16 @@ test(
     await mkdir(join(configRoot, 'skills/included-skill'), { recursive: true });
     await mkdir(project);
     const installed = await installPackage(configRoot);
+    const permissionProbe = join(configRoot, 'permission-probe.mjs');
+    await writeFile(
+      permissionProbe,
+      `export default { id: 'permission-probe', server: async () => ({ tool: Object.fromEntries([
+      ['allow', 'read', 'notes.txt'], ['ask', 'external_directory', '__composer_permission_probe_outside__'],
+    ].map(([name, permission, pattern]) => ['permission_default_' + name, {
+      description: 'Probe an unchanged native permission default.', args: {},
+      execute: async (_args, context) => { await context.ask({ permission, patterns: [pattern], always: [pattern], metadata: {} }); return 'verified'; },
+    }])) }) };`,
+    );
 
     const requests: Record<string, unknown>[] = [];
     const provider = createServer((request, response) => {
@@ -54,13 +64,14 @@ test(
         const body = parsed as Record<string, unknown>;
         requests.push(body);
         const skillRequested = JSON.stringify(body.messages).includes('Load included-skill now.');
+        const defaultProbe = /Probe native (allow|ask)\./.exec(JSON.stringify(body.messages))?.[1];
         const toolReturned =
           Array.isArray(body.messages) &&
           body.messages.some(
             (message: unknown) =>
               message !== null && typeof message === 'object' && 'role' in message && message.role === 'tool',
           );
-        const callSkill = skillRequested && !toolReturned;
+        const callSkill = (skillRequested || defaultProbe !== undefined) && !toolReturned;
         const base = { id: 'synthetic-response', model: body.model, created: 1 };
         const streaming = Boolean(body.stream);
         if (streaming) {
@@ -80,7 +91,10 @@ test(
                             index: 0,
                             id: 'fixture-skill',
                             type: 'function',
-                            function: { name: 'skill', arguments: JSON.stringify({ name: 'included-skill' }) },
+                            function: {
+                              name: defaultProbe === undefined ? 'skill' : `permission_default_${defaultProbe}`,
+                              arguments: defaultProbe === undefined ? JSON.stringify({ name: 'included-skill' }) : '{}',
+                            },
                           },
                         ],
                       }
@@ -128,7 +142,12 @@ test(
       limit: { context: 8192, output: 256 },
       variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } },
     };
-    const permissionCases: { name: string; layers: PermissionPolicy[]; action: 'allow' | 'deny' }[] = [
+    const permissionCases: {
+      name: string;
+      layers: PermissionPolicy[];
+      action: 'allow' | 'ask' | 'deny';
+      probe?: 'allow' | 'ask';
+    }[] = [
       {
         name: 'later-allow',
         layers: [{ skill: { 'included-*': 'deny' } }, { skill: { '*': 'allow' } }],
@@ -141,19 +160,31 @@ test(
       },
       { name: 'outer-allow', layers: [{ skill: 'deny' }, { '*': 'allow' }], action: 'allow' },
       {
-        name: 'retained-deny',
+        name: 'retained-allow',
         layers: [{ skill: { 'included-*': 'deny' }, '*': 'allow' }, { skill: { 'other-*': 'allow' } }],
-        action: 'deny',
+        action: 'allow',
       },
       {
         name: 'reinsert-allow',
         layers: [{ skill: { 'included-*': 'deny', '*': 'deny' } }, { skill: { 'included-*': 'allow' } }],
         action: 'allow',
       },
+      { name: 'earlier-scalar', layers: [{ skill: 'allow' }, { skill: { 'other-*': 'allow' } }], action: 'allow' },
+      { name: 'global-fallback', layers: [{ skill: { 'other-*': 'allow' } }], action: 'deny' },
+      { name: 'approval', layers: [{ skill: 'ask' }], action: 'ask' },
+      {
+        name: 'interleaved-wildcard',
+        layers: [{ 's*': { 'included-*': 'deny' } }, { '*': 'allow' }, { 's*': { 'other-*': 'deny' } }],
+        action: 'allow',
+      },
+      { name: 'native-fallback', layers: [{ skill: { 'other-*': 'allow' } }], action: 'allow' },
+      { name: 'group-over-native', layers: [{ skill: 'allow' }], action: 'allow' },
+      { name: 'native-default-allow', layers: [], action: 'allow', probe: 'allow' },
+      { name: 'native-default-ask', layers: [], action: 'ask', probe: 'ask' },
       { name: 'replace-allow', layers: [{ skill: 'deny' }, { skill: { 'included-*': 'allow' } }], action: 'allow' },
     ];
     const config = {
-      plugin: [installed.directory],
+      plugin: [installed.directory, permissionProbe],
       permission: { skill: { 'included-*': 'deny' } } satisfies PermissionPolicy,
       model: 'fixture/alpha',
       small_model: 'fixture/alpha',
@@ -171,7 +202,15 @@ test(
         ...Object.fromEntries(
           permissionCases.map(({ name, layers }) => [
             name,
-            { mode: 'primary', groups: layers.map((_, index) => `${name}-${index}`) },
+            {
+              mode: 'primary',
+              groups: layers.map((_, index) => `${name}-${index}`),
+              ...(name === 'native-fallback'
+                ? { permission: { skill: 'allow' } }
+                : name === 'group-over-native'
+                  ? { permission: { skill: 'deny' } }
+                  : {}),
+            },
           ]),
         ),
         pinned: { mode: 'subagent', groups: ['base', 'developers'], model: 'fixture/alpha', variant: 'high' },
@@ -184,7 +223,7 @@ test(
       sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
       agent: {
         permission: {
-          skill: { '*': 'allow' },
+          skill: { '*': 'deny' },
           task: { '*': 'allow' },
           webfetch: 'allow',
           question: 'ask',
@@ -202,7 +241,11 @@ test(
             ),
           ),
           base: { model: 'fixture/beta', variant: 'high' },
-          developers: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } },
+          developers: {
+            modelRef: 'preset:balanced',
+            prompt: { append: ['GROUP_GUIDANCE'] },
+            permission: { skill: 'allow' },
+          },
           primary: { modelRef: 'opencode:model', variant: 'low' },
           small: { modelRef: 'opencode:small_model', variant: 'low' },
         },
@@ -329,7 +372,7 @@ test(
       permission: PermissionPolicy;
       agent: Record<string, { permission?: PermissionPolicy; prompt?: string }>;
     }>('/config');
-    assert.equal(explainPermission(effective.permission, 'skill', 'included-skill').action, 'allow');
+    assert.equal(explainPermission(effective.permission, 'skill', 'included-skill').action, 'deny');
     assert.equal(effective.permission.webfetch, 'allow');
     assert.equal(effective.permission.question, 'ask');
     assert.equal(effective.permission.todowrite, 'allow');
@@ -343,10 +386,21 @@ test(
       'enabled delegation inherits Composer defaults',
     );
     for (const fixture of permissionCases) {
-      const policy = composePermissions([config.permission, composer.agent.permission, ...fixture.layers]);
+      const global = composePermissions([config.permission, composer.agent.permission]);
+      const explicit: PermissionPolicy =
+        fixture.name === 'native-fallback'
+          ? { skill: 'allow' }
+          : fixture.name === 'group-over-native'
+            ? { skill: 'deny' }
+            : {};
+      const policy = composePermissions([global, explicit, ...fixture.layers]);
       // /config's response schema enumerates known keys first; /agent exposes
       // the ordered rules actually used by native permission evaluation.
-      assert.deepEqual(effective.agent[fixture.name].permission, policy);
+      if (fixture.probe === undefined) {
+        assert.deepEqual(effective.agent[fixture.name].permission, policy);
+      } else {
+        assert.deepEqual(effective.agent[fixture.name].permission ?? {}, {});
+      }
       const emitted = Object.entries(policy).flatMap(([permission, value]) =>
         Object.entries(typeof value === 'string' ? { '*': value } : value).map(([pattern, action]) => ({
           permission,
@@ -356,22 +410,55 @@ test(
       );
       const actual = agents.find((agent) => agent.name === fixture.name)?.permission;
       assert.ok(actual !== undefined);
-      assert.deepEqual(
-        actual.filter((rule) => rule.permission !== 'external_directory').slice(-emitted.length),
-        emitted,
+      if (fixture.probe === undefined) {
+        assert.deepEqual(
+          actual.filter((rule) => rule.permission !== 'external_directory').slice(-emitted.length),
+          emitted,
+        );
+      }
+      const permissionName =
+        fixture.probe === undefined ? 'skill' : fixture.probe === 'allow' ? 'read' : 'external_directory';
+      const pattern =
+        fixture.probe === undefined
+          ? 'included-skill'
+          : fixture.probe === 'allow'
+            ? 'notes.txt'
+            : '__composer_permission_probe_outside__';
+      assert.equal(
+        explainPermission(policy, permissionName, pattern).action,
+        fixture.probe === undefined ? fixture.action : undefined,
       );
-      assert.equal(explainPermission(policy, 'skill', 'included-skill').action, fixture.action);
       const session = await api<{ id: string }>('/session', { title: `Permission ${fixture.name}` });
-      const result = await api<Message>(`/session/${session.id}/message`, {
+      const state = { completed: false };
+      const request = api<Message>(`/session/${session.id}/message`, {
         agent: fixture.name,
-        parts: [{ type: 'text', text: 'Load included-skill now.' }],
+        parts: [
+          {
+            type: 'text',
+            text: fixture.probe === undefined ? 'Load included-skill now.' : `Probe native ${fixture.probe}.`,
+          },
+        ],
+      }).finally(() => {
+        state.completed = true;
       });
+      let asked = false;
+      for (let attempt = 0; attempt < 300 && !state.completed; attempt++) {
+        const pending = await api<{ id: string; sessionID: string }[]>('/permission');
+        for (const permission of pending.filter((item) => item.sessionID === session.id)) {
+          asked = true;
+          await api(`/permission/${permission.id}/reply`, { reply: 'once' });
+        }
+        await setTimeout(30);
+      }
+      const result = await request;
+      assert.equal(asked, fixture.action === 'ask', `native approval: ${fixture.name}`);
       assert.equal(result.info.error, undefined, JSON.stringify(result.info.error));
       const messages = await api<Message[]>(`/session/${session.id}/message`);
-      const tool = messages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
+      const toolName = fixture.probe === undefined ? 'skill' : `permission_default_${fixture.probe}`;
+      const tool = messages.flatMap((message) => message.parts).find((part) => part.tool === toolName);
       assert.equal(
         tool?.state?.status,
-        fixture.action === 'allow' ? 'completed' : 'error',
+        fixture.action === 'deny' ? 'error' : 'completed',
         `native evaluator: ${fixture.name}`,
       );
       if (fixture.action === 'deny') {
@@ -384,7 +471,7 @@ test(
       assert.ok(rules !== undefined);
       assert.equal(
         rules.findLast((rule) => rule.permission === 'skill')?.action,
-        'allow',
+        name === 'build' ? 'allow' : 'deny',
         `${name} inherits the global policy`,
       );
       assert.equal(

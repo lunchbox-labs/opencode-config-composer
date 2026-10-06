@@ -12,7 +12,7 @@ import {
   resolveChoice,
   resolveGroup,
 } from '../settings.ts';
-import { type PermissionPolicy, composePermissions, nativePermission } from './permissions.ts';
+import { type PermissionPolicy, type PermissionRule, compilePermissions, nativePermission } from './permissions.ts';
 import type { FieldOrigin, NativeInput, ResolvedComposition, SourceDocument } from './types.ts';
 
 function escapePointer(value: string): string {
@@ -161,56 +161,62 @@ interface PermissionLayer {
 }
 
 function permissionOrigins(layers: PermissionLayer[]): Map<string, FieldOrigin> {
-  let policy: PermissionPolicy = {};
+  const { blocks, rules: authored } = compilePermissions(layers.map((layer) => layer.policy));
+  const result = new Map<string, FieldOrigin>();
+  const ruleOrigin = (rule: PermissionRule, block = false): FieldOrigin => {
+    const layer = layers[rule.layer];
+    const pointer = layer.shorthand === true ? layer.pointer : `${layer.pointer}/${escapePointer(rule.permission)}`;
+    return origin(block || rule.scalar ? pointer : `${pointer}/${escapePointer(rule.pattern)}`, layer.sourceId);
+  };
   let root: FieldOrigin | undefined;
-  const blocks: Record<string, { origin: FieldOrigin; patterns: Map<string, FieldOrigin> }> = {};
   for (const layer of layers) {
-    const nextPolicy = composePermissions([policy, layer.policy]);
-    for (const [name, rules] of Object.entries(layer.policy)) {
-      const previous = Object.hasOwn(blocks, name) ? blocks[name] : undefined;
-      const merging = record(policy[name]) && record(rules);
-      const patterns = merging ? new Map(previous?.patterns) : new Map<string, FieldOrigin>();
-      const pointer = layer.shorthand === true ? layer.pointer : `${layer.pointer}/${escapePointer(name)}`;
-      if (record(rules)) {
-        for (const pattern of Object.keys(rules)) {
-          const overwritten = patterns.get(pattern);
-          patterns.delete(pattern);
-          patterns.set(pattern, {
-            ...origin(`${pointer}/${escapePointer(pattern)}`, layer.sourceId),
-            overwritten: overwritten === undefined ? [] : [overwritten],
-          });
-        }
-      }
-      blocks[name] = {
-        origin: {
-          ...origin(pointer, layer.sourceId),
-          ...(merging ? { operation: 'merge' as const } : {}),
-          references: [...patterns.values()].map((item) => item.pointer),
-          overwritten: previous === undefined ? [] : [previous.origin],
-        },
-        patterns,
-      };
-    }
-    policy = nextPolicy;
     root = {
       ...origin(layer.pointer, layer.sourceId),
       ...(root === undefined ? {} : { operation: 'merge' as const }),
-      references: Object.keys(policy).map((name) => blocks[name].origin.pointer),
       overwritten: root === undefined ? [] : [root],
     };
   }
-  // Store blocks and their children in emitted order, with references retaining
-  // that same sequence. Removed descendants exist only in overwrite history.
-  const result = new Map<string, FieldOrigin>();
   if (root !== undefined) {
     result.set('', root);
   }
-  for (const name of Object.keys(policy)) {
-    const block = blocks[name];
-    const pointer = `/${escapePointer(name)}`;
-    result.set(pointer, block.origin);
-    for (const [pattern, value] of block.patterns) {
-      result.set(`${pointer}/${escapePointer(pattern)}`, value);
+  for (const block of blocks) {
+    const pointer = `/${escapePointer(block.permission)}`;
+    let candidate: FieldOrigin | undefined;
+    let previousRule: PermissionRule | undefined;
+    for (const rule of block.rules) {
+      if (previousRule?.layer !== rule.layer || previousRule.permission !== rule.permission) {
+        candidate = {
+          ...ruleOrigin(rule, true),
+          ...(candidate === undefined || block.scalar ? {} : { operation: 'merge' as const }),
+          overwritten: candidate === undefined ? [] : [candidate],
+        };
+      }
+      previousRule = rule;
+    }
+    if (candidate === undefined) {
+      continue;
+    }
+    const next = { ...candidate, references: block.effective.map((rule) => ruleOrigin(rule).pointer) };
+    result.set(pointer, next);
+    root?.references.push(next.pointer);
+    if (block.scalar) {
+      continue;
+    }
+    for (const effective of block.effective) {
+      let winner: FieldOrigin | undefined;
+      const candidates = authored
+        .slice(0, authored.indexOf(effective) + 1)
+        .filter(
+          (rule) =>
+            rule.pattern === effective.pattern &&
+            (block.rules.includes(rule) || rule.permission === effective.permission),
+        );
+      for (const rule of candidates) {
+        winner = { ...ruleOrigin(rule), overwritten: winner === undefined ? [] : [winner] };
+      }
+      if (winner !== undefined) {
+        result.set(`${pointer}/${escapePointer(effective.pattern)}`, winner);
+      }
     }
   }
   return result;
@@ -266,7 +272,7 @@ function effectivePermissionOrigins(
       continue;
     }
     const pointer = `/agent/${escapePointer(name)}/permission`;
-    const layers = [...global, ...groups];
+    const layers = [...global];
     if (agent.permission !== undefined) {
       layers.push({
         policy: nativePermission(agent.permission),
@@ -274,6 +280,7 @@ function effectivePermissionOrigins(
         shorthand: typeof agent.permission === 'string',
       });
     }
+    layers.push(...groups);
     if (override !== undefined) {
       layers.push({
         policy: override,
