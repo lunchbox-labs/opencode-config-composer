@@ -1,5 +1,5 @@
 import { type AgentSettings, SettingsError, record } from '../settings.ts';
-import { expandIncludes } from '../prompts.ts';
+import { type PromptRead, expandIncludes } from '../prompts.ts';
 import { loadComponents } from './components.ts';
 import { resolveGroupAgentNames } from './membership.ts';
 import type { LoadedSources } from './sources.ts';
@@ -168,6 +168,7 @@ export async function resolveProfileRuntime(
   sources: LoadedSources,
   native: NativeInput,
   overlays: ReadonlyMap<string, string> = new Map(),
+  onPromptRead?: PromptRead,
 ): Promise<ResolvedProfileRuntime> {
   const { registry } = sources;
   const groups = registry.componentGroups ?? {};
@@ -429,6 +430,8 @@ export async function resolveProfileRuntime(
     value.prompt = await expandIncludes(
       parts.map((text) => (/^@[a-z][a-z0-9-]*\//.test(text) ? `{{include:${text}}}` : text)).join('\n\n'),
       registry.sourceDirectories ?? {},
+      onPromptRead,
+      overlays,
     );
   }
   for (const [name, command] of Object.entries(commands)) {
@@ -440,7 +443,7 @@ export async function resolveProfileRuntime(
     ) {
       throw new SettingsError(`Command ${name} names unavailable or unselected agent ${command.agent}.`);
     }
-    command.template = await expandIncludes(command.template, registry.sourceDirectories ?? {});
+    command.template = await expandIncludes(command.template, registry.sourceDirectories ?? {}, onPromptRead, overlays);
   }
   return {
     agent,

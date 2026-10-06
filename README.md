@@ -160,6 +160,18 @@ origins. Back and Escape return across sections; `/agent-models` and `/agent-gro
 The preview distinguishes saved composition from the running configuration and session model selections.
 Ordered permission contributions are inspectable, with enforcement integration still pending.
 
+The prompt screen selects an explicit writable JSONC source and target, then edits ordered multiline
+prepend/append fragments. Fragments can contain include markers or a complete `@source/file.md` shorthand.
+Agent components and explicit agent overrides also expose `inheritDefaults` and `inheritGroups` controls.
+Removing a local operation or resetting prompt settings preserves earlier contributions and the authored
+base body. Prompts without an authored native body remain native. The confirmation shows affected authored
+prompts and included file paths; reload remains explicit.
+
+Prompt previews use pending file edits when a snippet is also an edited source. Included files, including
+newly activated references, are captured once per canonical path and checked again before writes. A changed
+file or redirected alias requires reopening the editor. Invalid or missing includes are rejected even for
+an inactive prompt target.
+
 The permission editor selects a writable source and configuration target, then adds, edits, removes,
 and reorders `{tool, pattern, action}` rules. Repeated rules remain ordered. A blank pattern matches all
 inputs; actions are `allow`, `ask`, or `deny`. Removing local rules or saving an empty list leaves earlier

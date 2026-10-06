@@ -1810,3 +1810,71 @@ test('permission agent previews cannot collide with local-definition navigation 
   assert.match(ui.message(), /allow: bash/);
   assert.match(ui.message(), /componentGroups\/reviewers/);
 });
+
+test('prompt UI preserves multiline fragment order and cancellation before saving', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('prompts');
+  await ui.select(path);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('append');
+  await ui.select('+add');
+  await ui.enter('First\nSecond');
+  await ui.select('+add');
+  await ui.enter('Last');
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('1');
+  await ui.select('edit');
+  await ui.enter('First\nRevised second');
+  await ui.select('+save');
+  assert.match(ui.message(), /Last.*First\\nRevised second/s);
+  await ui.cancel();
+  assert.equal(await readFile(path, 'utf8'), original);
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual(
+    (await loadSnapshot(root)).sources.registry.componentGroups?.developers.configuration?.prompt?.append,
+    ['Last', 'First\nRevised second'],
+  );
+  assert.equal(ui.updates, 0);
+});
+
+test('prompt UI validates includes before writing and resets local inheritance controls', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  const target = JSON.stringify(['overrides', 'agents', 'nested/pinned']);
+  const open = async () => {
+    await ui.command('config-composer.compose');
+    await ui.select('prompts');
+    await ui.select(path);
+    await ui.select(target);
+  };
+  await open();
+  await ui.select('append');
+  await ui.select('+add');
+  await ui.enter('{{include:@missing/file.md}}');
+  await ui.select('+save');
+  assert.match(ui.toasts.at(-1)!.message, /source.*does not exist/);
+  assert.equal(await readFile(path, 'utf8'), original);
+  await open();
+  await ui.select('inheritGroups');
+  await ui.select('false');
+  await ui.confirm();
+  assert.equal(
+    (await loadSnapshot(root)).sources.scopes[0].value.overrides?.agents?.['nested/pinned'].prompt?.inheritGroups,
+    false,
+  );
+  await open();
+  await ui.select('reset');
+  await ui.confirm();
+  assert.equal(
+    (await loadSnapshot(root)).sources.scopes[0].value.overrides?.agents?.['nested/pinned']?.prompt,
+    undefined,
+  );
+});
