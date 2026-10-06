@@ -5,6 +5,7 @@ import { isolatedEnvironment } from './integration/harness.ts';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { setTimeout } from 'node:timers/promises';
 import { readFile, readdir } from 'node:fs/promises';
 import { stopProcess } from './integration/process.ts';
 
@@ -101,8 +102,16 @@ test(
     await stopProcess(child, exited);
     assert.equal(child.stdout.destroyed, true);
     if (process.platform === 'linux') {
-      // An orphan can briefly remain as a zombie until init reaps it; it cannot hold a pipe.
-      const status = await readFile(`/proc/${descendant}/stat`, 'utf8').catch(() => 'gone');
+      // SIGKILL delivery is asynchronous. Observe termination within the existing
+      // test deadline; an orphan zombie cannot retain an open pipe.
+      let status = '';
+      for (let attempt = 0; attempt < 50; attempt++) {
+        status = await readFile(`/proc/${descendant}/stat`, 'utf8').catch(() => 'gone');
+        if (status === 'gone' || /^\d+ \(.*\) Z /.test(status)) {
+          break;
+        }
+        await setTimeout(20);
+      }
       assert.ok(status === 'gone' || /^\d+ \(.*\) Z /.test(status), status);
     }
   },
