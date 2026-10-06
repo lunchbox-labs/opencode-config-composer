@@ -193,6 +193,13 @@ export async function nativeHarness(t: TestContext, name: string) {
     const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
       engines: { opencode: string };
     };
+    await writeFile(join(directory, 'package.json'), JSON.stringify({ private: true, type: 'module' }), {
+      flag: 'wx',
+    }).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
+    });
     // The real host installs this package in each config directory and waits for it
     // before loading plugins. Cold Windows installs can exceed a request deadline.
     // Install the genuine pinned dependency up front; retain native loading/validation.
@@ -201,6 +208,8 @@ export async function nativeHarness(t: TestContext, name: string) {
       [
         npm,
         'install',
+        '--prefix',
+        directory,
         '--ignore-scripts',
         '--no-audit',
         '--no-fund',
@@ -217,7 +226,15 @@ export async function nativeHarness(t: TestContext, name: string) {
   };
   const start = async () => {
     assert.equal(child, undefined, 'stop the host before restarting');
-    await Promise.all([prepareDependencies(configRoot), prepareDependencies(join(project, '.opencode'))]);
+    const preparations = await Promise.allSettled([
+      prepareDependencies(configRoot),
+      prepareDependencies(join(project, '.opencode')),
+    ]);
+    for (const result of preparations) {
+      if (result.status === 'rejected') {
+        throw result.reason;
+      }
+    }
     let launchOutput = '';
     child = spawn(
       process.env.OPENCODE_BIN ?? 'opencode',

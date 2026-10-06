@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { nativeHarness } from './integration/harness.ts';
 import type * as Runtime from '../src/config-composer/composition/runtime.ts';
@@ -88,6 +88,16 @@ test(
     await writeFile(local, '{"activeProfiles":["work"]}');
     await api('/instance/dispose', 'POST');
     const activated = await api<Agent[]>('/agent');
+    const skills = await api<{ name: string; location: string }[]>('/skill');
+    const checks = skills.find((item) => item.name === 'checks');
+    assert.ok(checks !== undefined);
+    assert.equal(await realpath(checks.location), await realpath(join(root, 'library/checks/SKILL.md')));
+    // OpenCode itself grants access to configured native skill directories.
+    const skillRule: Agent['permission'][number] = {
+      permission: 'external_directory',
+      pattern: join(dirname(checks.location), '*'),
+      action: 'allow',
+    };
     for (const before of baseline.filter((item) => item.native)) {
       const after = activated.find((item) => item.name === before.name);
       assert.ok(after !== undefined, before.name);
@@ -95,12 +105,6 @@ test(
       assert.equal(after.prompt ?? undefined, before.prompt ?? undefined, `preserve ${before.name} native prompt`);
       assert.equal(after.mode, before.mode);
       assert.equal(after.hidden ?? undefined, before.hidden ?? undefined);
-      // OpenCode itself grants access to configured native skill directories.
-      const skillRule = {
-        permission: 'external_directory',
-        pattern: `${join(root, 'library/checks')}/*`,
-        action: 'allow',
-      };
       assert.ok(after.permission.some((rule) => JSON.stringify(rule) === JSON.stringify(skillRule)));
       assert.deepEqual(
         after.permission.filter((rule) => rule.pattern !== skillRule.pattern),
@@ -119,8 +123,6 @@ test(
     assert.deepEqual(reviewer.options.groups, ['work']);
     const commands = await api<{ name: string; agent?: string }[]>('/command');
     assert.equal(commands.find((item) => item.name === 'review')?.agent, 'reviewer');
-    const skills = await api<{ name: string; location: string }[]>('/skill');
-    assert.ok(skills.some((item) => item.name === 'checks' && item.location === join(root, 'library/checks/SKILL.md')));
     await writeFile(local, '{"activeProfiles":[]}');
     await api('/instance/dispose', 'POST');
     const cleared = await api<Agent[]>('/agent');

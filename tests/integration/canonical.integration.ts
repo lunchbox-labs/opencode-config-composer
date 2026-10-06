@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { type TestContext, test } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
@@ -403,7 +403,7 @@ test(
       });
       assert.deepEqual(
         plan.edits.map((item) => item.file.path),
-        [models],
+        [await realpath(models)],
       );
       await storage.savePlan(plan);
       assert.equal(await readFile(settings, 'utf8'), rootBefore);

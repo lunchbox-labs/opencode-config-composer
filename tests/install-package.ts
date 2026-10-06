@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -66,7 +66,9 @@ export async function installPackage(root: string) {
     ],
     { cwd: root, timeout: 120_000 },
   );
-  const directory = join(root, 'node_modules', manifest.name);
+  // Node resolves imports to canonical paths; use the same package identity when
+  // the OS temp directory contains a Windows short-name or symlink alias.
+  const directory = await realpath(join(root, 'node_modules', manifest.name));
   const metadata = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as Record<string, unknown>;
   assert.equal(metadata.name, '@lunchbox-labs/opencode-config-composer');
   assert.equal(metadata.license, 'MIT');
