@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Config } from '@opencode-ai/plugin';
+import type { Config as PluginConfig } from '@opencode-ai/plugin';
+import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
+type Config = PluginConfig & Pick<NativeConfig, 'default_agent'>;
 import { packageName } from '../src/config-composer/package-name.ts';
 import { publishRuntimeBaseline, readRuntimeBaseline } from '../src/config-composer/composition/runtime-baseline.ts';
 
 const context = { root: '/project', directory: '/project/subdir' };
+
+test('native default agent is attested and later changes reject stale editor baselines', () => {
+  const config: Config = { plugin: [packageName], default_agent: 'worker' };
+  publishRuntimeBaseline(config, {}, context, { default_agent: 'worker' });
+  assert.equal(readRuntimeBaseline(config, context).default_agent, 'worker');
+  config.default_agent = 'plan';
+  assert.throws(() => readRuntimeBaseline(config, context), /default_agent changed/);
+});
 
 test('runtime baseline metadata preserves native absent slots and never mutates source registration options', () => {
   const options = { reloadToken: 'saved-token' };

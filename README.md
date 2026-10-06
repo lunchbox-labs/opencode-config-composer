@@ -314,6 +314,40 @@ prompt command names, and registered TUI slash names or aliases are rejected. A 
 removes Composer's shortcut registrations and reports the conflict; existing commands retain their behavior.
 Failed refresh leaves the regular Composer entrypoints available so sources can be corrected.
 
+Profiles can control workflow agent availability without removing definitions or memberships:
+
+```jsonc
+{
+  "profiles": {
+    "planning": { "agentAvailability": { "build": false, "plan": true } },
+    "coding": { "agentAvailability": { "build": true, "plan": false } }
+  },
+  "activeProfiles": ["planning"]
+}
+```
+
+Each ordered parent/profile occurrence contributes its named boolean decisions; the last decision for an agent
+wins. An absent decision inherits earlier/native availability. `true` explicitly enables an existing native
+agent or declared component, selecting that component before this profile's own layers. It cannot satisfy an
+earlier profile's requirement that a preset target already be selected. `false` preserves the agent's composed
+definition and group settings while publishing native `disable: true`. Removing a decision restores earlier/native
+availability; component agents still require selection. A native-disabled member with no explicit workflow decision
+still fails active group validation.
+
+Targets must exist. Internal `title`, `summary`, and `compaction` agents cannot be toggled. Hidden and disabled
+remain distinct: enabling a hidden agent does not make it visible. At least one enabled, visible primary agent
+must remain (`mode: all` also qualifies), and an explicit native `default_agent` must remain valid. Composer
+does not silently change that native default. Commands targeting a disabled Composer agent fail validation.
+
+Use **Compose → Definitions → Profiles → Agent availability** to stage enable, disable, or inherit decisions.
+**Saved composition preview → Agent availability** shows the complete available/dormant registry and decision
+origins. Save preserves native files and conversation history; explicit apply waits for idle parent and child
+work. After native refresh, the TUI falls back to its first remaining visible primary if the selected agent was
+disabled; it may return to the remembered selection when re-enabled. Native TUI and headless fallback order can
+differ. An explicit headless request naming a disabled agent fails before model dispatch; continue the same
+conversation with an enabled agent. Restart retains the saved selection. There is no uninterrupted hot-switch
+guarantee; the host does not offer an atomic idle-and-dispose operation.
+
 Use `/agent-models` for global defaults, presets, groups, and individual overrides.
 Use `/agent-groups` for ordered memberships. Model and variant choices come from the provider API.
 Review the proposed scope and retained pins before saving. The editor preserves prompts, comments,

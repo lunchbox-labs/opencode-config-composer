@@ -22,6 +22,52 @@ const titles = {
 } as const;
 
 export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
+  const availability = (name: string) => {
+    const pending = { ...snapshot.sources.registry.profiles?.[name].agentAvailability };
+    ui.menu(`${name}: agent availability`, () => [
+      {
+        title: 'Save availability…',
+        value: '+save',
+        description: 'Preserve definitions and history; applying waits for an idle instance',
+        run: () =>
+          ui.propose(snapshot, {
+            operation: 'patch',
+            registry: 'profiles',
+            name,
+            path: ['agentAvailability'],
+            value: pending,
+          }),
+      },
+      ...Object.entries(snapshot.resolved.agentAvailability)
+        .filter(([, state]) => !state.internal)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([agent, state]) => ({
+          title: agent,
+          value: `agent:${agent}`,
+          description: `This profile: ${!Object.hasOwn(pending, agent) ? 'inherit' : pending[agent] ? 'enable' : 'disable'} · saved: ${state.status} · ${state.mode}`,
+          run: () =>
+            ui.menu(`${name}: ${agent}`, [
+              ...(['enable', 'disable', 'inherit'] as const).map((action) => ({
+                title:
+                  action === 'inherit'
+                    ? 'Inherit earlier/native availability'
+                    : action === 'enable'
+                      ? 'Enable agent'
+                      : 'Disable agent',
+                value: action,
+                run: () => {
+                  if (action === 'inherit') {
+                    Reflect.deleteProperty(pending, agent);
+                  } else {
+                    pending[agent] = action === 'enable';
+                  }
+                  ui.back();
+                },
+              })),
+            ]),
+        })),
+    ]);
+  };
   const members = (name: string, kind: 'agents' | 'skills' | 'commands' | 'prompts') => {
     const pending = [...(snapshot.sources.registry.componentGroups?.[name][kind] ?? [])];
     const available =
@@ -185,6 +231,7 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
       actions.push({ title: 'Model and variant settings', value: 'model', run: () => ui.presetModel(snapshot, name) });
     } else {
       actions.push({ title: 'Ordered layers', value: 'layers', run: () => layers(name) });
+      actions.push({ title: 'Agent availability', value: 'availability', run: () => availability(name) });
       actions.push({
         title: 'Parent profile',
         value: 'parent',

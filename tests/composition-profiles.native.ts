@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { installPackage } from './install-package.ts';
+import { normalizeBundledPermissions } from './native-bundled-permissions.ts';
 import type * as Storage from '../src/config-composer/storage.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import type * as Activation from '../src/config-composer/composition/activation.ts';
@@ -333,33 +334,7 @@ test(
     await activate(['edited-profile', 'work']);
     await api('/instance/dispose', 'POST');
     const activated = await api<Agent[]>('/agent');
-    const bundledPatterns = ['config-composer-explain', 'config-composer-create', 'config-composer-migrate'].map(
-      (name) => `${join(installed.directory, 'skills', name)}/*`,
-    );
-    const normalizeBundled = (rules: Agent['permission']) => {
-      const positions = rules.flatMap((rule, index) => (bundledPatterns.includes(rule.pattern) ? [index] : []));
-      assert.ok(positions.length >= bundledPatterns.length);
-      assert.equal(positions.length % bundledPatterns.length, 0);
-      const normalized = [...rules];
-      // The native explore agent repeats the grants in its readonly external-directory block.
-      // Normalize only each complete contiguous block of disjoint same-action package grants.
-      for (let offset = 0; offset < positions.length; offset += bundledPatterns.length) {
-        const block = positions.slice(offset, offset + bundledPatterns.length);
-        assert.equal(block.at(-1)! - block[0], bundledPatterns.length - 1);
-        const grants = block.map((index) => rules[index]);
-        for (const pattern of bundledPatterns) {
-          assert.deepEqual(
-            grants.filter((rule) => rule.pattern === pattern),
-            [{ permission: 'external_directory', pattern, action: 'allow' }],
-          );
-        }
-        const sorted = grants.toSorted((left, right) => left.pattern.localeCompare(right.pattern));
-        for (const [index, position] of block.entries()) {
-          normalized[position] = sorted[index];
-        }
-      }
-      return normalized;
-    };
+    const normalizeBundled = (rules: Agent['permission']) => normalizeBundledPermissions(rules, installed.directory);
     const normalizeRegistry = (agents: Agent[]) =>
       agents.map((agent) => ({ ...agent, permission: normalizeBundled(agent.permission) }));
     for (const before of baseline.filter((item) => item.native)) {

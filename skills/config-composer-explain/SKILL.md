@@ -23,6 +23,13 @@ An empty list selects none. Declaring a shortcut does not activate it, apply set
 Native prompt-command and TUI alias collisions require a different shortcut name; refresh shortcuts in `/compose`
 after editing their definitions.
 
+Profile `agentAvailability` maps native/component agent names to booleans. Ordered profile occurrences use the
+last decision; absence inherits. Disabled definitions, memberships, and history remain intact. Hidden agents
+stay hidden when enabled. A visible primary and a valid native `default_agent` must remain; internal
+`title`, `summary`, and `compaction` agents cannot be toggled. Inspect the saved availability view for origins.
+Apply waits for idle work. The TUI falls back to a remaining visible primary, while explicit headless requests
+for disabled agents fail; an existing conversation can continue with an explicitly enabled agent.
+
 Saved Composer edits require explicit apply or restart. Apply affects the current instance using its running native
 baseline; native JSON edits require restart. Existing session
 model selections remain. Native defaults and explicit agent model pins can survive profile changes.

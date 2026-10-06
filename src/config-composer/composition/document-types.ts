@@ -96,6 +96,8 @@ export interface CompositionOverrides {
 
 export interface CompositionProfile {
   extends?: string;
+  /** Later profile occurrences replace earlier decisions; absence inherits earlier/native availability. */
+  agentAvailability?: Record<string, boolean>;
   /** Replay parent layers before child layers; do not merge these arrays. */
   layers?: ProfileLayer[];
   overrides?: CompositionOverrides;

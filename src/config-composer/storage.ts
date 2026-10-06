@@ -454,6 +454,7 @@ export async function loadEditorSnapshot(
     writable: false,
   };
   const nativeModels: EditorNativeBaseline = native ?? {
+    default_agent: typeof config.default_agent === 'string' ? config.default_agent : undefined,
     permission: config.permission,
     model: typeof config.model === 'string' ? config.model : undefined,
     small_model: typeof config.small_model === 'string' ? config.small_model : undefined,

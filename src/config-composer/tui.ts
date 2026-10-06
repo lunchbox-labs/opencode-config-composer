@@ -118,6 +118,7 @@ export function registerSettings(
     const models = await readNative();
     if (
       !isDeepStrictEqual(snapshot.nativeModels.agent, models.agent) ||
+      snapshot.nativeModels.default_agent !== models.default_agent ||
       !sameNativePermissionOrder(snapshot.nativeModels, models)
     ) {
       throw new SettingsError(
@@ -1030,6 +1031,7 @@ export function registerSettings(
       JSON.stringify({
         model: value.resolved.model,
         small_model: value.resolved.small_model,
+        default_agent: value.resolved.default_agent,
         choices: value.resolved.choices,
         agent: value.resolved.agent,
         permissions: value.resolved.permissions,
@@ -1073,6 +1075,7 @@ export function registerSettings(
         `Changed command models: ${commands.length === 0 ? 'none' : commands.map(({ name, model }) => `${name}: ${model}`).join(', ')}.\n` +
         `Commands: ${Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
         `Active profiles: ${preview.sources.activeProfiles.join(' → ')}.\n` +
+        `Available workflow agents: ${Object.values(preview.resolved.agentAvailability).filter((agent) => agent.enabled && !agent.internal).length}. Native default: ${preview.resolved.default_agent ?? 'OpenCode fallback'}.\n` +
         'Save preserves conversations. Reload saved settings to apply changes.',
       async () => {
         await refreshNative(snapshot);

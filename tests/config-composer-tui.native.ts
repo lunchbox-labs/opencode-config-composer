@@ -39,7 +39,7 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
         plugin: [installed.directory],
         model: 'fixture/model',
         small_model: 'fixture/model',
-        default_agent: 'worker',
+        default_agent: scope === 'shared' ? undefined : 'worker',
         enabled_providers: ['fixture'],
         provider: {
           fixture: {
@@ -57,9 +57,15 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
         join(scope === 'shared' ? configRoot : join(project, '.opencode'), 'config-composer.jsonc'),
         JSON.stringify({
           componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
-          profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
+          profiles: {
+            work: { layers: [{ componentGroup: 'workers' }] },
+            planning: { extends: 'work', agentAvailability: { build: false } },
+          },
           activeProfiles: ['work'],
-          profileShortcuts: { quiet: { activeProfiles: [], description: 'Select no profiles' } },
+          profileShortcuts: {
+            quiet: { activeProfiles: [], description: 'Select no profiles' },
+            planning: { activeProfiles: ['planning'], description: 'Select planning agents' },
+          },
         }),
       );
     }
@@ -96,6 +102,7 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
           fileURLToPath(new URL('./native-shortcuts.py', import.meta.url)),
           process.env.OPENCODE_BIN ?? 'opencode',
           project,
+          'availability',
         ],
         { env, timeout: 130_000, maxBuffer: 1_000_000 },
       );

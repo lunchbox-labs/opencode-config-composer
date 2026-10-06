@@ -124,7 +124,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         output.output = await expandIncludes(output.output, sources.registry.sourceDirectories ?? {});
       }
     },
-    config: async (config: Config & Pick<NativeConfig, 'skills'>) => {
+    config: async (config: Config & Pick<NativeConfig, 'skills' | 'default_agent'>) => {
       // Packaged help stays discoverable even when a source requires migration or repair.
       config.skills = {
         ...config.skills,
@@ -136,7 +136,12 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       }
       const previous = configurations.get(config);
       const nativeGlobals = restore(
-        { model: config.model, small_model: config.small_model, permission: config.permission },
+        {
+          model: config.model,
+          small_model: config.small_model,
+          permission: config.permission,
+          default_agent: config.default_agent,
+        },
         previous,
       );
       const staged: Record<string, AgentSettings> = {};
@@ -236,6 +241,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         applied: structuredClone({
           model: config.model,
           small_model: config.small_model,
+          default_agent: config.default_agent,
           permission: config.permission,
         }),
         added: new Set(Object.keys(resolved.agent).filter((name) => !Object.hasOwn(staged, name))),

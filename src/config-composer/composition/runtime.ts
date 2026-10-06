@@ -2,6 +2,12 @@ import { type AgentSettings, SettingsError, record } from '../settings.ts';
 import { type PromptRead, expandIncludes } from '../prompts.ts';
 import { type GlobalPermissionContribution, type PermissionWarning, resolvePermissions } from './permission-runtime.ts';
 import { loadComponents } from './components.ts';
+import {
+  type AgentAvailability,
+  availabilityTargets,
+  inspectAvailability,
+  validateAvailablePrimary,
+} from './agent-availability.ts';
 import { MembershipValidationError, resolveGroupAgentNames } from './membership.ts';
 import type { LoadedSources } from './sources.ts';
 import type {
@@ -41,6 +47,8 @@ export interface ResolvedProfileRuntime {
   agent: Record<string, AgentSettings>;
   model?: string;
   small_model?: string;
+  default_agent?: string;
+  agentAvailability: Record<string, AgentAvailability>;
   selectedAgents: string[];
   choices: Record<string, ResolvedModelSettings>;
   provenance: Record<string, FieldOrigin>;
@@ -194,6 +202,12 @@ export async function resolveProfileRuntime(
   const selected = new Set<string>();
   const choices: Record<string, ResolvedModelSettings> = {};
   const provenance: Record<string, FieldOrigin> = {};
+  const toggled = availabilityTargets(sources, available);
+  const availability = new Map<string, boolean>();
+  // Explicit workflow decisions retain membership/configuration even when the final agent is disabled.
+  for (const name of toggled) {
+    available[name].disable = false;
+  }
   const permissions: PermissionContribution[] = [];
   const globalPermissions: GlobalPermissionContribution[] = [];
   const prompts: Record<
@@ -208,7 +222,7 @@ export async function resolveProfileRuntime(
     }
   }
   for (const [name, value] of Object.entries({ ...native.agent, ...native.composerOwnedAgents })) {
-    for (const key of ['model', 'variant'] as const) {
+    for (const key of ['model', 'variant', 'disable'] as const) {
       if (value[key] !== undefined) {
         const pointer = `/agent/${part(name)}/${key}`;
         provenance[pointer] = { ...origin(undefined, pointer, 'native'), operation: 'native' };
@@ -370,6 +384,17 @@ export async function resolveProfileRuntime(
     }
   }
   for (const occurrence of sources.orderedProfiles) {
+    for (const [name, enabled] of Object.entries(occurrence.profile.agentAvailability ?? {})) {
+      availability.set(name, enabled);
+      trace(`/agent/${part(name)}/disable`, {
+        ...occurrence.origin,
+        pointer: `${occurrence.origin.pointer}/agentAvailability/${part(name)}`,
+        layer: `profile:${occurrence.name}`,
+      });
+      if (enabled) {
+        select(name);
+      }
+    }
     for (const layer of occurrence.profile.layers ?? []) {
       if (layer.componentGroup !== undefined) {
         const name = layer.componentGroup;
@@ -517,11 +542,34 @@ export async function resolveProfileRuntime(
       overwritten: [],
     };
   }
+  for (const [name, enabled] of availability) {
+    agent[name] = { ...(Object.hasOwn(agent, name) ? agent[name] : available[name]), disable: !enabled };
+  }
+  for (const name of Object.keys(available)) {
+    const pointer = `/agent/${part(name)}/disable`;
+    if (!Object.hasOwn(provenance, pointer)) {
+      const component = Object.hasOwn(sources.provenance, `/components/agents/${part(name)}`)
+        ? sources.provenance[`/components/agents/${part(name)}`]
+        : undefined;
+      provenance[pointer] =
+        component === undefined
+          ? { ...origin(undefined, pointer, 'native availability'), operation: 'native' }
+          : { ...component, layer: selected.has(name) ? 'component availability' : 'unselected component' };
+    }
+  }
+  const agentAvailability = inspectAvailability(
+    available,
+    agent,
+    new Set(Object.keys(components.agents)),
+    selected,
+    provenance,
+  );
+  validateAvailablePrimary(agentAvailability, native.default_agent);
   for (const [name, command] of Object.entries(commands)) {
     if (
       command.agent !== undefined &&
       (!Object.hasOwn(available, command.agent) ||
-        available[command.agent].disable === true ||
+        (agent[command.agent] ?? available[command.agent]).disable === true ||
         (Object.hasOwn(components.agents, command.agent) && !selected.has(command.agent)))
     ) {
       throw new SettingsError(`Command ${name} names unavailable or unselected agent ${command.agent}.`);
@@ -536,6 +584,8 @@ export async function resolveProfileRuntime(
     commands,
     skillPaths: [...skillPaths],
     ...globals,
+    ...(native.default_agent === undefined ? {} : { default_agent: native.default_agent }),
+    agentAvailability,
     selectedAgents: [...selected],
     choices,
     provenance,

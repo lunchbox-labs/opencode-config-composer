@@ -53,6 +53,12 @@ export function openEffective(snapshot: Snapshot, navigation: ReturnType<typeof 
     placeholder: 'Search fields…',
     options: [
       {
+        title: 'Agent availability',
+        value: '+availability',
+        category: 'Selection',
+        description: 'Enabled, hidden, disabled and unselected agents with decision sources',
+      },
+      {
         title: 'Profiles and layer order',
         value: '+profiles',
         category: 'Selection',
@@ -81,7 +87,24 @@ export function openEffective(snapshot: Snapshot, navigation: ReturnType<typeof 
     ],
     onSelect: (option) => {
       let message: string;
-      if (option.value === '+profiles') {
+      if (option.value === '+availability') {
+        navigation.menu({
+          title: 'Saved agent availability',
+          options: Object.entries(snapshot.resolved.agentAvailability).map(([name, state]) => ({
+            title: name,
+            value: name,
+            description: `${state.status} · ${state.mode}${state.internal ? ' · internal' : ''}`,
+          })),
+          onSelect: (agent) => {
+            const state = snapshot.resolved.agentAvailability[agent.value];
+            navigation.alert({
+              title: agent.title,
+              message: `Saved preview: ${state.status} · ${state.mode}.\nHidden agents remain enabled but are absent from the primary picker. Disabled agents cannot receive new requests.\nNative default_agent: ${snapshot.resolved.default_agent ?? 'OpenCode fallback'}.\n\n${state.origin === undefined ? 'Native availability' : describe(state.origin)}\n\nSave preserves definitions and conversations. Apply is explicit and waits for idle work. Continue existing history using an enabled agent; an explicit disabled agent request fails.`,
+            });
+          },
+        });
+        return;
+      } else if (option.value === '+profiles') {
         message =
           `Selection is project-wide.\nActive profiles: ${snapshot.sources.activeProfiles.length === 0 ? 'none' : snapshot.sources.activeProfiles.join(' → ')}\n\n` +
           `Replayed profile order: ${snapshot.sources.orderedProfiles.length === 0 ? 'none' : snapshot.sources.orderedProfiles.map((item) => item.name).join(' → ')}\n\n` +
