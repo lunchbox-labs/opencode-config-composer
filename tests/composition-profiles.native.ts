@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { nativeHarness } from './integration/harness.ts';
 import { installedEditor } from './integration/editor.ts';
+import { bundledPermissions } from './integration/bundled-permissions.ts';
 import type * as Storage from '../src/config-composer/storage.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import type * as Activation from '../src/config-composer/composition/activation.ts';
@@ -268,6 +269,9 @@ test(
       pattern: join(dirname(checks.location), '*'),
       action: 'allow',
     };
+    const normalizeBundled = await bundledPermissions(host);
+    const normalizeRegistry = (agents: Agent[]) =>
+      agents.map((agent) => ({ ...agent, permission: normalizeBundled(agent.permission) }));
     for (const before of baseline.filter((item) => item.native)) {
       const after = activated.find((item) => item.name === before.name);
       assert.ok(after !== undefined, before.name);
@@ -277,8 +281,8 @@ test(
       assert.equal(after.hidden ?? undefined, before.hidden ?? undefined);
       assert.ok(after.permission.some((rule) => JSON.stringify(rule) === JSON.stringify(skillRule)));
       assert.deepEqual(
-        after.permission.filter((rule) => rule.pattern !== skillRule.pattern),
-        before.permission,
+        normalizeBundled(after.permission.filter((rule) => rule.pattern !== skillRule.pattern)),
+        normalizeBundled(before.permission),
       );
       assert.deepEqual(after.model, {
         providerID: 'fixture',
@@ -306,10 +310,18 @@ test(
     await activate([]);
     await api('/instance/dispose', 'POST');
     const cleared = await api<Agent[]>('/agent');
-    assert.deepEqual(cleared, baseline, 'empty local selection restores the exact native registry');
+    assert.deepEqual(
+      normalizeRegistry(cleared),
+      normalizeRegistry(baseline),
+      'empty local selection restores the native registry with equivalent bundled directory grants',
+    );
     await activate();
     await api('/instance/dispose', 'POST');
-    assert.deepEqual(await api<Agent[]>('/agent'), baseline, 'absent local selection inherits empty shared selection');
+    assert.deepEqual(
+      normalizeRegistry(await api<Agent[]>('/agent')),
+      normalizeRegistry(baseline),
+      'absent local selection inherits empty shared selection',
+    );
     const retained = await api<{ id: string; title: string }>(`/session/${conversation.id}`);
     assert.equal(retained.id, conversation.id);
     assert.equal(retained.title, conversation.title);

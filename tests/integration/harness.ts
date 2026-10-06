@@ -65,6 +65,7 @@ export async function nativeHarness(t: TestContext, name: string) {
   const configRoot = join(root, 'config', 'opencode');
   const requests: Record<string, unknown>[] = [];
   let output = '';
+  let stderr = '';
   let child: ChildProcess | undefined;
   let exited: Promise<unknown> | undefined;
   let baseURL: string | undefined;
@@ -86,10 +87,9 @@ export async function nativeHarness(t: TestContext, name: string) {
       assert.ok(requests.length <= 200, 'unexpected provider request loop');
       const toolReturned =
         Array.isArray(body.messages) && body.messages.some((message: { role?: string }) => message.role === 'tool');
+      const requestedSkill = /Load ([a-z-]+) now\./.exec(JSON.stringify(body.messages))?.[1];
       const defaultProbe = /Probe native (allow|ask)\./.exec(JSON.stringify(body.messages))?.[1];
-      const callSkill =
-        (JSON.stringify(body.messages).includes('Load included-skill now.') || defaultProbe !== undefined) &&
-        !toolReturned;
+      const callSkill = (requestedSkill !== undefined || defaultProbe !== undefined) && !toolReturned;
       const base = { id: 'synthetic-response', model: body.model, created: 1 };
       if (body.stream === true) {
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -110,7 +110,7 @@ export async function nativeHarness(t: TestContext, name: string) {
                           type: 'function',
                           function: {
                             name: defaultProbe === undefined ? 'skill' : `permission_default_${defaultProbe}`,
-                            arguments: defaultProbe === undefined ? JSON.stringify({ name: 'included-skill' }) : '{}',
+                            arguments: defaultProbe === undefined ? JSON.stringify({ name: requestedSkill }) : '{}',
                           },
                         },
                       ],
@@ -296,6 +296,9 @@ export async function nativeHarness(t: TestContext, name: string) {
     };
     child.stdout?.on('data', capture);
     child.stderr?.on('data', capture);
+    child.stderr?.on('data', (data: Buffer) => {
+      stderr = (stderr + data.toString()).slice(-65_536);
+    });
     for (let attempt = 0; attempt < 400; attempt++) {
       if (launchError !== undefined) {
         throw launchError;
@@ -326,6 +329,9 @@ export async function nativeHarness(t: TestContext, name: string) {
     return (await result.json()) as T;
   };
   return {
+    get stderr() {
+      return stderr;
+    },
     get pid() {
       return child?.pid;
     },

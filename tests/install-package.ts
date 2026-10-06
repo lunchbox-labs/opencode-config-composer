@@ -30,6 +30,14 @@ export async function installPackage(root: string) {
     'README.md',
     'schema.json',
     'LICENSE',
+    'skills/config-composer-explain/SKILL.md',
+    'skills/config-composer-explain/references/schema.md',
+    'skills/config-composer-create/SKILL.md',
+    'skills/config-composer-create/examples/review.jsonc',
+    'skills/config-composer-migrate/SKILL.md',
+    'skills/config-composer-migrate/examples/before.jsonc',
+    'skills/config-composer-migrate/examples/after.jsonc',
+    'skills/config-composer-migrate/examples/worker.md',
     'src/server.ts',
     'src/tui.ts',
     'tsconfig.json',
@@ -47,7 +55,7 @@ export async function installPackage(root: string) {
   for (const path of files) {
     assert.match(
       path,
-      /^(?:dist\/.*\.(?:js|d\.ts)|src\/.*\.ts|tsconfig(?:\.build)?\.json|package\.json|schema\.json|README\.md|LICENSE)$/,
+      /^(?:dist\/.*\.(?:js|d\.ts)|src\/.*\.ts|tsconfig(?:\.build)?\.json|package\.json|schema\.json|skills\/config-composer-(?:explain|create|migrate)\/(?:SKILL\.md|references\/schema\.md|examples\/(?:review\.jsonc|before\.jsonc|after\.jsonc|worker\.md))|README\.md|LICENSE)$/,
       `unexpected published file: ${path}`,
     );
   }

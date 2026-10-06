@@ -152,6 +152,22 @@ Includes accept contained `.md` and `.txt` UTF-8 files. Unsafe paths, escaping s
 and excessive depth or size are rejected. Limits are 64 KiB per snippet, 256 KiB per composed prompt,
 32 include levels, and 256 include expansions. Settings files have a 1 MiB limit.
 
+## Bundled reference skills
+
+The installed package registers three native skills: `config-composer-explain`, `config-composer-create`,
+and `config-composer-migrate`. Load the relevant skill through OpenCode's native skill tool when explaining
+settings, creating reusable definitions, or migrating legacy configuration. Each skill includes relative
+reference files or validated examples in the package. No personal skill installation is required.
+
+The bundle uses a module-relative native skill directory, preserves existing skill paths and URLs, and
+does not inject bodies into agent prompts or change skill permissions. Native permissions can deny loading
+these skills. The guidance remains available when Composer source validation fails, so migration and repair
+help can load without applying invalid profile fields. Missing or malformed package resources produce a diagnostic directing reinstallation.
+The creation example is inactive until selected; the migration example shows an explicit selection needed
+to preserve its illustrated legacy behavior. Substitute actual model IDs and retain native files.
+This uses native on-demand loading; automatic Composer directory discovery and a custom lazy loader
+remain outside this feature.
+
 ## Settings editor
 
 Use `/compose` to open the composition hub. It links the model and membership editors and a read-only

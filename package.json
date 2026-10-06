@@ -34,7 +34,8 @@
     "tsconfig.build.json",
     "schema.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
