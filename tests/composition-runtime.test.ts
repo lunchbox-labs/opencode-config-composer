@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config as PluginConfig, PluginInput } from '@opencode-ai/plugin';
 import server from '../src/server.ts';
 import { bundledSkillDirectory } from '../src/config-composer/bundled-skills.ts';
+import { packageName } from '../src/config-composer/package-name.ts';
 import { loadCompositionSources } from '../src/config-composer/composition/sources.ts';
 import { resolveProfileRuntime } from '../src/config-composer/composition/runtime.ts';
 type Config = PluginConfig & Pick<NativeConfig, 'skills'>;
@@ -40,6 +41,129 @@ const definitions = {
   },
   activeProfiles: ['coding', 'small'],
 };
+
+test('composition leaves shared native inputs unchanged across fresh instance hooks', async (t) => {
+  const f = await fixture(t, {
+    componentGroups: { work: { agents: ['worker'], configuration: { model: 'fixture/composed' } } },
+    profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+    activeProfiles: ['work'],
+  });
+  const cached: Config = {
+    agent: { worker: { prompt: 'Native body', permission: { bash: 'ask' }, options: { untouched: true } } },
+    command: { native: { template: 'Native command' } },
+    skills: { paths: ['/native'], urls: ['https://example.test/skills'] },
+  };
+  const original = structuredClone(cached);
+  const first: Config = { ...cached };
+  await f.hooks.config!(first);
+  assert.equal(agent(first, 'worker')?.model, 'fixture/composed');
+  assert.deepEqual(cached, original, 'Composer must not mutate native objects cached outside this instance');
+  assert.notEqual(first.agent, cached.agent);
+  assert.notEqual(first.agent?.worker, cached.agent?.worker);
+  await writeFile(f.file, '{}');
+  const fresh = await server.server({ directory: f.root, worktree: f.root } as PluginInput, { configFile: f.file });
+  const second: Config = { ...cached };
+  await fresh.config!(second);
+  assert.deepEqual(second.agent, original.agent, 'a fresh instance must inherit the original native inputs');
+  assert.equal(agent(first, 'worker')?.model, 'fixture/composed', 'reopening another instance does not alter this one');
+});
+
+test('runtime publishes exact applied revisions and invalid membership never claims an applied revision', async (t) => {
+  const f = await fixture(t, definitions);
+  const config: Config = { plugin: [packageName], small_model: 'fixture/small' };
+  const marker = () => {
+    const entry = config.plugin?.[0];
+    assert.ok(Array.isArray(entry));
+    return entry[1].__configComposerRuntime as { revision?: { sources: string; effective: string }; id: string };
+  };
+  await f.hooks.config!(config);
+  const first = marker();
+  assert.ok(first.revision !== undefined);
+  assert.match(first.revision.sources, /^[a-f0-9]{64}$/);
+  assert.match(first.revision.effective, /^[a-f0-9]{64}$/);
+  await f.hooks.config!(config);
+  assert.deepEqual(marker().revision, first.revision);
+  await writeFile(f.file, '// Changed saved bytes\n' + JSON.stringify(definitions));
+  await f.hooks.config!(config);
+  assert.notEqual(marker().revision?.sources, first.revision.sources);
+  assert.equal(marker().revision?.effective, first.revision.effective);
+  await writeFile(
+    f.file,
+    JSON.stringify({
+      componentGroups: { broken: { agents: ['missing'] } },
+      profiles: { broken: { layers: [{ componentGroup: 'broken' }] } },
+      activeProfiles: ['broken'],
+    }),
+  );
+  await assert.rejects(f.hooks.config!(config), /missing/);
+  assert.equal(marker().revision, undefined, 'a rejected candidate must not retain the old applied attestation');
+});
+
+test('revision agrees between editor and server when a component also appears through multiple include roots', async (t) => {
+  const f = await fixture(t, {
+    components: {
+      prompts: { shared: { file: './snippet.md' } },
+      agents: { worker: { prompt: '{{include:@a/snippet.md}} {{include:@b/snippet.md}}' } },
+    },
+    sourceDirectories: { a: '.', b: '.' },
+    componentGroups: { work: { agents: ['worker'] } },
+    profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+    activeProfiles: ['work'],
+  });
+  await writeFile(join(f.root, 'snippet.md'), 'Shared body');
+  await writeFile(join(f.root, 'opencode.jsonc'), JSON.stringify({ plugin: [[packageName, { configFile: f.file }]] }));
+  const config: Config = { plugin: [[packageName, { configFile: f.file }]] };
+  await f.hooks.config!(config);
+  const { loadSnapshot } = await import('../src/config-composer/storage.ts');
+  const { compositionRevision } = await import('../src/config-composer/composition/revision.ts');
+  const { readRuntimeRevision } = await import('../src/config-composer/composition/runtime-baseline.ts');
+  const snapshot = await loadSnapshot(f.root);
+  assert.deepEqual(
+    readRuntimeRevision(config, { root: f.root, directory: f.root }, f.root).revision,
+    compositionRevision(snapshot.sources, snapshot.resolved, snapshot.files),
+  );
+  assert.equal(agent(config, 'worker')?.prompt, 'Shared body Shared body');
+});
+
+test('revision excludes native-only aliases of a Composer component without losing their identity checks', async (t) => {
+  const f = await fixture(t, { components: { prompts: { shared: { file: './prompt-alias.md' } } } });
+  await mkdir(join(f.root, 'agents'));
+  await writeFile(join(f.root, 'agents/worker.md'), '---\nmode: primary\n---\nNative body');
+  await symlink(join(f.root, 'agents/worker.md'), join(f.root, 'prompt-alias.md'));
+  await writeFile(join(f.root, 'opencode.jsonc'), JSON.stringify({ plugin: [[packageName, { configFile: f.file }]] }));
+  const native = {
+    agent: { worker: { prompt: 'Native body', mode: 'primary' as const, options: {}, permission: {} } },
+  };
+  const config: Config = { plugin: [[packageName, { configFile: f.file }]], ...structuredClone(native) };
+  await f.hooks.config!(config);
+  const { loadSnapshot } = await import('../src/config-composer/storage.ts');
+  const { compositionRevision } = await import('../src/config-composer/composition/revision.ts');
+  const { readRuntimeRevision } = await import('../src/config-composer/composition/runtime-baseline.ts');
+  const snapshot = await loadSnapshot(f.root, f.root, native);
+  assert.deepEqual(
+    readRuntimeRevision(config, { root: f.root, directory: f.root }, f.root).revision,
+    compositionRevision(snapshot.sources, snapshot.resolved, snapshot.files),
+  );
+});
+
+test('applied revision rejects command replacement and lost skill paths after composition', async (t) => {
+  const f = await fixture(t, {
+    components: { commands: { run: { template: 'Expected command' } } },
+    componentGroups: { work: { commands: ['run'] } },
+    profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+    activeProfiles: ['work'],
+  });
+  const config: Config = { plugin: [packageName] };
+  await f.hooks.config!(config);
+  const { readRuntimeRevision } = await import('../src/config-composer/composition/runtime-baseline.ts');
+  const read = () => readRuntimeRevision(config, { root: f.root, directory: f.root }, f.root);
+  assert.ok(read().revision !== undefined);
+  config.command!.run.template = 'Replaced by a later plugin';
+  assert.throws(read, /commands.*changed/i);
+  config.command!.run.template = 'Expected command';
+  config.skills!.paths = [];
+  assert.throws(read, /skill.*changed/i);
+});
 
 test('server activates ordered named profiles on built-ins without shadow component declarations', async (t) => {
   const f = await fixture(t, { ...definitions, defaults: { small_model: 'fixture/small' } });

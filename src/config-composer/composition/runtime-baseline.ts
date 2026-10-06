@@ -2,9 +2,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { Config } from '@opencode-ai/plugin';
+import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import { configurationDirectory } from '../configuration.ts';
 import { type AgentSettings, type NativeModels, SettingsError, record } from '../settings.ts';
 import { serverEntry } from '../registration.ts';
+import type { CompositionRevision } from './revision.ts';
 
 const key = '__configComposerRuntime';
 
@@ -70,11 +72,12 @@ const globals = (value: NativeModels) => ({
 
 /** Publish only into a copied effective-config registration, never the authored options or source array. */
 export function publishRuntimeBaseline(
-  config: Config,
+  config: Config & Pick<NativeConfig, 'skills'>,
   options: Record<string, unknown>,
   location: RuntimeLocation,
   native: NativeModels,
   agent: Record<string, AgentSettings> = {},
+  state?: { revision?: CompositionRevision; observedNativeFiles: string },
 ): void {
   const plugins = config.plugin ?? [];
   const matches = plugins.flatMap((entry, index) =>
@@ -105,6 +108,13 @@ export function publishRuntimeBaseline(
         applied: globals(config),
         agent: structuredClone(agent),
         appliedAgents: structuredClone(config.agent ?? {}),
+        ...(state === undefined
+          ? {}
+          : {
+              ...state,
+              appliedCommands: structuredClone(config.command ?? {}),
+              appliedSkillPaths: [...(config.skills?.paths ?? [])],
+            }),
       },
     },
   ];
@@ -183,5 +193,48 @@ export function readRuntimeBaseline(
         return [name, structuredClone(settings)];
       }),
     ),
+  };
+}
+
+export function readRuntimeRevision(
+  config: unknown,
+  location: RuntimeLocation,
+  registrationRoot = configurationDirectory(),
+): { id: string; revision?: CompositionRevision; observedNativeFiles: string } {
+  readRuntimeBaseline(config, location, registrationRoot);
+  if (!record(config) || !Array.isArray(config.plugin)) {
+    throw new SettingsError('The server did not publish an applied revision. Restart the matching plugin.');
+  }
+  const marker: unknown = config.plugin.flatMap((entry: unknown) =>
+    Array.isArray(entry) && serverEntry(entry[0], registrationRoot) && record(entry[1]) && record(entry[1][key])
+      ? [entry[1][key]]
+      : [],
+  )[0];
+  const hash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  if (!record(marker) || typeof marker.id !== 'string' || !hash(marker.observedNativeFiles)) {
+    throw new SettingsError('The running plugin cannot attest applied revisions. Restart the matching plugin.');
+  }
+  if (!isDeepStrictEqual(marker.appliedCommands, config.command ?? {})) {
+    throw new SettingsError(
+      'Commands changed after composition. Reopen the apply view after resolving other plugin changes.',
+    );
+  }
+  const skills = record(config.skills) ? config.skills : {};
+  if (!isDeepStrictEqual(marker.appliedSkillPaths, skills.paths ?? [])) {
+    throw new SettingsError(
+      'Skill paths changed after composition. Reopen the apply view after resolving other plugin changes.',
+    );
+  }
+  let revision: CompositionRevision | undefined;
+  if (marker.revision !== undefined) {
+    if (!record(marker.revision) || !hash(marker.revision.sources) || !hash(marker.revision.effective)) {
+      throw new SettingsError('The server returned an invalid applied revision. Restart the matching plugin.');
+    }
+    revision = { sources: marker.revision.sources, effective: marker.revision.effective };
+  }
+  return {
+    id: marker.id,
+    observedNativeFiles: marker.observedNativeFiles,
+    ...(revision === undefined ? {} : { revision }),
   };
 }

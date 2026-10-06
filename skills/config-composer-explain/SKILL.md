@@ -17,7 +17,8 @@ replaces the shared/project list; an absent key inherits and `[]` selects none. 
 A later matching permission rule wins even if looser. An unsupported scope skips its Composer permissions,
 warns, and can become more permissive. Session approvals are outside configured previews.
 
-Saved edits require explicit reload or restart. Current reload affects all workspaces on that server; existing session
+Saved Composer edits require explicit apply or restart. Apply affects the current instance using its running native
+baseline; native JSON edits require restart. Existing session
 model selections remain. Native defaults and explicit agent model pins can survive profile changes.
 If evidence is missing, identify the missing source or native state instead of inventing an effective result.
 

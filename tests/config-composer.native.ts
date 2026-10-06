@@ -15,6 +15,7 @@ import type * as PromptSources from '../src/config-composer/composition/prompt-s
 import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import type * as NativeBaseline from '../src/config-composer/composition/native-baseline.ts';
+import type * as Apply from '../src/config-composer/composition/apply.ts';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
 import { installPackage } from './install-package.ts';
@@ -39,14 +40,21 @@ test(
     });
     const configRoot = join(root, 'config', 'opencode');
     const project = join(root, 'project');
+    const observerProject = join(root, 'observer');
     await mkdir(join(configRoot, 'agents'), { recursive: true });
     await mkdir(join(configRoot, 'shared-prompts'));
     await mkdir(join(configRoot, 'skills/included-skill'), { recursive: true });
     await mkdir(project);
+    await mkdir(join(observerProject, '.opencode'), { recursive: true });
+    await writeFile(join(observerProject, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
     const installed = await installPackage(configRoot);
 
     const requests: Record<string, unknown>[] = [];
     const guidanceRequests = new Set<Record<string, unknown>>();
+    const busyReceived = Promise.withResolvers<undefined>();
+    const releaseBusy = Promise.withResolvers<undefined>();
+    let blockRequests = true;
+    t.after(() => releaseBusy.resolve(undefined));
     const provider = createServer((request, response) => {
       const reply = async () => {
         const chunks: Buffer[] = [];
@@ -58,6 +66,10 @@ test(
         assert.ok(parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed));
         const body = parsed as Record<string, unknown>;
         requests.push(body);
+        if (blockRequests && JSON.stringify(body.messages).includes('SCOPED_APPLY_BUSY')) {
+          busyReceived.resolve(undefined);
+          await releaseBusy.promise;
+        }
         if (JSON.stringify(body.messages).includes('Load config-composer-')) {
           guidanceRequests.add(body);
         }
@@ -267,10 +279,15 @@ test(
       await setTimeout(100);
     }
     assert.ok(baseURL !== undefined && baseURL.length > 0, `OpenCode did not start: ${output}`);
-    const api = async <T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> => {
+    const api = async <T>(
+      path: string,
+      body?: unknown,
+      method = body === undefined ? 'GET' : 'POST',
+      directory = project,
+    ): Promise<T> => {
       const response = await fetch(`${baseURL}${path}`, {
         method,
-        headers: { 'Content-Type': 'application/json', 'x-opencode-directory': project },
+        headers: { 'Content-Type': 'application/json', 'x-opencode-directory': directory },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(30_000),
       }).catch((error: unknown) => {
@@ -302,7 +319,15 @@ test(
         };
       }[];
     }
+    const globalBefore = await api('/global/config');
+    const otherBeforeComposition = await api('/config', undefined, 'GET', observerProject);
     const agents = await api<Agent[]>('/agent');
+    assert.deepEqual(await api('/global/config'), globalBefore, 'composition preserves cached native global inputs');
+    assert.deepEqual(
+      await api('/config', undefined, 'GET', observerProject),
+      otherBeforeComposition,
+      'composing this instance does not alter another opened instance',
+    );
     const worker = agents.find((agent) => agent.name === 'worker');
     assert.ok(worker !== undefined);
     assert.deepEqual(worker.model, { providerID: 'fixture', modelID: 'alpha' });
@@ -432,7 +457,7 @@ test(
         },
         'PATCH',
       );
-    const { loadEditorSnapshot, loadSnapshot, previewFilePlan, saveFilePlan, reloadConfiguration } = (await import(
+    const { loadEditorSnapshot, loadSnapshot, previewFilePlan, saveFilePlan } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
     )) as typeof Storage;
     const { configurationTargets, planParameter } = (await import(
@@ -662,14 +687,18 @@ test(
       ),
     );
     await writeFile(settingsPath, brokenSettings);
+    const otherBeforeDisposal = await api('/config', undefined, 'GET', observerProject);
     await api('/instance/dispose', undefined, 'POST');
     const cachedBaseline = readRuntimeBaseline(await api('/config'), { root: project, directory: project }, configRoot);
-    await assert.rejects(
-      loadEditorSnapshot(configRoot, project, cachedBaseline, project, '/'),
-      /Native agent inputs differ/,
-      'instance disposal alone does not clear the host global config cache; never guess the original native inputs',
+    assert.ok(
+      'diagnostic' in (await loadEditorSnapshot(configRoot, project, cachedBaseline, project, '/')),
+      'scoped disposal retains exact native inputs when the next composition needs repair',
     );
-    await reload();
+    assert.deepEqual(
+      await api('/config', undefined, 'GET', observerProject),
+      otherBeforeDisposal,
+      'scoped disposal and rebootstrap preserve the other instance',
+    );
     const failedConfig = await api<{ model?: string; agent?: Record<string, unknown> }>('/config');
     const repairBaseline = readRuntimeBaseline(failedConfig, { root: project, directory: project }, configRoot);
     assert.equal(failedConfig.model, 'fixture/alpha', 'invalid composition never applies a partial model overlay');
@@ -703,10 +732,69 @@ test(
       undefined,
       'saving the repair does not apply it',
     );
+    // Match TUI preparation, preserving the complete native baseline including normalized agent fields.
     const repaired = await loadSnapshot(configRoot, project, repairBaseline, project, '/');
-    await reloadConfiguration(repaired, async (plugin) => {
-      await api('/global/config', { plugin }, 'PATCH');
+    const { applySavedComposition } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/apply.js')).href
+    )) as typeof Apply;
+    const { readRuntimeRevision } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
+    )) as typeof Baseline;
+    const beforeApply = readRuntimeRevision(failedConfig, { root: project, directory: project }, configRoot);
+    await applySavedComposition(repaired, beforeApply, {
+      assertCurrent: () => {},
+      activity: () => api('/session/status'),
+      dispose: async () => {
+        await api('/instance/dispose', undefined, 'POST');
+      },
+      refresh: async () => {
+        const config = await api('/config');
+        await api('/config/providers');
+        await api('/agent');
+        return readRuntimeRevision(config, { root: project, directory: project }, configRoot);
+      },
     });
+    const applyInstance = async (snapshot: Storage.Snapshot, directory = project) => {
+      const location = { root: directory, directory };
+      const previous = readRuntimeRevision(await api('/config', undefined, 'GET', directory), location, configRoot);
+      return applySavedComposition(snapshot, previous, {
+        assertCurrent: () => {},
+        activity: () => api('/session/status', undefined, 'GET', directory),
+        dispose: async () => {
+          await api('/instance/dispose', undefined, 'POST', directory);
+        },
+        refresh: async () => {
+          const config = await api('/config', undefined, 'GET', directory);
+          await api('/config/providers', undefined, 'GET', directory);
+          await api('/agent', undefined, 'GET', directory);
+          return readRuntimeRevision(config, location, configRoot);
+        },
+      });
+    };
+    const childSession = await api<{ id: string }>('/session', {
+      title: 'Busy apply child',
+      parentID: skillSession.id,
+    });
+    const childRequest = api(`/session/${childSession.id}/message`, {
+      agent: 'main-follower',
+      parts: [{ type: 'text', text: 'SCOPED_APPLY_BUSY' }],
+    });
+    await busyReceived.promise;
+    const beforeBusy = await api('/config');
+    await assert.rejects(applyInstance(repaired), /still running.*saved/i);
+    assert.deepEqual(await api('/config'), beforeBusy, 'busy child prevents disposal and retains the publication');
+    blockRequests = false;
+    releaseBusy.resolve(undefined);
+    await childRequest;
+    const childMessages = await api(`/session/${childSession.id}/message`);
+    const retried = await applyInstance(repaired);
+    assert.deepEqual(await applyInstance(repaired), retried, 'repeated apply is idempotent');
+    assert.deepEqual(
+      await api(`/session/${childSession.id}/message`),
+      childMessages,
+      'apply retains child conversation records',
+    );
+    assert.deepEqual(await api('/config', undefined, 'GET', observerProject), otherBeforeDisposal);
     assert.ok((await api<Agent[]>('/agent')).some((agent) => agent.name === 'prompt-consumer'));
     assert.equal((await request('prompt-consumer')).info.modelID, 'beta');
     assert.deepEqual(
@@ -724,6 +812,32 @@ test(
     );
     assert.match(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), /^\/\/ Native integration fixture/);
     assert.match(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8'), /^\/\/ Dedicated settings/);
+    // A newly opened instance can observe new disk bytes while inheriting cached native globals.
+    const nativePath = join(configRoot, 'opencode.jsonc');
+    const nativeBeforeEdit = await readFile(nativePath, 'utf8');
+    const freshProject = join(root, 'opened-after-native-edit');
+    await mkdir(join(freshProject, '.opencode'), { recursive: true });
+    await writeFile(join(freshProject, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
+    await writeFile(nativePath, applyEdits(nativeBeforeEdit, modify(nativeBeforeEdit, ['model'], 'fixture/beta', {})));
+    try {
+      const freshConfig = await api<{ model: string }>('/config', undefined, 'GET', freshProject);
+      assert.equal(freshConfig.model, 'fixture/alpha', 'instance bootstrap retains the cached native model');
+      const running = readRuntimeBaseline(freshConfig, { root: freshProject, directory: freshProject }, configRoot);
+      const pending = await loadSnapshot(configRoot, freshProject, running, freshProject, '/');
+      const revision = await applyInstance(pending, freshProject);
+      const after = await api<{ model: string }>('/config', undefined, 'GET', freshProject);
+      assert.equal(after.model, 'fixture/alpha', 'Composer apply does not claim to refresh saved native JSON');
+      const { applyStatus } = (await import(
+        pathToFileURL(join(installed.directory, 'dist/config-composer/composition/apply.js')).href
+      )) as typeof Apply;
+      assert.match(
+        applyStatus(revision, readRuntimeRevision(after, { root: freshProject, directory: freshProject }, configRoot)),
+        /Composer revision .* applied against the running native baseline/,
+      );
+      assert.equal((parse(await readFile(nativePath, 'utf8')) as { model: string }).model, 'fixture/beta');
+    } finally {
+      await writeFile(nativePath, nativeBeforeEdit);
+    }
     // Migration help must load through the native host while the source is rejected.
     const legacy = await readFile(
       join(installed.directory, 'skills/config-composer-migrate/examples/before.jsonc'),

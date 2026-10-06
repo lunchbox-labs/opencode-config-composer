@@ -58,6 +58,8 @@ export interface SourceFile {
   writable?: boolean;
   canonicalPath?: string;
   aliases?: string[];
+  /** Requested prompt-include paths, excluding aliases observed only through native inputs. */
+  includePaths?: string[];
   directories?: { path: string; canonicalPath: string }[];
   writeRoot?: string;
 }
@@ -157,6 +159,7 @@ export function collectFileReads(initial: readonly SourceFile[] = []) {
         captured.aliases.push(path);
       }
     }
+    captured.includePaths = [...new Set([...(captured.includePaths ?? []), ...(file.includePaths ?? [])])];
     const roots = directories.get(identity) ?? new Map<string, string>();
     for (const directory of file.directories ?? []) {
       if (roots.has(directory.path) && roots.get(directory.path) !== directory.canonicalPath) {
@@ -1405,6 +1408,34 @@ export async function reloadConfiguration(
     // The API replaces the plugin array. Restore its original comments and layout with
     // the same new token, after checking that no concurrent edit would be lost.
     await atomicWrite(original.path, text, original.mode);
+  } finally {
+    await lock.close();
+    await unlink(lockPath);
+  }
+}
+
+/** Keep saved inputs stable around an explicit apply without rewriting native registration options. */
+export async function withSavedSnapshot<T>(
+  snapshot: Snapshot,
+  operation: (verify: () => Promise<void>) => Promise<T>,
+): Promise<T> {
+  const lockPath = join(snapshot.root, '.config-composer.lock');
+  const lock = await open(lockPath, 'wx').catch(() => {
+    throw new SettingsError('Another settings edit is active. Apply after it finishes. Saved changes are retained.');
+  });
+  const verify = async () => {
+    observedNativeVariables(snapshot.nativeVariables);
+    await observedComposition(snapshot.sources);
+    for (const file of snapshot.files) {
+      if ((await observedFile(snapshot.root, file)).text !== file.text) {
+        throw new SettingsError('Settings changed. Reopen the editor before applying. Saved changes are retained.');
+      }
+    }
+    await observedSourceList(snapshot);
+  };
+  try {
+    await verify();
+    return await operation(verify);
   } finally {
     await lock.close();
     await unlink(lockPath);

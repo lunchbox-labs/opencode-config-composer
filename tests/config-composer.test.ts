@@ -573,6 +573,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   const controller = new AbortController();
   let active = false;
   let updates = 0;
+  let globalUpdates = 0;
   let serverRoot = root;
   let unregistered = false;
   let dispose: (() => void) | undefined;
@@ -685,10 +686,19 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
         },
       },
       session: { status: async () => ({ data: active ? { session: { type: 'busy' } } : {} }) },
+      instance: {
+        dispose: async () => {
+          updates++;
+          frozenConfig = undefined;
+          return { data: true };
+        },
+      },
+      app: { agents: async () => ({ data: [] }) },
       global: {
         config: {
           update: async (input: { config: { plugin: unknown[] } }) => {
             updates++;
+            globalUpdates++;
             frozenConfig = undefined;
             const path = join(serverRoot, 'opencode.jsonc');
             const before = await readFile(path, 'utf8');
@@ -746,6 +756,9 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
     },
     get updates() {
       return updates;
+    },
+    get globalUpdates() {
+      return globalUpdates;
     },
     setProject(value: string) {
       api.state.path.directory = value;
@@ -847,47 +860,21 @@ test('a delayed reference picker does not reopen after Escape', async (t) => {
   assert.equal(ui.dialog, current);
 });
 
-for (const entry of ['slash command', 'menu button'] as const) {
-  test(`TUI reload via ${entry} retains confirmation, cancellation, busy guard, and success feedback`, async (t) => {
-    const root = await fixture(t);
-    const ui = uiHarness(root);
-    if (entry === 'slash command') {
-      const command = ui.commands.find((item) => item.slashName === 'reload-configs');
-      assert.ok(command !== undefined, '/reload-configs must be registered');
-      await command.run();
-    } else {
-      await ui.command();
-      await ui.select('+reload');
-    }
-    assert.equal(ui.dialog?.title, 'Settings saved');
-    assert.equal(ui.updates, 0);
-    await ui.select('reload');
-    assert.equal(ui.dialog.title, 'Reload OpenCode settings?');
-    assert.ok('message' in ui.dialog);
-    assert.match(ui.dialog.message, /ALL workspaces/);
-    assert.equal(ui.updates, 0);
-    await ui.cancel();
-    assert.equal(ui.updates, 0);
-    assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), config);
-    ui.setActive(true);
-    await ui.select('reload');
-    await ui.confirm();
-    assert.equal(ui.updates, 0);
-    assert.match(ui.toasts.at(-1)!.message, /still running/);
-    ui.setActive(false);
-    await ui.select('reload');
-    await ui.confirm();
-    assert.equal(ui.updates, 1);
-    assert.equal(ui.dialog, undefined);
-    assert.match(ui.toasts.at(-1)!.message, /New agent calls use the saved defaults/);
-    assert.match(await readFile(join(root, 'opencode.jsonc'), 'utf8'), /reloadToken/);
-    ui.dispose();
-  });
-}
+test('reload alias opens the same instance-scoped revision apply path', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.reload');
+  assert.equal(ui.title(), 'Settings saved');
+  await ui.select('reload');
+  assert.match(ui.message(), /only this instance/i);
+  assert.ok(ui.message().includes(root));
+  assert.ok(!ui.message().includes('ALL workspaces'));
+});
 
 test('TUI model selection previews, saves, and blocks reload while an agent runs', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);
+  await ui.freezeServer();
   await ui.command();
   await ui.select('developers');
   await ui.select('example/next');
@@ -896,17 +883,63 @@ test('TUI model selection previews, saves, and blocks reload while an agent runs
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), config);
   await ui.confirm();
   assert.deepEqual((await loadSnapshot(root)).groups.developers, { model: 'example/next', variant: 'low' });
+  assert.match(JSON.stringify(ui.dialog), /Saved Composer revision .* pending/);
   ui.setActive(true);
   await ui.select('reload');
   await ui.confirm();
   assert.equal(ui.updates, 0);
   assert.match(ui.toasts.at(-1)!.message, /still running/);
+  assert.match(JSON.stringify(ui.dialog), /Apply failed/);
   ui.setActive(false);
   await ui.select('reload');
   await ui.confirm();
   assert.equal(ui.updates, 1);
+  assert.equal(ui.globalUpdates, 0, 'scoped apply must not call the global configuration update API');
   assert.match(await readFile(join(root, 'opencode.jsonc'), 'utf8'), /Keep this comment and trailing comma/);
   ui.dispose();
+});
+
+for (const scope of ['global', 'all'] as const) {
+  test(`native ${scope} model saves require restart and never report a Composer apply`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    await ui.freezeServer();
+    await ui.command();
+    await ui.select(scope === 'global' ? '+global' : '+all');
+    if (scope === 'global') {
+      await ui.select('model');
+    }
+    await ui.select('example/next');
+    if (scope === 'all') {
+      await ui.select('low');
+    }
+    await ui.confirm();
+    assert.equal(ui.title(), 'Native settings saved');
+    assert.match(JSON.stringify(ui.dialog), /Restart OpenCode to apply native settings/);
+    assert.match(await readFile(join(root, 'opencode.jsonc'), 'utf8'), /example\/next/);
+    assert.equal(ui.updates, 0);
+    assert.equal(ui.globalUpdates, 0);
+    assert.ok(ui.toasts.every((toast) => !toast.message.includes('Applied')));
+  });
+}
+
+test('a failed save remains distinct from pending or applied state and retains disk bytes', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  const source = join(root, 'config-composer.jsonc');
+  const before = await readFile(source, 'utf8');
+  await ui.command();
+  await ui.select('developers');
+  await ui.select('example/next');
+  await ui.select('low');
+  const lock = join(root, '.config-composer.lock');
+  await writeFile(lock, 'Another editor holds this lock');
+  await ui.confirm();
+  assert.equal(await readFile(source, 'utf8'), before);
+  await rm(lock);
+  await ui.command('config-composer.reload');
+  assert.match(JSON.stringify(ui.dialog), /Save failed/);
+  assert.equal(ui.updates, 0);
 });
 
 test('TUI cancellation and provider failures leave files unchanged', async (t) => {
@@ -932,17 +965,39 @@ test('TUI cancellation and provider failures leave files unchanged', async (t) =
   assert.equal(ui.updates, 0);
 });
 
-test('a custom configuration installation cannot write to a different global configuration during reload', async (t) => {
+test('a custom configuration installation applies its instance without writing global configuration', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root, join(root, 'different-global-directory'));
   await ui.command();
   await ui.select('+reload');
   await ui.select('reload');
   await ui.confirm();
-  assert.equal(ui.updates, 0);
-  assert.match(ui.toasts.at(-1)!.message, /custom configuration directory/);
+  assert.equal(ui.updates, 1);
+  assert.equal(ui.globalUpdates, 0);
+  assert.match(ui.toasts.at(-1)!.message, /Applied/);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), config);
 });
+
+for (const change of ['instance', 'sources'] as const) {
+  test(`apply confirmation rejects a changed ${change} instead of applying an unreviewed target`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    await ui.command();
+    await ui.select('+reload');
+    await ui.select('reload');
+    if (change === 'instance') {
+      const other = join(root, 'other');
+      await mkdir(other);
+      ui.setProject(other);
+    } else {
+      const path = join(root, 'config-composer.jsonc');
+      await writeFile(path, (await readFile(path, 'utf8')) + '\n// Saved while confirmation was open');
+    }
+    await ui.confirm();
+    assert.equal(ui.updates, 0);
+    assert.match(ui.toasts.at(-1)!.message, /changed|Reopen/i);
+  });
+}
 
 test('reload preserves an unrelated plugin edited while the final filesystem proof is pending', async (t) => {
   const root = await fixture(t);
@@ -950,7 +1005,7 @@ test('reload preserves an unrelated plugin edited while the final filesystem pro
   await ui.command();
   await ui.select('+reload');
   await ui.select('reload');
-  const proof = ui.delayProofAfter(1); // Allow reload's snapshot load; pause its final authorization.
+  const proof = ui.delayProofAfter(0); // Pause confirmation's final filesystem proof.
   const pending = ui.confirm();
   await proof.requested;
   const path = join(root, 'opencode.jsonc');
@@ -961,7 +1016,7 @@ test('reload preserves an unrelated plugin edited while the final filesystem pro
   await pending;
   assert.equal(await readFile(path, 'utf8'), changed);
   assert.equal(ui.updates, 0);
-  assert.match(ui.toasts.at(-1)!.message, /Settings changed/);
+  assert.match(ui.toasts.at(-1)!.message, /configuration changed|Settings changed/);
 });
 
 for (const boundary of ['open', 'save', 'reload'] as const) {
@@ -1020,8 +1075,9 @@ test('TUI opens and saves the selected custom directory when the server reports 
   assert.deepEqual(await readdir(globalDirectory), []);
   await ui.select('reload');
   await ui.confirm();
-  assert.equal(ui.updates, 0);
-  assert.match(ui.toasts.at(-1)!.message, /custom configuration directory/);
+  assert.equal(ui.updates, 1);
+  assert.equal(ui.globalUpdates, 0);
+  assert.deepEqual(await readdir(globalDirectory), []);
 });
 
 test('TUI rejects an installation that is neither the server config nor the selected custom directory', async (t) => {
@@ -1634,7 +1690,7 @@ test('removing a profile parent previews native fallback from the server baselin
   assert.ok(!(await readFile(join(root, 'opencode.jsonc'), 'utf8')).includes('__configComposerRuntime'));
 });
 
-test('reload accepts saved native edits while normal preview rejects the stale running baseline', async (t) => {
+test('instance apply retains saved native JSON edits and requests restart for the global cache', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);
   await ui.freezeServer();
@@ -1645,10 +1701,9 @@ test('reload accepts saved native edits while normal preview rejects the stale r
   assert.match(ui.toasts.at(-1)!.message, /Native agent inputs differ/);
   await ui.command('config-composer.compose');
   await ui.select('reload');
-  await ui.select('reload');
-  await ui.confirm();
-  assert.equal(ui.updates, 1);
-  assert.match(ui.toasts.at(-1)!.message, /New agent calls/);
+  assert.equal(ui.updates, 0);
+  assert.equal(ui.globalUpdates, 0);
+  assert.match(ui.toasts.at(-1)!.message, /Native agent inputs differ/);
   assert.equal(
     (parseConfig(await readFile(path, 'utf8')).agent as Record<string, { model: string }>).builtin.model,
     'example/next',

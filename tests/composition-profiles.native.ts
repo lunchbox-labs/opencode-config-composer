@@ -244,7 +244,7 @@ test(
     const native = readRuntimeBaseline(composed, runtimeLocation, configRoot);
     assert.equal(native.model, 'fixture/native', 'native config-content input supersedes disk model');
     process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/different-client-environment';
-    await assert.rejects(loadSnapshot(configRoot, project, native, project, '/'), /same environment.*reload/s);
+    await assert.rejects(loadSnapshot(configRoot, project, native, project, '/'), /same environment.*restart/s);
     process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/project-pin';
     const parentSnapshot = await loadSnapshot(configRoot, project, native, project, '/');
     const clearParent = planDefinition(parentSnapshot, {

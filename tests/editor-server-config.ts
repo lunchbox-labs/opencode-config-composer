@@ -3,6 +3,7 @@ import { publishRuntimeBaseline } from '../src/config-composer/composition/runti
 import { packageName } from '../src/config-composer/package-name.ts';
 import type { NativeModels } from '../src/config-composer/settings.ts';
 import { loadSnapshot } from '../src/config-composer/storage.ts';
+import { compositionRevision, observeNativeFiles } from '../src/config-composer/composition/revision.ts';
 
 /** Model the public config hook response, including its uncomposed native baseline. */
 export async function editorServerConfig(
@@ -24,6 +25,9 @@ export async function editorServerConfig(
     model: snapshot.resolved.model,
     small_model: snapshot.resolved.small_model,
   };
-  publishRuntimeBaseline(config, {}, { root: workspace, directory: currentDirectory }, native, snapshot.nativeAgents);
+  publishRuntimeBaseline(config, {}, { root: workspace, directory: currentDirectory }, native, snapshot.nativeAgents, {
+    revision: compositionRevision(snapshot.sources, snapshot.resolved, snapshot.files),
+    observedNativeFiles: await observeNativeFiles(directory),
+  });
   return config;
 }

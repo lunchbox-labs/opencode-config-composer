@@ -10,6 +10,12 @@ import { expandIncludes } from './prompts.ts';
 import { loadCompositionSources } from './composition/sources.ts';
 import { type ResolvedModelSettings, resolveProfileRuntime } from './composition/runtime.ts';
 import { filterParameters, mergeOptions, parametersForDispatch, unprotectedOptions } from './composition/parameters.ts';
+import {
+  captureCompositionInputs,
+  compositionRevision,
+  observeNativeFiles,
+  verifyCompositionInputs,
+} from './composition/revision.ts';
 
 const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
   if (
@@ -149,13 +155,16 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
       }
       const nextSources = await loadCompositionSources(context);
+      const inputs = await captureCompositionInputs(nextSources);
+      const observedNativeFiles = await observeNativeFiles();
       let resolved: Awaited<ReturnType<typeof resolveProfileRuntime>>;
       try {
-        resolved = await resolveProfileRuntime(nextSources, {
-          ...nativeGlobals,
-          agent: staged,
-          composerOwnedAgents: owned,
-        });
+        resolved = await resolveProfileRuntime(
+          nextSources,
+          { ...nativeGlobals, agent: staged, composerOwnedAgents: owned },
+          new Map(inputs.map((file) => [file.path, file.text])),
+          (file) => inputs.push(file),
+        );
       } catch (error) {
         if (error instanceof MembershipValidationError) {
           // Expose exact inspection inputs without applying any part of the invalid composition.
@@ -165,6 +174,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
             { root: context.root, directory: input.directory },
             nativeGlobals,
             staged,
+            { observedNativeFiles },
           );
         }
         throw error;
@@ -186,6 +196,8 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         ...nativeSkills,
         paths: [...new Set([...nativePaths, bundledSkillDirectory, ...resolved.skillPaths])],
       };
+      const revision = compositionRevision(nextSources, resolved, inputs);
+      await verifyCompositionInputs(nextSources, inputs);
       // Validate the complete candidate before mutating host objects.
       for (const key of ['model', 'small_model'] as const) {
         if (resolved[key] === undefined) {
@@ -194,27 +206,18 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           config[key] = resolved[key];
         }
       }
-      for (const name of Object.keys(configured)) {
-        if (!Object.hasOwn(resolved.agent, name)) {
-          Reflect.deleteProperty(configured, name);
-        }
-      }
       if (resolved.permission === undefined) {
         delete config.permission;
       } else {
-        Object.assign(config, { permission: resolved.permission });
+        Object.assign(config, { permission: structuredClone(resolved.permission) });
       }
       const authored = new Map<string, Authored>();
+      const nextAgents: Record<string, AgentSettings> = {};
       for (const [name, value] of Object.entries(resolved.agent)) {
-        const existing = configured[name];
-        const target = record(existing) ? existing : {};
-        for (const key of Object.keys(target)) {
-          if (!Object.hasOwn(value, key)) {
-            Reflect.deleteProperty(target, key);
-          }
-        }
-        Object.assign(target, value);
-        configured[name] = target;
+        // Native config merges may retain objects owned by the server-wide cache.
+        // Publish an instance-owned map and values rather than modifying those shared inputs.
+        const target = structuredClone(value);
+        nextAgents[name] = target;
         const snapshot = {
           native: structuredClone(
             Object.hasOwn(staged, name) ? staged[name] : Object.hasOwn(owned, name) ? owned[name] : {},
@@ -225,7 +228,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         authored.set(name, snapshot);
         agentSnapshots.set(target, snapshot);
       }
-      config.agent = configured;
+      config.agent = nextAgents;
       configurations.set(config, {
         native: structuredClone(nativeGlobals),
         applied: structuredClone({
@@ -255,6 +258,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         { root: context.root, directory: input.directory },
         nativeGlobals,
         staged,
+        { revision, observedNativeFiles },
       );
       await notifications.applied(resolved.permissionWarnings);
     },

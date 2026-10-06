@@ -20,7 +20,7 @@ export function nativeAgentProjection(agents: Record<string, AgentSettings>): Re
 export function verifyNativeAgents(local: Record<string, AgentSettings>, server: Record<string, AgentSettings>): void {
   if (!isDeepStrictEqual(nativeAgentProjection(local), nativeAgentProjection(server))) {
     throw new SettingsError(
-      'Native agent inputs differ between this editor and the server. Use the same environment and native configuration sources, reload the server, and reopen the editor.',
+      'Native agent inputs differ between this editor and the server. Use the same environment and native configuration sources, restart the server, and reopen the editor.',
     );
   }
 }
