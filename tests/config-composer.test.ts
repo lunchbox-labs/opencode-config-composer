@@ -577,8 +577,10 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   let serverRoot = root;
   let unregistered = false;
   let dispose: (() => void) | undefined;
-  const commands: { name: string; slashName: string; run: () => void | Promise<void> }[] = [];
+  const commands: { name: string; slashName?: string; slashAliases?: string[]; run: () => void | Promise<void> }[] = [];
   const toasts: { message: string }[] = [];
+  const keymapListeners = new Set<() => void>();
+  let nativeCommands: string[] = [];
   const api = {
     state: {
       path: {
@@ -595,10 +597,23 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       },
     },
     keymap: {
+      getCommands: () => commands,
+      on: (_event: string, handler: () => void) => {
+        keymapListeners.add(handler);
+        return () => keymapListeners.delete(handler);
+      },
       registerLayer: (layer: { commands: typeof commands }) => {
         commands.push(...layer.commands);
+        keymapListeners.forEach((handler) => handler());
         return () => {
           unregistered = true;
+          for (const command of layer.commands) {
+            const index = commands.indexOf(command);
+            if (index >= 0) {
+              commands.splice(index, 1);
+            }
+          }
+          keymapListeners.forEach((handler) => handler());
         };
       },
     },
@@ -631,6 +646,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       },
     },
     client: {
+      command: { list: async () => ({ data: nativeCommands.map((name) => ({ name })) }) },
       file: {
         read: async (input: { path: string; directory: string }) => {
           await proofGate?.();
@@ -717,10 +733,14 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       },
     },
   } as unknown as TuiPluginApi;
-  registerSettings(api, root, globalDirectory);
+  const settings = registerSettings(api, root, globalDirectory);
   return {
     api,
-    commands,
+    refreshShortcuts: settings.refreshShortcuts,
+    commandNames: () => commands.map((command) => command.name),
+    setNativeCommands: (names: string[]) => {
+      nativeCommands = names;
+    },
     async freezeServer() {
       frozenConfig = (await api.client.config.get()).data;
     },
@@ -2094,3 +2114,121 @@ test('prompt source UI creates aliases and reusable multiline bodies with cancel
   assert.equal((await loadSnapshot(root)).sources.registry.components?.prompts?.['review/notes'], undefined);
   assert.equal(ui.updates, 0);
 });
+
+async function shortcutFixture(t: TestContext) {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const source = parseConfig(await readFile(path, 'utf8'));
+  source.profileShortcuts = { quiet: { activeProfiles: [], description: 'Select no profiles' } };
+  await writeFile(path, JSON.stringify(source));
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  await ui.refreshShortcuts();
+  return { root, path, source, ui };
+}
+
+test('profile shortcuts choose an explicit destination and reuse cancellation, preview, save and pending apply', async (t) => {
+  const { root, ui } = await shortcutFixture(t);
+  assert.ok(ui.commandNames().includes('config-composer.shortcut.quiet'));
+  await ui.command('config-composer.shortcut.quiet');
+  assert.equal(ui.title(), '/quiet: save profile selection in…');
+  assert.match(JSON.stringify(ui.dialog), /profiles: none/);
+  await ui.select('local');
+  assert.match(ui.message(), /Shortcut \/quiet: none/);
+  assert.match(ui.message(), /Destination: local/);
+  await ui.cancel();
+  await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+  await ui.select('local');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, []);
+  assert.match(JSON.stringify(ui.dialog), /Saved Composer revision .* pending/);
+  assert.equal(ui.updates, 0, 'shortcut save never silently applies');
+  await ui.select('reload');
+  await ui.confirm();
+  assert.equal(ui.updates, 1);
+});
+
+test('shortcut registration rejects native commands and later TUI aliases without overriding existing actions', async (t) => {
+  const { ui } = await shortcutFixture(t);
+  ui.setNativeCommands(['quiet']);
+  await ui.refreshShortcuts();
+  assert.ok(!ui.commandNames().includes('config-composer.shortcut.quiet'));
+  assert.match(ui.toasts.at(-1)!.message, /conflicts.*command or alias/);
+  assert.ok(ui.commandNames().includes('config-composer.compose'));
+  ui.setNativeCommands([]);
+  await ui.refreshShortcuts();
+  ui.api.keymap.registerLayer({
+    commands: [{ name: 'other.action', slashName: 'other', slashAliases: ['quiet'], run: () => {} }],
+  });
+  assert.ok(!ui.commandNames().includes('config-composer.shortcut.quiet'));
+  assert.ok(ui.commandNames().includes('other.action'));
+  assert.equal(ui.updates, 0);
+});
+
+test('shortcut activation rejects disabled targets before saving its selected destination', async (t) => {
+  const { root, path, source, ui } = await shortcutFixture(t);
+  source.componentGroups = { unavailable: { agents: ['disabled'] } };
+  source.profiles = { blocked: { layers: [{ componentGroup: 'unavailable' }] } };
+  source.activeProfiles = [];
+  source.profileShortcuts = { quiet: { activeProfiles: ['blocked'] } };
+  await writeFile(path, JSON.stringify(source));
+  await ui.refreshShortcuts();
+  await ui.command('config-composer.shortcut.quiet');
+  await ui.select('local');
+  assert.match(ui.toasts.at(-1)!.message, /disabled/);
+  await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+  assert.equal(ui.updates, 0);
+});
+
+test('native prompt command collisions reject the server hook before publishing Composer changes', async (t) => {
+  const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({ profileShortcuts: { quiet: { activeProfiles: [] } }, defaults: { model: 'example/new' } }),
+  );
+  const hooks = await server.server({} as PluginInput, { configFile: join(root, 'config-composer.jsonc') });
+  const native = { model: 'example/original', command: { quiet: { template: 'Preserve this prompt' } } };
+  const before = structuredClone(native);
+  await assert.rejects(hooks.config!(native), /Shortcut \/quiet conflicts/);
+  assert.deepEqual({ model: native.model, command: native.command }, before);
+});
+
+test('changed shortcut definitions reject stale command callbacks and instance changes reject confirmation', async (t) => {
+  const { root, path, source, ui } = await shortcutFixture(t);
+  source.profileShortcuts = { quiet: { activeProfiles: ['work'] } };
+  await writeFile(path, JSON.stringify(source));
+  await ui.command('config-composer.shortcut.quiet');
+  assert.match(ui.toasts.at(-1)!.message, /Shortcut \/quiet changed/);
+  await ui.refreshShortcuts();
+  await ui.command('config-composer.shortcut.quiet');
+  await ui.select('shared');
+  const before = await readFile(path, 'utf8');
+  const other = join(root, 'other');
+  await mkdir(other);
+  ui.setProject(other);
+  await ui.confirm();
+  assert.equal(await readFile(path, 'utf8'), before);
+  assert.match(ui.toasts.at(-1)!.message, /instance|connection|workspace/);
+  assert.equal(ui.updates, 0);
+});
+
+for (const change of ['route', 'dialog', 'abort'] as const) {
+  test(`a delayed shortcut cannot reopen its destination after ${change}`, async (t) => {
+    const { ui } = await shortcutFixture(t);
+    const proof = ui.delayProofAfter(0);
+    const pending = ui.command('config-composer.shortcut.quiet');
+    await proof.requested;
+    if (change === 'route') {
+      Object.assign(ui.api.route, { current: { name: 'session', params: { sessionID: 'other' } } });
+    } else if (change === 'dialog') {
+      ui.api.ui.dialog.replace(() => ui.api.ui.DialogSelect({ title: 'Other dialog', options: [] }));
+    } else {
+      ui.controller.abort();
+    }
+    const previous = ui.dialog;
+    proof.resolve();
+    await pending;
+    assert.equal(ui.dialog, previous);
+    assert.equal(ui.updates, 0);
+  });
+}

@@ -101,6 +101,11 @@ export interface CompositionProfile {
   overrides?: CompositionOverrides;
 }
 
+export interface ProfileShortcut {
+  activeProfiles: string[];
+  description?: string;
+}
+
 export interface CompositionDocument {
   $schema?: string;
   imports?: string[];
@@ -109,6 +114,7 @@ export interface CompositionDocument {
   componentGroups?: Record<string, ComponentGroup>;
   configurationPresets?: Record<string, ConfigurationPreset>;
   profiles?: Record<string, CompositionProfile>;
+  profileShortcuts?: Record<string, ProfileShortcut>;
   defaults?: CompositionDefaults;
   overrides?: CompositionOverrides;
   /** Absence inherits the shared selection; [] explicitly selects none. */

@@ -290,6 +290,30 @@ Inactive profile references to native model slots defer model-dependent checks u
 their effective model context. Reload applies saved parameters; native agent settings and selected variants
 retain their precedence at dispatch.
 
+Define optional profile action shortcuts in a composition document or explicit import:
+
+```jsonc
+{
+  "profileShortcuts": {
+    "coding": { "activeProfiles": ["base", "coding"], "description": "Coding workflow" },
+    "quiet": { "activeProfiles": [], "description": "Select no profiles" }
+  }
+}
+```
+
+Each referenced profile must exist. These are TUI actions: `/coding` opens an explicit shared/project/local
+destination choice, then the ordinary effective preview, save, and separate apply flow. Declarations never
+activate profiles or send a model prompt. The destination view identifies scope masking; `[]` selects none.
+Shortcuts register at TUI startup and refresh after Composer apply. Use **Compose → Refresh profile shortcuts**
+after editing their definitions or switching instances. A changed mapping or instance rejects a stale action.
+Profile renames update shortcut references; deletion of a referenced profile is rejected.
+
+Names use the canonical lowercase name syntax. At most 128 shortcuts may be loaded. Duplicate names,
+Composer's reserved actions (`compose`, `agent-models`, `agent-groups`, `reload-configs`), component/native
+prompt command names, and registered TUI slash names or aliases are rejected. A later TUI command collision
+removes Composer's shortcut registrations and reports the conflict; existing commands retain their behavior.
+Failed refresh leaves the regular Composer entrypoints available so sources can be corrected.
+
 Use `/agent-models` for global defaults, presets, groups, and individual overrides.
 Use `/agent-groups` for ordered memberships. Model and variant choices come from the provider API.
 Review the proposed scope and retained pins before saving. The editor preserves prompts, comments,

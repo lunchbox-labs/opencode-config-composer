@@ -18,6 +18,7 @@ export type {
   PermissionRule,
   PresetTarget,
   ProfileLayer,
+  ProfileShortcut,
   PromptComponent,
   PromptConfiguration,
   SkillComponent,

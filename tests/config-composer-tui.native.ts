@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { installPackage } from './install-package.ts';
 
 for (const scope of ['shared', 'project-only', 'empty'] as const) {
-  test(`OpenCode renders both Composer menus with ${scope} sources`, { timeout: 140_000 }, async (t) => {
+  test(`OpenCode renders both Composer menus with ${scope} sources`, { timeout: 260_000 }, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'composer-tui-native-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const configRoot = join(root, 'config', 'opencode');
@@ -59,6 +59,7 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
           componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
           profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
           activeProfiles: ['work'],
+          profileShortcuts: { quiet: { activeProfiles: [], description: 'Select no profiles' } },
         }),
       );
     }
@@ -88,6 +89,26 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
       { env, timeout: 130_000, maxBuffer: 1_000_000 },
     );
     assert.match(result.stdout, /native TUI rendered both Composer menus/);
+    if (scope === 'shared') {
+      const result = await promisify(execFile)(
+        'python3',
+        [
+          fileURLToPath(new URL('./native-shortcuts.py', import.meta.url)),
+          process.env.OPENCODE_BIN ?? 'opencode',
+          project,
+        ],
+        { env, timeout: 130_000, maxBuffer: 1_000_000 },
+      );
+      assert.match(result.stdout, /native TUI saved and applied profile shortcut/);
+      assert.deepEqual(JSON.parse(await readFile(join(project, '.opencode/config-composer.local.jsonc'), 'utf8')), {
+        activeProfiles: [],
+      });
+      assert.deepEqual(
+        (JSON.parse(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8')) as { activeProfiles: string[] })
+          .activeProfiles,
+        ['work'],
+      );
+    }
     assert.equal(requests, 0, 'opening Composer menus must not send a model prompt');
   });
 }

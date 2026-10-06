@@ -49,7 +49,8 @@ import { resolveProfileRuntime } from './composition/runtime.ts';
 import { openEffective } from './tui/compose.ts';
 import { openAuthoring } from './tui/authoring.ts';
 import { type DefinitionChange, planDefinition } from './composition/authoring.ts';
-import { planScope } from './composition/activation.ts';
+import { profileShortcutRegistration } from './tui/shortcuts.ts';
+import { planScope, scopeDestinations } from './composition/activation.ts';
 import { openParameters } from './tui/parameters.ts';
 import { planParameter } from './composition/parameter-authoring.ts';
 import { parameterReview, validateParameterChoice } from './composition/parameter-review.ts';
@@ -88,7 +89,7 @@ export function registerSettings(
       : join(homedir(), '.config'),
     'opencode',
   ),
-): void {
+): { refreshShortcuts: () => Promise<void> } {
   const navigation = dialogNavigation(api);
   let busy = false;
   let nativeSaveNeedsRestart = false;
@@ -428,6 +429,9 @@ export function registerSettings(
           return readRuntimeRevision(config.data, location, snapshot.root);
         },
       });
+      assertInstance();
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Apply runs after all handlers initialize.
+      await shortcuts.refresh();
       assertInstance();
       lastFailure = undefined;
       navigation.close();
@@ -1214,10 +1218,51 @@ export function registerSettings(
       },
     });
   };
+  const shortcuts = profileShortcutRegistration(
+    api,
+    load,
+    (snapshot, name, validate) => {
+      navigation.reset();
+      const shortcut = snapshot.sources.registry.profileShortcuts?.[name];
+      if (shortcut === undefined) {
+        throw new SettingsError('The shortcut changed. Refresh shortcuts in Compose.');
+      }
+      const selection = shortcut.activeProfiles;
+      menu(
+        `/${name}: save profile selection in…`,
+        scopeDestinations(snapshot).map((destination) => ({
+          title: destination.scope,
+          value: destination.scope,
+          description: `${destination.path} · profiles: ${selection.length === 0 ? 'none' : selection.join(' → ')}${destination.maskedBy === undefined ? '' : ` · masked by ${destination.maskedBy}`}${destination.writable ? '' : ' · read-only'}`,
+          run: () =>
+            proposeComposition(
+              snapshot,
+              planScope(snapshot, destination.scope, { operation: 'selection', profiles: [...selection] }),
+              undefined,
+              {
+                title: `Save /${name} profile selection?`,
+                validate,
+                details: `Shortcut /${name}: ${selection.length === 0 ? 'none' : selection.join(' → ')}\nDestination: ${destination.scope} · ${destination.path}${destination.maskedBy === undefined ? '' : `\nMasked by ${destination.maskedBy} selection`}`,
+              },
+            ),
+        })),
+        undefined,
+        true,
+      );
+    },
+    run,
+    () => navigation.checkpoint(),
+  );
   const composeMenu = () =>
     menu(
       'Compose',
       [
+        {
+          title: 'Refresh profile shortcuts',
+          value: 'shortcuts',
+          description: 'Register saved profile actions for this instance',
+          run: shortcuts.refresh,
+        },
         { title: 'Repair invalid memberships', value: 'repair', run: repairMenu },
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
@@ -1550,11 +1595,14 @@ export function registerSettings(
       },
     ],
   });
-  api.lifecycle.onDispose(unregister);
+  api.lifecycle.onDispose(() => {
+    unregister();
+    shortcuts.dispose();
+  });
+  return { refreshShortcuts: shortcuts.refresh };
 }
 
-// eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning TUI initializer.
 const ConfigComposerTui: TuiPlugin = async (api) => {
-  registerSettings(api);
+  await registerSettings(api).refreshShortcuts();
 };
 export default { id: 'config-composer', tui: ConfigComposerTui } satisfies TuiPluginModule;
