@@ -182,6 +182,14 @@ test('agent pins and variant overrides retain precedence without mutating stored
 
 test('server references use the effective config and reject unsupported referenced variants at dispatch', async (t) => {
   const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      componentGroups: { workflow: { configuration: options.groups.workflow } },
+      profiles: { work: { layers: [{ componentGroup: 'workflow' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
   const hooks = await server.server({} as PluginInput, { configFile: join(root, 'config-composer.jsonc') });
   const config = {
     model: 'fixture/next',

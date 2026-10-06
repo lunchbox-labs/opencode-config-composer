@@ -53,7 +53,11 @@ test('OpenCode loads the packaged TUI entrypoint and renders both Composer menus
   );
   await writeFile(
     join(configRoot, 'config-composer.jsonc'),
-    JSON.stringify({ agent: { groups: { workers: { model: 'fixture/model' } } }, command: {}, skill: {} }),
+    JSON.stringify({
+      componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
+      profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
+      activeProfiles: ['work'],
+    }),
   );
   await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [installed.directory] }));
   const env: NodeJS.ProcessEnv = {

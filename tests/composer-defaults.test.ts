@@ -5,12 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hooks, PluginInput } from '@opencode-ai/plugin';
 import server from '../src/server.ts';
-import { readSettings } from '../src/config-composer/settings.ts';
 import { CompositionValidationError, readCompositionDocument } from '../src/config-composer/composition/document.ts';
 
 test('Composer defaults override independently', async () => {
   // Parser acceptance is part of the feature, before exercising its resolver.
-  assert.equal(readSettings({ model: 'b/main' }).model, 'b/main');
+  assert.equal(readCompositionDocument({ defaults: { model: 'b/main' } }).defaults?.model, 'b/main');
   const { resolveNativeDefaults } = await import('../src/config-composer/composition/defaults.ts');
   assert.deepEqual(resolveNativeDefaults({ model: 'a/main', small_model: 'a/small' }, { model: 'b/main' }), {
     model: 'b/main',
@@ -59,9 +58,7 @@ test('default validation matches the schema and rejects references and malformed
       assert.equal(typeof value === 'string' && new RegExp(schema.$defs.model.pattern).test(value), valid);
       if (valid) {
         assert.doesNotThrow(() => readCompositionDocument({ defaults: { [field]: value } }));
-        assert.doesNotThrow(() => readSettings({ [field]: value }));
       } else {
-        assert.throws(() => readSettings({ [field]: value }), /provider\/model/);
         assert.throws(
           () => readCompositionDocument({ defaults: { [field]: value } }),
           (error: unknown) => {
@@ -90,15 +87,20 @@ test('hooks stage overlays, restore removed defaults, and retain external change
   const bytes = `// Unmodified native file\n${JSON.stringify(native)}`;
   await writeFile(nativeFile, bytes);
   const composition = {
-    model: 'composer/main',
-    small_model: 'composer/small',
-    agent: {
-      groups: { main: { modelRef: 'opencode:model' }, small: { modelRef: 'opencode:small_model' } },
-      prompts: { defaults: { append: ['After'] } },
+    defaults: {
+      model: 'composer/main',
+      small_model: 'composer/small',
+      agents: { prompt: { append: ['After'] } },
     },
+    componentGroups: {
+      main: { configuration: { modelRef: 'opencode:model' } },
+      small: { configuration: { modelRef: 'opencode:small_model' } },
+    },
+    profiles: { work: { layers: [{ componentGroup: 'main' }, { componentGroup: 'small' }] } },
+    activeProfiles: ['work'],
   };
   await writeFile(file, JSON.stringify(composition));
-  const hooks = await server.server({} as PluginInput, { configFile: file });
+  const hooks = await server.server({ directory: root, worktree: root } as PluginInput, { configFile: file });
   const config: Parameters<NonNullable<Hooks['config']>>[0] = structuredClone(native);
   await hooks.config!(config);
   await hooks.config!(config);
@@ -110,39 +112,57 @@ test('hooks stage overlays, restore removed defaults, and retain external change
   assert.equal(config.agent!.pinned!.model, 'pin/model');
   assert.equal(config.agent!.pinned!.variant, 'high');
   // Removing only one default restores its underlying value independently.
-  await writeFile(file, JSON.stringify({ ...composition, model: undefined }));
+  await writeFile(file, JSON.stringify({ ...composition, defaults: { ...composition.defaults, model: undefined } }));
   await hooks.config!(config);
   assert.equal(config.model, 'native/main');
   assert.equal(config.agent!.main!.model, 'native/main');
   assert.equal(config.small_model, 'composer/small');
   config.model = 'external/main';
-  await writeFile(file, JSON.stringify({ agent: composition.agent }));
+  await writeFile(file, JSON.stringify({ ...composition, defaults: { agents: composition.defaults.agents } }));
   await hooks.config!(config);
   assert.equal(config.model, 'external/main');
+  assert.equal(config.agent!.main!.model, 'external/main');
   assert.equal(config.small_model, 'native/small');
   assert.equal(config.agent!.small!.model, 'native/small');
   assert.equal(await readFile(nativeFile, 'utf8'), bytes);
 
-  // New input must not inherit the previous object's native values.
-  const absent = {};
-  await writeFile(file, JSON.stringify({ model: 'composer/main', small_model: 'composer/small' }));
+  // New input must not inherit the previous object's native values or agent contributions.
+  const absent: Parameters<NonNullable<Hooks['config']>>[0] = {};
+  await writeFile(file, JSON.stringify({ defaults: { model: 'composer/main', small_model: 'composer/small' } }));
   await hooks.config!(absent);
+  assert.equal(absent.model, 'composer/main');
+  assert.equal(absent.small_model, 'composer/small');
   await writeFile(file, '{}');
   await hooks.config!(absent);
-  assert.deepEqual(absent, {});
+  assert.equal(Object.hasOwn(absent, 'model'), false);
+  assert.equal(Object.hasOwn(absent, 'small_model'), false);
+  for (const name of Object.keys(agent)) {
+    assert.equal(absent.agent?.[name], undefined);
+  }
 
   // Neither a failed reference nor failed prompt expansion may publish any patch.
   const before = structuredClone(config);
-  await writeFile(file, JSON.stringify({ model: 'next/main', agent: { groups: {} } }));
-  await assert.rejects(hooks.config!(config), /unknown/);
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...composition,
+      defaults: { ...composition.defaults, model: 'next/main' },
+      componentGroups: {},
+    }),
+  );
+  await assert.rejects(hooks.config!(config), /[Uu]nknown component group/);
   assert.deepEqual(config, before);
   await writeFile(
     file,
     JSON.stringify({
       ...composition,
-      agent: { ...composition.agent, prompts: { defaults: { append: ['{{include:@missing/file.md}}'] } } },
+      defaults: {
+        ...composition.defaults,
+        agents: { prompt: { append: ['{{include:@missing/file.md}}'] } },
+      },
     }),
   );
-  await assert.rejects(hooks.config!(config));
+  await assert.rejects(hooks.config!(config), /missing/);
   assert.deepEqual(config, before);
+  assert.equal(await readFile(nativeFile, 'utf8'), bytes);
 });

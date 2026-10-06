@@ -5,17 +5,16 @@ OpenCode or Anomaly.
 
 Compose agent prompts, ordered group defaults, reusable model presets, and inline includes in native skill output.
 The TUI provides `/agent-models` and `/agent-groups` for reviewing and saving settings.
-Use `/reload-configs` to open the same reload flow as **Reload saved settings…** in `/agent-models`.
-Choose **Reload now…** and confirm to apply saved settings. Reload affects all workspaces on the server;
-wait for agents in every workspace to finish. Existing session model selections remain in effect.
-The command retains the menu's running-agent checks, filesystem checks, and success/error feedback.
 
 The npm package name is **`@lunchbox-labs/opencode-config-composer`**.
 
 The canonical composition format is specified in [the schema contract](docs/composition-schema.md).
 `schema.json` describes that format, including components, mixed groups, presets, and named profiles.
-Its validator is available internally; the server/TUI integration is still pending. The runtime setup below
-describes the existing runtime and must not be used as a canonical-schema example.
+The draft server consumes this format and explicit imports. Canonical TUI editing and native permission
+compilation/failure handling remain incomplete, so this branch is not release-ready. OpenCode can catch
+a config-hook error and continue with native settings; rejecting a permission profile is not fail-closed
+enforcement. The setup examples below describe the preceding released format, which the canonical
+server rejects with migration guidance. Use the schema contract for canonical configuration.
 
 Supported and tested host: **OpenCode V1 1.18.34**. The `opencode` engine requirement is intentionally exact.
 Broaden it only after checking another host version. This package does not implement a V2 port.
@@ -118,22 +117,7 @@ Later groups override earlier model fields. An explicit agent model remains pinn
 An explicit agent variant can override an inherited variant. Unsupported referenced variants fail at dispatch.
 Agent membership uses ordered `groups` arrays.
 A group may use a concrete `model`, `preset:NAME`, `opencode:model`, or `opencode:small_model`.
-Native references resolve against effective workspace defaults, including project overrides and Composer defaults.
-
-Set optional top-level `model` and `small_model` values in `config-composer.jsonc` to overlay native defaults:
-
-```jsonc
-{
-  "model": "provider/main-model",
-  "small_model": "provider/small-model"
-}
-```
-
-Each field overrides independently; omit it to inherit the native value or OpenCode fallback.
-Removing a field and reloading restores the underlying native default. These overlays do not rewrite native
-configuration or agent Markdown, and explicit agent pins and session/request model selections keep precedence.
-Values must use `provider/model` format; unset `opencode:model` or `opencode:small_model` references remain errors.
-Edit these Composer defaults in the settings file; the current `/agent-models` global-default editor edits native defaults.
+Native references resolve against effective workspace defaults, including project overrides.
 Missing presets and unset native references are errors. Presets cannot reference other presets.
 
 Prompt order is: default prepend, ordered group prepend, agent prepend, authored body,

@@ -330,6 +330,14 @@ test('provider catalog exposes configured models and supported variants', () => 
 
 test('server hook strips group metadata and aligns built-in variant fallbacks', async (t) => {
   const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      componentGroups: { developers: { configuration: groups.developers } },
+      profiles: { work: { layers: [{ componentGroup: 'developers' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
   const hooks = await server.server({} as PluginInput, { configFile: join(root, 'config-composer.jsonc') });
   const config = {
     agent: {

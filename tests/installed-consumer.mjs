@@ -45,7 +45,9 @@ await writeFile(
   join(root, 'settings', 'composer.jsonc'),
   JSON.stringify({
     sourceDirectories: { shared: './fragments' },
-    agent: { groups: { workers: { model: 'fixture/model' } } },
+    componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
+    profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
+    activeProfiles: ['work'],
   }),
 );
 process.env.OPENCODE_CONFIG_DIR = root;
@@ -61,7 +63,11 @@ assert.equal(output.output, 'Skill PACKAGED_GUIDANCE');
 
 await writeFile(
   join(root, 'config-composer.jsonc'),
-  JSON.stringify({ agent: { groups: { workers: { model: 'fixture/default' } } } }),
+  JSON.stringify({
+    componentGroups: { workers: { configuration: { model: 'fixture/default' } } },
+    profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
+    activeProfiles: ['work'],
+  }),
 );
 for (const options of [undefined, {}, { reloadToken: 'fresh' }]) {
   const defaults = await server.server({}, options);
