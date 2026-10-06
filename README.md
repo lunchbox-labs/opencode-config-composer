@@ -241,3 +241,10 @@ Published source and runtime files remain inspectable. Export restrictions are a
 ## License
 
 This project is licensed under MIT. See [LICENSE](LICENSE).
+
+## Integration tests
+
+Run `npm run test:integration` for the installed-package native suite on Linux or Windows x64.
+It uses OpenCode 1.18.34 and a deterministic local provider. See the
+[integration guide and coverage matrix](docs/integration-tests.md) for setup, assertions,
+diagnostics, and remaining feature coverage.
