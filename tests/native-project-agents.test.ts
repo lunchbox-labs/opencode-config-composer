@@ -157,17 +157,17 @@ test('native project frontmatter name overrides are discoverable and disabled ag
   await assert.rejects(loadSnapshot(f.installation, f.project), /disabled/);
 });
 
-test('duplicate native Markdown identities replace a directory definition before merging earlier JSON', async (t) => {
+test('duplicate native Markdown identities require one unambiguous directory definition', async (t) => {
   const f = await fixture(t);
   await mkdir(join(f.project, '.opencode/agent'));
   await writeFile(
     join(f.project, '.opencode/agent/project-md.md'),
     '---\nmodel: fixture/discarded\ngroups: [missing]\n---\nEarlier body',
   );
-  const snapshot = await loadSnapshot(f.installation, f.project);
-  assert.equal(snapshot.nativeAgents['project-md'].model, undefined);
-  assert.deepEqual(snapshot.nativeAgents['project-md'].groups, ['secondary']);
-  assert.equal(snapshot.resolved.agent['project-md'].model, 'fixture/group');
+  await assert.rejects(
+    loadSnapshot(f.installation, f.project),
+    /Duplicate native agent identity.*project-md.*Keep one definition/,
+  );
 });
 
 test('a native worktree root remains independent from the project composition scope outside Git', async (t) => {

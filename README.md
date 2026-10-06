@@ -26,6 +26,8 @@ Previews use the selected profiles and their layer order. Membership changes nev
 and reordering a membership list does not change profile precedence. Inline and file-backed component agents
 and native built-ins are available in the membership picker. Existing project agents from native `opencode.json(c)`
 and `.opencode/agent(s)/*.md` sources are included, following the pinned host's project source precedence.
+Duplicate Markdown identities within a native directory are rejected: OpenCode's file traversal order
+can vary, so keep one definition for each identity before editing.
 Project-native sources remain read-only in this editor: JSONC component groups can add memberships without
 creating shadow agent files or changing native model pins. Removing native frontmatter/JSON memberships or
 changing native pins requires editing the declaring native source. Nested native source paths and aliases
