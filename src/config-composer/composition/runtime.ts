@@ -72,6 +72,22 @@ function mergeParameters(
   };
 }
 
+function mergeAuthored(base: AgentSettings, extra: AgentSettings): AgentSettings {
+  return Object.fromEntries(
+    [...new Set([...Object.keys(base), ...Object.keys(extra)])].map((key) => {
+      const value = extra[key];
+      return [
+        key,
+        Object.hasOwn(extra, key)
+          ? record(value) && record(base[key])
+            ? mergeAuthored(base[key], value)
+            : value
+          : base[key],
+      ];
+    }),
+  );
+}
+
 export async function resolveProfileRuntime(
   sources: LoadedSources,
   native: NativeInput,
@@ -83,9 +99,12 @@ export async function resolveProfileRuntime(
   Object.assign(available, structuredClone(native.agent ?? {}));
   const components = await loadComponents(sources, available);
   Object.assign(available, components.agents);
+  for (const [name, value] of Object.entries(native.composerOwnedAgents ?? {})) {
+    available[name] = mergeAuthored(available[name] ?? {}, structuredClone(value));
+  }
   const commands: Awaited<ReturnType<typeof loadComponents>>['commands'] = {};
   const skillPaths = new Set<string>();
-  const agent = structuredClone(native.agent ?? {});
+  const agent = structuredClone({ ...native.agent, ...native.composerOwnedAgents });
   const selected = new Set<string>();
   const choices: Record<string, ResolvedModelSettings> = {};
   const provenance: Record<string, FieldOrigin> = {};
@@ -101,7 +120,7 @@ export async function resolveProfileRuntime(
       provenance[`/${key}`] = { ...origin(undefined, `/${key}`, 'native'), operation: 'native' };
     }
   }
-  for (const [name, value] of Object.entries(native.agent ?? {})) {
+  for (const [name, value] of Object.entries({ ...native.agent, ...native.composerOwnedAgents })) {
     for (const key of ['model', 'variant'] as const) {
       if (value[key] !== undefined) {
         const pointer = `/agent/${part(name)}/${key}`;
