@@ -1,131 +1,29 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { type ChildProcess, spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type * as Storage from '../src/config-composer/storage.ts';
 import type * as Parameters from '../src/config-composer/composition/parameter-authoring.ts';
 import type * as Permissions from '../src/config-composer/composition/permission-authoring.ts';
 import type * as Prompts from '../src/config-composer/composition/prompt-authoring.ts';
 import type * as PromptSources from '../src/config-composer/composition/prompt-sources.ts';
 import type * as Authoring from '../src/config-composer/composition/authoring.ts';
-import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
-import { installPackage } from './install-package.ts';
+import { nativeHarness } from './integration/harness.ts';
+import { installedEditor } from './integration/editor.ts';
 import { applyEdits, modify, parse } from 'jsonc-parser';
 
 // Real V1 configuration loading, provider dispatch, and cache invalidation; only the remote model is synthetic.
 test(
   'OpenCode composes ordered groups and prompts from dedicated settings and dispatches changes after reload',
-  { timeout: 120_000 },
+  { timeout: 180_000 },
   async (t) => {
-    const root = await mkdtemp(join(tmpdir(), 'opencode-config-composer-native-'));
-    const runtime: { child?: ChildProcess; exited?: Promise<unknown> } = {};
-    t.after(async () => {
-      runtime.child?.kill();
-      const forceStop = globalThis.setTimeout(() => runtime.child?.kill('SIGKILL'), 3000);
-      forceStop.unref();
-      await runtime.exited;
-      globalThis.clearTimeout(forceStop);
-      runtime.child?.stdout?.destroy();
-      runtime.child?.stderr?.destroy();
-      await rm(root, { recursive: true, force: true });
-    });
-    const configRoot = join(root, 'config', 'opencode');
-    const project = join(root, 'project');
+    const harness = await nativeHarness(t, 'composition');
+    const { configRoot, project, installed, requests, api } = harness;
     await mkdir(join(configRoot, 'agents'), { recursive: true });
     await mkdir(join(configRoot, 'shared-prompts'));
     await mkdir(join(configRoot, 'skills/included-skill'), { recursive: true });
-    await mkdir(project);
-    const installed = await installPackage(configRoot);
-
-    const requests: Record<string, unknown>[] = [];
-    const provider = createServer((request, response) => {
-      const reply = async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          assert.ok(Buffer.isBuffer(chunk));
-          chunks.push(chunk);
-        }
-        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString());
-        assert.ok(parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed));
-        const body = parsed as Record<string, unknown>;
-        requests.push(body);
-        const skillRequested = JSON.stringify(body.messages).includes('Load included-skill now.');
-        const toolReturned =
-          Array.isArray(body.messages) &&
-          body.messages.some(
-            (message: unknown) =>
-              message !== null && typeof message === 'object' && 'role' in message && message.role === 'tool',
-          );
-        const callSkill = skillRequested && !toolReturned;
-        const base = { id: 'synthetic-response', model: body.model, created: 1 };
-        const streaming = Boolean(body.stream);
-        if (streaming) {
-          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-          response.write(
-            `data: ${JSON.stringify({
-              ...base,
-              object: 'chat.completion.chunk',
-              choices: [
-                {
-                  index: 0,
-                  delta: callSkill
-                    ? {
-                        role: 'assistant',
-                        tool_calls: [
-                          {
-                            index: 0,
-                            id: 'fixture-skill',
-                            type: 'function',
-                            function: { name: 'skill', arguments: JSON.stringify({ name: 'included-skill' }) },
-                          },
-                        ],
-                      }
-                    : { role: 'assistant', content: 'verified' },
-                  finish_reason: null,
-                },
-              ],
-            })}\n\n`,
-          );
-          response.end(
-            `data: ${JSON.stringify({
-              ...base,
-              object: 'chat.completion.chunk',
-              choices: [{ index: 0, delta: {}, finish_reason: callSkill ? 'tool_calls' : 'stop' }],
-              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-            })}\n\ndata: [DONE]\n\n`,
-          );
-        } else {
-          response.writeHead(200, { 'Content-Type': 'application/json' });
-          response.end(
-            JSON.stringify({
-              ...base,
-              object: 'chat.completion',
-              choices: [{ index: 0, message: { role: 'assistant', content: 'verified' }, finish_reason: 'stop' }],
-              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-            }),
-          );
-        }
-      };
-      reply().catch((error: unknown) => {
-        response.statusCode = 500;
-        response.end(String(error));
-      });
-    });
-    provider.listen(0, '127.0.0.1');
-    await once(provider, 'listening');
-    t.after(() => {
-      provider.closeAllConnections();
-      provider.close();
-    });
-    const address = provider.address();
-    assert.ok(address !== null && typeof address !== 'string');
     const model = {
       name: 'Synthetic model',
       temperature: true,
@@ -142,7 +40,7 @@ test(
         fixture: {
           name: 'Fixture',
           npm: '@ai-sdk/openai-compatible',
-          options: { baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: 'synthetic-test-key' },
+          options: { baseURL: harness.providerURL, apiKey: 'synthetic-test-key' },
           models: { alpha: model, beta: model },
         },
       },
@@ -206,69 +104,7 @@ test(
       join(project, 'opencode.json'),
       JSON.stringify({ model: 'fixture/beta', small_model: 'fixture/beta' }),
     );
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      XDG_CONFIG_HOME: join(root, 'config'),
-      XDG_DATA_HOME: join(root, 'data'),
-      XDG_STATE_HOME: join(root, 'state'),
-      XDG_CACHE_HOME: join(root, 'cache'),
-      OPENCODE_DISABLE_AUTOUPDATE: '1',
-      OPENCODE_DISABLE_MODELS_FETCH: '1',
-      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true',
-      OPENCODE_TEST_HOME: root,
-      OPENCODE_CONFIG: '',
-      OPENCODE_CONFIG_CONTENT: '',
-      OPENCODE_SERVER_PASSWORD: '',
-      OPENCODE_DB: join(root, 'db.sqlite'),
-    };
-    delete env.OPENCODE_CONFIG_DIR;
-    delete env.OPENCODE_DISABLE_PROJECT_CONFIG;
-    const child = spawn(
-      process.env.OPENCODE_BIN ?? 'opencode',
-      ['serve', '--hostname', '127.0.0.1', '--port', '0', '--print-logs'],
-      { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    runtime.child = child;
-    runtime.exited = once(child, 'exit').catch(() => undefined);
-    let output = '';
-    let launchError: Error | undefined;
-    child.on('error', (error) => {
-      launchError = error;
-    });
-    child.stdout.on('data', (data: Buffer) => {
-      output += data.toString();
-    });
-    child.stderr.on('data', (data: Buffer) => {
-      output += data.toString();
-    });
-    let baseURL: string | undefined;
-    for (let attempt = 0; attempt < 200; attempt++) {
-      if (launchError !== undefined) {
-        throw launchError;
-      }
-      baseURL = /http:\/\/127\.0\.0\.1:\d+/.exec(output)?.[0];
-      if (baseURL !== undefined) {
-        break;
-      }
-      if (child.exitCode !== null) {
-        throw new Error(`OpenCode exited: ${output}`);
-      }
-      await setTimeout(100);
-    }
-    assert.ok(baseURL !== undefined && baseURL.length > 0, `OpenCode did not start: ${output}`);
-    const api = async <T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> => {
-      const response = await fetch(`${baseURL}${path}`, {
-        method,
-        headers: { 'Content-Type': 'application/json', 'x-opencode-directory': project },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(30_000),
-      }).catch((error: unknown) => {
-        throw new Error(`${path}: ${String(error)}\n${output.slice(-6000)}`);
-      });
-      assert.ok(response.ok, `${path}: ${await response.clone().text()}`);
-      const data: unknown = await response.json();
-      return data as T;
-    };
+    await harness.start();
     interface Agent {
       name: string;
       model: { providerID: string; modelID: string };
@@ -325,6 +161,8 @@ test(
     const beforeReload = requests.find((body) => JSON.stringify(body).includes('INITIAL_WORKER_GUIDANCE'));
     assert.ok(beforeReload !== undefined, 'send expanded prompt text to the provider');
     assert.ok(!JSON.stringify(beforeReload).includes('{{include:'), 'never send unresolved directives');
+    assert.equal(beforeReload.model, 'alpha');
+    assert.equal(beforeReload.reasoning_effort, 'low');
     const nativeConfig = await api<{ references?: Record<string, unknown> }>('/config');
     assert.equal(nativeConfig.references?.['agent-prompts'], undefined, 'sources are not native prompt references');
     const skillSession = await api<{ id: string }>('/session', { title: 'Native skill composition check' });
@@ -391,24 +229,20 @@ test(
         },
         'PATCH',
       );
-    const { loadSnapshot, previewFilePlan, saveFilePlan } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
-    )) as typeof Storage;
+    const editor = await installedEditor(harness);
+    const { previewFilePlan, saveFilePlan } = editor.storage;
+    const settingsId = await realpath(settingsPath);
     const { configurationTargets, planParameter } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/composition/parameter-authoring.js')).href
     )) as typeof Parameters;
-    const { readRuntimeBaseline } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
-    )) as typeof Baseline;
     for (const [field, text] of [
       ['temperature', '0.35'],
       ['topP', '0.8'],
       ['maxOutputTokens', '128'],
       ['options', '{"reasoningEffort":"medium"}'],
     ] as const) {
-      const native = readRuntimeBaseline(await api('/config'), { root: project, directory: project }, configRoot);
-      const snapshot = await loadSnapshot(configRoot, project, native, project, '/');
-      const target = configurationTargets(snapshot, settingsPath).find((target) => target.label === 'Preset: balanced');
+      const snapshot = await editor.snapshot();
+      const target = configurationTargets(snapshot, settingsId).find((target) => target.label === 'Preset: balanced');
       assert.ok(target !== undefined);
       const plan = planParameter(snapshot, target, field, text);
       await saveFilePlan(plan, async () => {
@@ -421,20 +255,19 @@ test(
     const { planPermissions } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/composition/permission-authoring.js')).href
     )) as typeof Permissions;
-    const baseline = readRuntimeBaseline(await api('/config'), { root: project, directory: project }, configRoot);
-    const beforePermissions = await loadSnapshot(configRoot, project, baseline, project, '/');
+    const beforePermissions = await editor.snapshot();
     const createPermissions = planDefinition(beforePermissions, {
       operation: 'create',
       registry: 'configurationPresets',
       name: 'checks',
-      sourceId: settingsPath,
+      sourceId: settingsId,
       value: { permissions: [] },
     });
     await saveFilePlan(createPermissions, async () => {
       await previewFilePlan(createPermissions);
     });
-    const permissionSnapshot = await loadSnapshot(configRoot, project, baseline, project, '/');
-    const permissionTarget = configurationTargets(permissionSnapshot, settingsPath).find(
+    const permissionSnapshot = await editor.snapshot();
+    const permissionTarget = configurationTargets(permissionSnapshot, settingsId).find(
       (target) => target.label === 'Preset: checks',
     );
     assert.ok(permissionTarget !== undefined);
@@ -452,8 +285,8 @@ test(
     const { planPrompt, promptTargets } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/composition/prompt-authoring.js')).href
     )) as typeof Prompts;
-    const promptSnapshot = await loadSnapshot(configRoot, project, baseline, project, '/');
-    const promptTarget = promptTargets(promptSnapshot, settingsPath).find(
+    const promptSnapshot = await editor.snapshot();
+    const promptTarget = promptTargets(promptSnapshot, settingsId).find(
       (target) => target.label === 'Group: developers',
     );
     assert.ok(promptTarget !== undefined);
@@ -477,29 +310,25 @@ test(
         registry: 'sourceDirectories',
         name: 'authored',
         operation: 'create',
-        sourceId: settingsPath,
+        sourceId: settingsId,
         value: './shared-prompts',
       },
       {
         registry: 'prompts',
         name: 'notes',
         operation: 'create',
-        sourceId: settingsPath,
+        sourceId: settingsId,
         value: { text: '{{include:@authored/authored.md}}' },
       },
       { registry: 'sourceDirectories', name: 'authored', operation: 'rename', nextName: 'reusable' },
     ] as const) {
-      const snapshot = await loadSnapshot(configRoot, project, baseline, project, '/');
+      const snapshot = await editor.snapshot();
       const plan = await planPromptAsset(snapshot, change);
       await saveFilePlan(plan, async () => {
         await validatePromptAssets(plan);
       });
     }
-    const references = await planPromptReferences(
-      await loadSnapshot(configRoot, project, baseline, project, '/'),
-      'prompt-consumer',
-      ['notes', 'notes'],
-    );
+    const references = await planPromptReferences(await editor.snapshot(), 'prompt-consumer', ['notes', 'notes']);
     await saveFilePlan(references, async () => {
       await validatePromptAssets(references);
     });
@@ -532,6 +361,7 @@ test(
       'high',
       'native selected variant retains precedence over authored provider options',
     );
+    assert.equal(reloadedRequest.model, 'beta');
     assert.ok(!JSON.stringify(reloadedRequest).includes('INITIAL_WORKER_GUIDANCE'));
     assert.equal((await request('prompt-consumer')).info.modelID, 'beta');
     const reusableRequest = requests.find((body) => JSON.stringify(body).includes('REUSABLE_NATIVE_PROMPT'));
