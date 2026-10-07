@@ -615,6 +615,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
         dialog = props;
       },
       dialog: {
+        setSize: () => {},
         get open() {
           return dialog !== undefined;
         },
@@ -1281,7 +1282,7 @@ test('compose permission inspection preserves ordered contributions and states t
   await ui.select('effective');
   await ui.select('+permissions');
   assert.ok(ui.message().indexOf('bash * → deny') < ui.message().indexOf('bash git * → allow'));
-  assert.match(ui.message(), /compilation and failure handling are not integrated/);
+  assert.match(ui.message(), /native defaults and session approvals are outside this preview/);
   assert.equal(ui.updates, 0);
 });
 
@@ -1484,6 +1485,55 @@ test('compose accumulates active membership repairs, rejects incomplete drafts, 
   assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.developers.agents, ['build']);
   assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.reviewers.agents, ['plan']);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), nativeBefore);
+});
+
+test('membership repair confirmation exposes permission fallback before saving an otherwise valid candidate', async (t) => {
+  const root = await fixture(t);
+  const nativePath = join(root, 'opencode.jsonc');
+  const native = parseConfig(await readFile(nativePath, 'utf8'));
+  (native.agent as Record<string, AgentSettings>).builtin.permission = { skill: 'allow' };
+  const nativeBefore = JSON.stringify(native);
+  await writeFile(nativePath, nativeBefore);
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  const file = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(file, 'utf8'));
+  const definitions = value.componentGroups as Record<string, Record<string, unknown>>;
+  definitions.developers.agents = ['removed'];
+  definitions.developers.configuration = {
+    permissions: [
+      { tool: 'webfetc?', pattern: 'a', action: 'deny' },
+      { tool: 'webfetch', action: 'allow' },
+      { tool: 'webfetc?', pattern: 'b', action: 'deny' },
+      { tool: 'skill', action: 'deny' },
+    ],
+  };
+  const before = JSON.stringify(value);
+  await writeFile(file, before);
+  await ui.command('config-composer.compose');
+  await ui.select('repair');
+  await ui.select('group:developers');
+  await ui.select('agents');
+  await ui.select('member:removed');
+  await ui.select('member:builtin');
+  await ui.select('+keep');
+  await ui.select('\u0000back');
+  await ui.select('+review');
+  assert.equal(ui.title(), 'Save membership repair?');
+  assert.match(ui.message(), /All Composer.*agent.*not applied/);
+  assert.match(ui.message(), /builtin/);
+  assert.match(ui.message(), /more permissive/i);
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf(file));
+  assert.equal(await readFile(file, 'utf8'), before, 'warning is visible before any write');
+  await ui.cancel();
+  assert.equal(await readFile(file, 'utf8'), before);
+  await ui.select('+review');
+  await ui.confirm();
+  const saved = await loadSnapshot(root);
+  assert.ok(saved.resolved.permissionWarnings.some((warning) => warning.scope === 'agent:builtin'));
+  assert.deepEqual(saved.resolved.agent.builtin.permission, { skill: 'allow' });
+  assert.equal(ui.updates, 0, 'saving the warned candidate still does not apply it');
+  assert.equal(await readFile(nativePath, 'utf8'), nativeBefore);
 });
 
 test('new configuration presets choose model settings before saving a valid definition', async (t) => {
@@ -1785,7 +1835,7 @@ test('permission UI edits, reorders and previews rules without saving cancelled 
   await ui.enter('git status');
   assert.match(ui.message(), /deny: bash git \*/);
   assert.match(ui.message(), /Earlier matching contributions/);
-  assert.match(ui.message(), /cannot apply/);
+  assert.match(ui.message(), /unsupported scope/);
   await ui.escape();
   await ui.escape();
   await ui.escape();
@@ -1794,7 +1844,7 @@ test('permission UI edits, reorders and previews rules without saving cancelled 
   await ui.select('earlier');
   await ui.select('+save');
   assert.ok(ui.message().indexOf('bash git * → deny') < ui.message().indexOf('* * → allow'));
-  assert.doesNotMatch(ui.message(), /Reload saved settings to apply/);
+  assert.match(ui.message(), /Reload saved settings to apply/);
   await ui.cancel();
   assert.equal(await readFile(path, 'utf8'), original);
   await ui.select('+save');
@@ -1803,8 +1853,7 @@ test('permission UI edits, reorders and previews rules without saving cancelled 
     { tool: 'bash', pattern: 'git *', action: 'deny' },
     { tool: '*', action: 'allow' },
   ]);
-  assert.equal(ui.title(), 'Configured permission rules saved');
-  assert.match(ui.message(), /running configuration and conversations are unchanged/);
+  assert.equal(ui.title(), 'Settings saved');
   assert.equal(ui.updates, 0);
 });
 
@@ -1821,6 +1870,32 @@ test('permission UI creates an inactive permission-only preset without choosing 
   const snapshot = await loadSnapshot(root);
   assert.deepEqual(snapshot.sources.registry.configurationPresets?.checks, { permissions: [] });
   assert.deepEqual(snapshot.sources.activeProfiles, ['work']);
+  assert.equal(ui.updates, 0);
+});
+
+test('permission save puts candidate fallback before long source paths and ordered rule details', async (t) => {
+  const root = await fixture(t);
+  const file = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(file, 'utf8'));
+  const definitions = value.componentGroups as Record<string, Record<string, unknown>>;
+  definitions.developers.configuration = {
+    permissions: [
+      { tool: 'webfetc?', pattern: 'a', action: 'deny' },
+      { tool: 'webfetch', action: 'allow' },
+      { tool: 'webfetc?', pattern: 'b', action: 'deny' },
+    ],
+  };
+  await writeFile(file, JSON.stringify(value));
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(file);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('+save');
+  assert.match(ui.message(), /^Fallback may be more permissive/);
+  assert.match(ui.message(), /Agent builtin:/);
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf(file));
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf('webfetc?'));
   assert.equal(ui.updates, 0);
 });
 

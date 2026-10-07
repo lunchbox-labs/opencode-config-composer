@@ -1,5 +1,6 @@
 import { type AgentSettings, SettingsError, record } from '../settings.ts';
 import { type PromptRead, expandIncludes } from '../prompts.ts';
+import { type GlobalPermissionContribution, type PermissionWarning, resolvePermissions } from './permission-runtime.ts';
 import { loadComponents } from './components.ts';
 import { MembershipValidationError, resolveGroupAgentNames } from './membership.ts';
 import type { LoadedSources } from './sources.ts';
@@ -34,6 +35,9 @@ export interface ResolvedModelSettings {
   permissions?: PermissionRule[];
 }
 export interface ResolvedProfileRuntime {
+  permission?: unknown;
+  globalPermissions: GlobalPermissionContribution[];
+  permissionWarnings: PermissionWarning[];
   agent: Record<string, AgentSettings>;
   model?: string;
   small_model?: string;
@@ -83,7 +87,7 @@ function mergeAuthored(base: AgentSettings, extra: AgentSettings): AgentSettings
       return [
         key,
         Object.hasOwn(extra, key)
-          ? record(value) && record(base[key])
+          ? key !== 'permission' && record(value) && record(base[key])
             ? mergeAuthored(base[key], value)
             : value
           : base[key],
@@ -191,6 +195,7 @@ export async function resolveProfileRuntime(
   const choices: Record<string, ResolvedModelSettings> = {};
   const provenance: Record<string, FieldOrigin> = {};
   const permissions: PermissionContribution[] = [];
+  const globalPermissions: GlobalPermissionContribution[] = [];
   const prompts: Record<
     string,
     { defaults: PromptContribution[]; groups: PromptContribution[]; explicit: PromptContribution[] }
@@ -217,7 +222,13 @@ export async function resolveProfileRuntime(
       overwritten: [...source.overwritten, ...(previous === undefined ? [] : [previous])],
     };
   }
-  function globalSettings(value: { model?: string; small_model?: string } | undefined, at: FieldOrigin) {
+  function globalSettings(
+    value: { model?: string; small_model?: string; permissions?: PermissionRule[] } | undefined,
+    at: FieldOrigin,
+  ) {
+    for (const [index, rule] of (value?.permissions ?? []).entries()) {
+      globalPermissions.push({ rule, origin: { ...at, pointer: `${at.pointer}/permissions/${index}/action` } });
+    }
     for (const key of ['model', 'small_model'] as const) {
       if (value?.[key] !== undefined) {
         globals[key] = value[key];
@@ -517,7 +528,10 @@ export async function resolveProfileRuntime(
     }
     command.template = await expandIncludes(command.template, registry.sourceDirectories ?? {}, onPromptRead, overlays);
   }
+  const compiledPermissions = resolvePermissions(native.permission, agent, globalPermissions, permissions, provenance);
   return {
+    ...compiledPermissions,
+    globalPermissions,
     agent,
     commands,
     skillPaths: [...skillPaths],

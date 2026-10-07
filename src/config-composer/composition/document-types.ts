@@ -81,12 +81,14 @@ export type ProfileLayer =
   | { configurationPreset: string; target: PresetTarget; componentGroup?: never };
 
 export interface CompositionDefaults {
+  permissions?: PermissionRule[];
   model?: string;
   small_model?: string;
   agents?: AgentConfiguration;
 }
 
 export interface CompositionOverrides {
+  permissions?: PermissionRule[];
   model?: string;
   small_model?: string;
   agents?: Record<string, AgentConfiguration>;

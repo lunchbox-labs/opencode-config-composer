@@ -93,9 +93,17 @@ valid. Preserve contribution order and authored rule order: **the latest matchin
 wins, even if looser**. A later nonmatch leaves an earlier match intact. Only no Composer match falls
 back to native globals, then native defaults. An explicit `ask` is a match, not a fallback. Replacing a
 permission array in a definition must not discard earlier matching contributions from other layers.
-The resolver emits ordered `{agent, rule, origin}` contributions without compiling or evaluating
-native permissions. Compiler integration and native failure behavior are required before permission
-profiles can be relied on.
+Global `defaults.permissions` replay in shared/project/local scope order, then active profile
+`overrides.permissions` in profile order, then scoped `overrides.permissions`. These global rules apply
+without selecting an agent. `defaults.agents.permissions` remains selected-agent-only. Agent rules compile
+after applied global rules and native agent permissions. The resolver retains ordered `{agent, rule, origin}`
+contributions and global `{rule, origin}` contributions alongside the compiled policies.
+
+Unsupported compilation skips every Composer permission contribution for the affected scope with a warning.
+An affected agent keeps native agent permissions plus the applied global policy. An affected global scope
+keeps native globals and permits independent agents to compile. Other configuration continues. This fallback
+may be more permissive; it does not modify session approvals or add a blocking policy. Stderr and native TUI
+events identify skipped sources, replay on affected session use, and report changed/resolved warnings.
 
 A configured permission preview returns a matched `action` or `{ "fallback": "native" }`; a nonmatch
 does not invent `ask` or claim a Composer source. Canonical origins address authored rule-array fields,

@@ -7,6 +7,44 @@ import { type AgentSettings, type NativeModels, SettingsError, record } from '..
 import { serverEntry } from '../registration.ts';
 
 const key = '__configComposerRuntime';
+
+// OpenCode 1.18.34's /config response serializes known names in schema order.
+// Unknown-name order and pattern-map order survive transport and remain semantic.
+// Known-vs-wildcard ordering cannot be attested by /config alone; native evaluator
+// fixtures verify that boundary, rather than rejecting healthy response serialization.
+const permissionNames = [
+  'read',
+  'edit',
+  'glob',
+  'grep',
+  'list',
+  'bash',
+  'task',
+  'external_directory',
+  'todowrite',
+  'question',
+  'webfetch',
+  'websearch',
+  'lsp',
+  'doom_loop',
+  'skill',
+];
+function permissionTransport(value: unknown): unknown {
+  if (!record(value)) {
+    return value;
+  }
+  return [
+    ...permissionNames
+      .filter((name) => Object.hasOwn(value, name))
+      .map((name) => [name, record(value[name]) ? Object.entries(value[name]) : value[name]]),
+    ...Object.entries(value)
+      .filter(([name]) => !permissionNames.includes(name))
+      .map(([name, policy]) => [name, record(policy) ? Object.entries(policy) : policy]),
+  ];
+}
+function samePermission(left: unknown, right: unknown): boolean {
+  return isDeepStrictEqual(permissionTransport(left), permissionTransport(right));
+}
 export interface RuntimeLocation {
   root: string;
   directory: string;
@@ -14,9 +52,20 @@ export interface RuntimeLocation {
 export interface EditorNativeBaseline extends NativeModels {
   agent?: Record<string, AgentSettings>;
 }
+
+/** Native inputs inside the marker are opaque metadata, so their full order survives transport. */
+export function sameNativePermissionOrder(left: EditorNativeBaseline, right: EditorNativeBaseline): boolean {
+  return (
+    JSON.stringify(left.permission) === JSON.stringify(right.permission) &&
+    [...new Set([...Object.keys(left.agent ?? {}), ...Object.keys(right.agent ?? {})])].every(
+      (name) => JSON.stringify(left.agent?.[name].permission) === JSON.stringify(right.agent?.[name].permission),
+    )
+  );
+}
 const globals = (value: NativeModels) => ({
   model: typeof value.model === 'string' ? value.model : null,
   small_model: typeof value.small_model === 'string' ? value.small_model : null,
+  permission: structuredClone(value.permission ?? null),
 });
 
 /** Publish only into a copied effective-config registration, never the authored options or source array. */
@@ -87,7 +136,9 @@ export function readRuntimeBaseline(
   if (marker.root !== resolve(location.root) || marker.directory !== resolve(location.directory)) {
     return fail('The runtime baseline belongs to another workspace or directory.');
   }
-  const validGlobals = (value: unknown): value is { model: string | null; small_model: string | null } =>
+  const validGlobals = (
+    value: unknown,
+  ): value is { model: string | null; small_model: string | null; permission?: unknown } =>
     record(value) && [value.model, value.small_model].every((value) => value === null || typeof value === 'string');
   if (
     !validGlobals(marker.native) ||
@@ -104,10 +155,24 @@ export function readRuntimeBaseline(
   if (marker.applied.model !== applied.model || marker.applied.small_model !== applied.small_model) {
     return fail('Global models changed after Composer applied its configuration.');
   }
+  if (!samePermission(marker.applied.permission ?? null, config.permission ?? null)) {
+    return fail('Global permissions changed after Composer applied its configuration.');
+  }
   if (!isDeepStrictEqual(marker.appliedAgents, config.agent ?? {})) {
     return fail('Agent settings changed after Composer applied its configuration.');
   }
+  if (record(config.agent) && record(marker.appliedAgents)) {
+    for (const [name, agent] of Object.entries(config.agent)) {
+      const appliedAgent = marker.appliedAgents[name];
+      if (record(agent) && record(appliedAgent) && !samePermission(agent.permission, appliedAgent.permission)) {
+        return fail('Agent permission order changed after Composer applied its configuration.');
+      }
+    }
+  }
   return {
+    ...(marker.native.permission === null || marker.native.permission === undefined
+      ? {}
+      : { permission: structuredClone(marker.native.permission) }),
     ...(marker.native.model === null ? {} : { model: marker.native.model }),
     ...(marker.native.small_model === null ? {} : { small_model: marker.native.small_model }),
     agent: Object.fromEntries(

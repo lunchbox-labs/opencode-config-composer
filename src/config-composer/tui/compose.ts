@@ -68,14 +68,14 @@ export function openEffective(snapshot: Snapshot, navigation: ReturnType<typeof 
         description: valueLabel(savedValue(snapshot, pointer)),
       })),
       { title: 'Source files and editability', value: '+sources', category: 'Sources' },
-      ...(snapshot.resolved.permissions.length === 0
+      ...(snapshot.resolved.permissions.length + snapshot.resolved.globalPermissions.length === 0
         ? []
         : [
             {
               title: 'Ordered permission contributions',
               value: '+permissions',
               category: 'Permissions',
-              description: 'Authored contributions; enforcement integration is pending',
+              description: 'Authored order, compiled policy and scope-specific warnings',
             },
           ]),
     ],
@@ -100,13 +100,17 @@ export function openEffective(snapshot: Snapshot, navigation: ReturnType<typeof 
           '\n\nSaved preview: the running configuration may differ until reload. Session model selections can still override configured defaults.';
       } else if (option.value === '+permissions') {
         message =
-          snapshot.resolved.permissions
+          [
+            ...snapshot.resolved.globalPermissions.map((item) => ({ ...item, agent: 'Global' })),
+            ...snapshot.resolved.permissions,
+          ]
             .map(
               (item, index) =>
                 `${index + 1}. ${item.agent}: ${item.rule.tool} ${item.rule.pattern ?? '*'} → ${item.rule.action}\n${describe(item.origin)}`,
             )
             .join('\n\n') +
-          '\n\nThese are ordered Composer contributions. Native permission compilation and failure handling are not integrated.';
+          '\n\nConfigured contributions; native defaults and session approvals are outside this preview.\n' +
+          snapshot.resolved.permissionWarnings.map((warning) => warning.message).join('\n');
       } else {
         const origin: FieldOrigin | undefined = Object.hasOwn(snapshot.resolved.provenance, option.value)
           ? snapshot.resolved.provenance[option.value]
