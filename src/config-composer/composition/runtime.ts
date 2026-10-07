@@ -88,6 +88,82 @@ function mergeAuthored(base: AgentSettings, extra: AgentSettings): AgentSettings
   );
 }
 
+export function resolveConfigurationSettings(
+  value: ConfigurationPreset,
+  at: FieldOrigin,
+  context: {
+    presets: Record<string, ConfigurationPreset>;
+    globals: { model?: string; small_model?: string };
+    provenance: Record<string, FieldOrigin>;
+  },
+  chain: string[] = [],
+): { value: ResolvedModelSettings; fields: Record<string, FieldOrigin> } {
+  const { presets, globals, provenance } = context;
+  let base: ResolvedModelSettings = {};
+  let fields: Record<string, FieldOrigin> = {};
+  let references = at.references;
+  if (value.modelRef?.startsWith('preset:') === true) {
+    const name = value.modelRef.slice(7);
+    if (chain.includes(name) || chain.length >= 32) {
+      throw new SettingsError(`Model preset reference cycle or depth limit at ${name}.`);
+    }
+    if (!Object.hasOwn(presets, name)) {
+      throw new SettingsError(`Model preset ${name} does not exist.`);
+    }
+    const ref = context.provenance[`/configurationPresets/${part(name)}`];
+    const inherited = resolveConfigurationSettings(presets[name], ref, context, [...chain, name]);
+    base = inherited.value;
+    fields = inherited.fields;
+    references = [
+      ...references,
+      `${ref.sourceId ?? ''}#${ref.pointer}`,
+      ...Object.values(fields).flatMap((field) => field.references),
+    ];
+  } else if (value.modelRef !== undefined) {
+    const field = value.modelRef === 'opencode:model' ? 'model' : 'small_model';
+    if (globals[field] === undefined) {
+      throw new SettingsError(`${value.modelRef} has no configured model. Set its default or use native fallback.`);
+    }
+    base = { model: globals[field] };
+    fields.model = { ...provenance[`/${field}`] };
+    references = [...references, `/${field}`];
+  }
+  function mark(item: unknown, key: string) {
+    if (!record(item)) {
+      for (const path of Object.keys(fields).filter((path) => path.startsWith(`${key}/`))) {
+        fields[path] = { ...at, pointer: `${at.pointer}/${key}`, operation: 'unset', overwritten: [fields[path]] };
+      }
+    }
+    const previous = Object.hasOwn(fields, key) ? fields[key] : undefined;
+    fields[key] = { ...at, pointer: `${at.pointer}/${key}`, overwritten: previous === undefined ? [] : [previous] };
+    if (record(item)) {
+      for (const [child, next] of Object.entries(item)) {
+        mark(next, `${key}/${part(child)}`);
+      }
+    }
+  }
+  for (const key of ['model', 'variant', 'parameters'] as const) {
+    if (value[key] !== undefined) {
+      mark(value[key], key);
+    }
+  }
+  for (const field of Object.values(fields)) {
+    field.references = [...new Set([...references, ...field.references])];
+  }
+  return {
+    value: {
+      ...base,
+      ...value,
+      ...(value.model === undefined && base.model !== undefined ? { model: base.model } : {}),
+      ...(base.parameters !== undefined || value.parameters !== undefined
+        ? { parameters: mergeParameters(base.parameters, value.parameters) }
+        : {}),
+      permissions: value.permissions,
+    },
+    fields,
+  };
+}
+
 export async function resolveProfileRuntime(
   sources: LoadedSources,
   native: NativeInput,
@@ -158,77 +234,12 @@ export async function resolveProfileRuntime(
     globalSettings(scope.value.overrides, origin(scope.id, '/overrides', 'overrides'));
   }
 
-  function modelSettings(
-    value: ConfigurationPreset,
-    at: FieldOrigin,
-    chain: string[] = [],
-  ): { value: ResolvedModelSettings; fields: Record<string, FieldOrigin> } {
-    let base: ResolvedModelSettings = {};
-    let fields: Record<string, FieldOrigin> = {};
-    let references = at.references;
-    if (value.modelRef?.startsWith('preset:') === true) {
-      const name = value.modelRef.slice(7);
-      if (chain.includes(name) || chain.length >= 32) {
-        throw new SettingsError(`Model preset reference cycle or depth limit at ${name}.`);
-      }
-      if (!Object.hasOwn(presets, name)) {
-        throw new SettingsError(`Model preset ${name} does not exist.`);
-      }
-      const ref = sources.provenance[`/configurationPresets/${part(name)}`];
-      const inherited = modelSettings(presets[name], ref, [...chain, name]);
-      base = inherited.value;
-      fields = inherited.fields;
-      references = [
-        ...references,
-        `${ref.sourceId ?? ''}#${ref.pointer}`,
-        ...Object.values(fields).flatMap((field) => field.references),
-      ];
-    } else if (value.modelRef !== undefined) {
-      const field = value.modelRef === 'opencode:model' ? 'model' : 'small_model';
-      if (globals[field] === undefined) {
-        throw new SettingsError(`${value.modelRef} has no configured model. Set its default or use native fallback.`);
-      }
-      base = { model: globals[field] };
-      fields.model = { ...provenance[`/${field}`] };
-      references = [...references, `/${field}`];
-    }
-    function mark(item: unknown, key: string) {
-      if (!record(item)) {
-        for (const path of Object.keys(fields).filter((path) => path.startsWith(`${key}/`))) {
-          fields[path] = { ...at, pointer: `${at.pointer}/${key}`, operation: 'unset', overwritten: [fields[path]] };
-        }
-      }
-      const previous = Object.hasOwn(fields, key) ? fields[key] : undefined;
-      fields[key] = { ...at, pointer: `${at.pointer}/${key}`, overwritten: previous === undefined ? [] : [previous] };
-      if (record(item)) {
-        for (const [child, next] of Object.entries(item)) {
-          mark(next, `${key}/${part(child)}`);
-        }
-      }
-    }
-    for (const key of ['model', 'variant', 'parameters'] as const) {
-      if (value[key] !== undefined) {
-        mark(value[key], key);
-      }
-    }
-    for (const field of Object.values(fields)) {
-      field.references = [...new Set([...references, ...field.references])];
-    }
-    return {
-      value: {
-        ...base,
-        ...value,
-        ...(value.model === undefined && base.model !== undefined ? { model: base.model } : {}),
-        ...(base.parameters !== undefined || value.parameters !== undefined
-          ? { parameters: mergeParameters(base.parameters, value.parameters) }
-          : {}),
-        permissions: value.permissions,
-      },
-      fields,
-    };
-  }
   function apply(name: string, value: AgentConfiguration, at: FieldOrigin, explicit = false) {
-    const resolved = modelSettings(value, at);
+    const resolved = resolveConfigurationSettings(value, at, {
+      presets,
+      globals,
+      provenance: { ...sources.provenance, ...provenance },
+    });
     const next = resolved.value;
     const current = choices[name] ?? { model: agent[name].model, variant: agent[name].variant };
     if (

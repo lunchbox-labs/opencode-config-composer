@@ -31,10 +31,16 @@ import {
 import { configurationFile, configurationPath } from './configuration.ts';
 import { type LoadedSources, type ProjectContext, loadCompositionSources } from './composition/sources.ts';
 import { loadComponents } from './composition/components.ts';
-import { type ResolvedProfileRuntime, nativeAgentNames, resolveProfileRuntime } from './composition/runtime.ts';
+import {
+  type ResolvedProfileRuntime,
+  nativeAgentNames,
+  resolveConfigurationSettings,
+  resolveProfileRuntime,
+} from './composition/runtime.ts';
 import { parseCompositionDocument } from './composition/document.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveGroupAgentNames } from './composition/membership.ts';
+import type { ConfigurationParameters, ConfigurationPreset } from './composition/types.ts';
 import type { EditorNativeBaseline } from './composition/runtime-baseline.ts';
 import { editNativeBaseline, verifyNativeAgents } from './composition/native-baseline.ts';
 import { serverEntry } from './registration.ts';
@@ -541,6 +547,24 @@ export function groupNames(snapshot: Snapshot): string[] {
   ].sort();
 }
 
+function referencesModel(
+  value: { modelRef?: string },
+  reference: string,
+  presets: Record<string, ConfigurationPreset>,
+): boolean {
+  const seen = new Set<string>();
+  let next = value.modelRef;
+  while (next !== undefined && !seen.has(next)) {
+    if (next === reference) {
+      return true;
+    }
+    seen.add(next);
+    next =
+      next.startsWith('preset:') && Object.hasOwn(presets, next.slice(7)) ? presets[next.slice(7)].modelRef : undefined;
+  }
+  return false;
+}
+
 export function affectedGroups(snapshot: Snapshot, change: Change): string[] {
   if (change.kind === 'all') {
     return groupNames(snapshot);
@@ -555,7 +579,9 @@ export function affectedGroups(snapshot: Snapshot, change: Change): string[] {
         ? `preset:${change.name}`
         : undefined;
   return modelRef !== undefined && modelRef !== ''
-    ? Object.keys(snapshot.groups).filter((name) => snapshot.groups[name].modelRef === modelRef)
+    ? Object.keys(snapshot.groups).filter((name) =>
+        referencesModel(snapshot.groups[name], modelRef, snapshot.sources.registry.configurationPresets ?? {}),
+      )
     : [];
 }
 
@@ -879,7 +905,7 @@ async function previewNativeAgents(snapshot: Snapshot, overlays: ReadonlyMap<str
 export async function plannedChoices(
   plan: EditPlan,
   native: NativeModels = plan.snapshot.nativeModels,
-): Promise<ModelChoice[]> {
+): Promise<(ModelChoice & { parameters?: ConfigurationParameters })[]> {
   const { snapshot, change } = plan;
   const overlays = new Map(plan.edits.map((edit) => [edit.file.path, edit.text]));
   const sources = await loadCompositionSources(snapshot.sourceContext, overlays);
@@ -891,7 +917,7 @@ export async function plannedChoices(
         ? { model: change.choice.model, small_model: change.choice.model }
         : native;
   const resolved = await resolveProfileRuntime(sources, { ...defaults, agent: agents }, overlays);
-  const choices: ModelChoice[] = Object.entries(resolved.choices)
+  const choices: (ModelChoice & { parameters?: ConfigurationParameters })[] = Object.entries(resolved.choices)
     .filter(([name, choice]) => {
       const previous = Object.hasOwn(snapshot.resolved.choices, name) ? snapshot.resolved.choices[name] : undefined;
       const authored = snapshot.agents.find((agent) => agent.name === name)?.settings.model;
@@ -902,9 +928,12 @@ export async function plannedChoices(
         choice.variant !== previous?.variant
       );
     })
-    .map(([, { model, variant }]) => ({ model, variant }));
+    .map(([, { model, variant, parameters }]) => ({
+      model,
+      variant,
+      ...(parameters === undefined ? {} : { parameters }),
+    }));
   // Validate edited definitions even when no active profile currently consumes them.
-  const settings = editorSettings(sources, defaults);
   if (change.kind === 'group') {
     const available = {
       ...Object.fromEntries(nativeAgentNames.map((name) => [name, {}])),
@@ -919,21 +948,104 @@ export async function plannedChoices(
   if (change.kind === 'preset' || change.kind === 'all' || change.kind === 'override') {
     choices.push(change.choice);
   }
+  const resolvedSettings = (configuration: ConfigurationPreset) =>
+    resolveConfigurationSettings(
+      configuration,
+      { pointer: '', layer: 'edited definition', operation: 'set', references: [], overwritten: [] },
+      {
+        presets: sources.registry.configurationPresets ?? {},
+        globals: { model: resolved.model, small_model: resolved.small_model },
+        provenance: { ...sources.provenance, ...resolved.provenance },
+      },
+    ).value;
+  const unchangedBinding = (configuration: ConfigurationPreset, next: ReturnType<typeof resolvedSettings>) => {
+    try {
+      const previous = resolveConfigurationSettings(
+        configuration,
+        { pointer: '', layer: 'previous definition', operation: 'set', references: [], overwritten: [] },
+        {
+          presets: snapshot.sources.registry.configurationPresets ?? {},
+          globals: { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model },
+          provenance: { ...snapshot.sources.provenance, ...snapshot.resolved.provenance },
+        },
+      ).value;
+      return (
+        previous.model === next.model &&
+        previous.variant === next.variant &&
+        JSON.stringify(previous.parameters) === JSON.stringify(next.parameters)
+      );
+    } catch (error) {
+      if (!(error instanceof SettingsError)) {
+        throw error;
+      }
+      // A previously unbound native slot can acquire a valid model in this edit.
+      return false;
+    }
+  };
   for (const name of affectedGroups(snapshot, change)) {
-    const group = settings.groups[name] ?? {};
-    const preset =
-      group.modelRef?.startsWith('preset:') === true ? settings.modelPresets[group.modelRef.slice(7)] : undefined;
+    const choice = resolvedSettings(sources.registry.componentGroups?.[name].configuration ?? {});
+    const parameters =
+      change.kind === 'group' ||
+      !unchangedBinding(snapshot.sources.registry.componentGroups?.[name]?.configuration ?? {}, choice)
+        ? choice.parameters
+        : undefined;
     choices.push({
-      model:
-        group.model ??
-        preset?.model ??
-        (group.modelRef === 'opencode:model'
-          ? resolved.model
-          : group.modelRef === 'opencode:small_model'
-            ? resolved.small_model
-            : undefined),
-      variant: group.variant ?? preset?.variant,
+      model: choice.model,
+      variant: choice.variant,
+      ...(parameters === undefined ? {} : { parameters }),
     });
+  }
+  if (change.kind === 'preset' || change.kind === 'all' || change.kind === 'global') {
+    const presets = sources.registry.configurationPresets ?? {};
+    const reference =
+      change.kind === 'global'
+        ? `opencode:${change.field}`
+        : change.kind === 'preset'
+          ? `preset:${change.name}`
+          : undefined;
+    for (const [name, value] of Object.entries(presets)) {
+      if (
+        reference !== undefined &&
+        !(change.kind === 'preset' && name === change.name) &&
+        !referencesModel(value, reference, presets)
+      ) {
+        continue;
+      }
+      const choice = resolvedSettings(value);
+      if (
+        choice.parameters !== undefined &&
+        ((change.kind === 'preset' && name === change.name) ||
+          !unchangedBinding(snapshot.sources.registry.configurationPresets?.[name] ?? {}, choice))
+      ) {
+        choices.push(choice);
+      }
+    }
+    // Parameters can also be inherited by component definitions and inactive scoped/profile overrides.
+    const configurations: ConfigurationPreset[] = [
+      ...Object.values(sources.registry.components?.agents ?? {}).flatMap((agent) => agent.configuration ?? []),
+      ...sources.scopes.flatMap((source) => [
+        ...(source.value.defaults?.agents === undefined ? [] : [source.value.defaults.agents]),
+        ...Object.values(source.value.overrides?.agents ?? {}),
+      ]),
+      ...Object.entries(sources.registry.profiles ?? {}).flatMap(([name, profile]) =>
+        Object.values(profile.overrides?.agents ?? {}).filter(
+          (value) =>
+            sources.orderedProfiles.some((active) => active.name === name) ||
+            !(['opencode:model', 'opencode:small_model'] as const).some((slot) =>
+              referencesModel(value, slot, presets),
+            ),
+        ),
+      ),
+    ];
+    for (const value of configurations) {
+      if (reference === undefined ? value.modelRef === undefined : !referencesModel(value, reference, presets)) {
+        continue;
+      }
+      const choice = resolvedSettings(value);
+      if (choice.parameters !== undefined && !unchangedBinding(value, choice)) {
+        choices.push(choice);
+      }
+    }
   }
   return choices;
 }

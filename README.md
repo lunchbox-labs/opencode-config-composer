@@ -184,6 +184,19 @@ explicitly configured missing files and malformed sources still fail validation.
 New files are published without replacing concurrent files, and project writes require their own shared
 filesystem check. Native project agent files and external imports remain read-only.
 
+The parameter screen selects an explicit source and configuration target before editing `temperature`,
+`topP`, `topK`, `maxOutputTokens`, or custom provider options as JSON. Targets include scoped agent defaults,
+groups, presets, component agents, and scoped/profile agent overrides. Blank input removes one local field;
+reset removes the local parameter object so earlier contributions can apply. Saves retain model bindings
+and sibling settings. The review shows effective parameters for changed active consumers; later contributions
+and native pins can mask an edit.
+
+Provider catalog capabilities and output limits reject known unsupported controls before saving. Model
+changes revalidate retained parameters. Custom options are structurally checked; the pinned OpenAI-compatible
+adapter additionally checks the type of `reasoningEffort`, while other options remain provider-unverified.
+Inactive profile references to native model slots defer model-dependent checks until activation supplies
+their effective model context. Reload applies saved parameters; native agent settings and selected variants
+retain their precedence at dispatch.
 
 Use `/agent-models` for global defaults, presets, groups, and individual overrides.
 Use `/agent-groups` for ordered memberships. Model and variant choices come from the provider API.
