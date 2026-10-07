@@ -1,21 +1,15 @@
-import {
-  type PermissionPolicy,
-  composePermissions,
-  explainPermission,
-} from '../src/config-composer/composition/permissions.ts';
+import type * as Permissions from '../src/config-composer/composition/permissions.ts';
+import type { PermissionPolicy } from '../src/config-composer/composition/permissions.ts';
 import assert from 'node:assert/strict';
-import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { type ChildProcess, spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
-import { installPackage } from './install-package.ts';
+import { nativeHarness } from './integration/harness.ts';
+import { installedEditor } from './integration/editor.ts';
+import { nativeNotifications } from './integration/notifications.ts';
 import type {
   AgentConfiguration,
   CompositionDocument,
@@ -25,30 +19,16 @@ import type {
 // Real V1 configuration loading, provider dispatch, and cache invalidation; only the remote model is synthetic.
 test(
   'OpenCode enforces canonical ordered permissions with visible scope-specific fallback warnings',
-  { timeout: 120_000 },
+  { timeout: 240_000 },
   async (t) => {
-    const root = await mkdtemp(join(tmpdir(), 'opencode-config-composer-native-'));
-    const runtime: { child?: ChildProcess; exited?: Promise<unknown> } = {};
-    t.after(async () => {
-      runtime.child?.kill();
-      const forceStop = globalThis.setTimeout(() => runtime.child?.kill('SIGKILL'), 3000);
-      forceStop.unref();
-      await runtime.exited;
-      globalThis.clearTimeout(forceStop);
-      runtime.child?.stdout?.destroy();
-      runtime.child?.stderr?.destroy();
-      await rm(root, { recursive: true, force: true });
-    });
-    const configRoot = join(root, 'config', 'opencode');
-    const project = join(root, 'project');
+    const host = await nativeHarness(t, 'canonical-permissions');
+    const { configRoot, project, installed, api } = host;
     await mkdir(join(configRoot, 'agents'), { recursive: true });
     await mkdir(join(configRoot, 'shared-prompts'));
     await mkdir(join(configRoot, 'skills/included-skill'), { recursive: true });
-    await mkdir(project);
-    const installed = await installPackage(configRoot);
-    const { readRuntimeBaseline } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
-    )) as typeof Baseline;
+    const { composePermissions, explainPermission } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/permissions.js')).href
+    )) as typeof Permissions;
     const permissionProbe = join(configRoot, 'permission-probe.mjs');
     await writeFile(
       permissionProbe,
@@ -60,92 +40,6 @@ test(
     }])) }) };`,
     );
 
-    const requests: Record<string, unknown>[] = [];
-    const provider = createServer((request, response) => {
-      const reply = async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          assert.ok(Buffer.isBuffer(chunk));
-          chunks.push(chunk);
-        }
-        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString());
-        assert.ok(parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed));
-        const body = parsed as Record<string, unknown>;
-        requests.push(body);
-        const skillRequested = JSON.stringify(body.messages).includes('Load included-skill now.');
-        const defaultProbe = /Probe native (allow|ask)\./.exec(JSON.stringify(body.messages))?.[1];
-        const toolReturned =
-          Array.isArray(body.messages) &&
-          body.messages.some(
-            (message: unknown) =>
-              message !== null && typeof message === 'object' && 'role' in message && message.role === 'tool',
-          );
-        const callSkill = (skillRequested || defaultProbe !== undefined) && !toolReturned;
-        const base = { id: 'synthetic-response', model: body.model, created: 1 };
-        const streaming = Boolean(body.stream);
-        if (streaming) {
-          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-          response.write(
-            `data: ${JSON.stringify({
-              ...base,
-              object: 'chat.completion.chunk',
-              choices: [
-                {
-                  index: 0,
-                  delta: callSkill
-                    ? {
-                        role: 'assistant',
-                        tool_calls: [
-                          {
-                            index: 0,
-                            id: 'fixture-skill',
-                            type: 'function',
-                            function: {
-                              name: defaultProbe === undefined ? 'skill' : `permission_default_${defaultProbe}`,
-                              arguments: defaultProbe === undefined ? JSON.stringify({ name: 'included-skill' }) : '{}',
-                            },
-                          },
-                        ],
-                      }
-                    : { role: 'assistant', content: 'verified' },
-                  finish_reason: null,
-                },
-              ],
-            })}\n\n`,
-          );
-          response.end(
-            `data: ${JSON.stringify({
-              ...base,
-              object: 'chat.completion.chunk',
-              choices: [{ index: 0, delta: {}, finish_reason: callSkill ? 'tool_calls' : 'stop' }],
-              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-            })}\n\ndata: [DONE]\n\n`,
-          );
-        } else {
-          response.writeHead(200, { 'Content-Type': 'application/json' });
-          response.end(
-            JSON.stringify({
-              ...base,
-              object: 'chat.completion',
-              choices: [{ index: 0, message: { role: 'assistant', content: 'verified' }, finish_reason: 'stop' }],
-              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-            }),
-          );
-        }
-      };
-      reply().catch((error: unknown) => {
-        response.statusCode = 500;
-        response.end(String(error));
-      });
-    });
-    provider.listen(0, '127.0.0.1');
-    await once(provider, 'listening');
-    t.after(() => {
-      provider.closeAllConnections();
-      provider.close();
-    });
-    const address = provider.address();
-    assert.ok(address !== null && typeof address !== 'string');
     const model = {
       name: 'Synthetic model',
       limit: { context: 8192, output: 256 },
@@ -234,7 +128,7 @@ test(
         fixture: {
           name: 'Fixture',
           npm: '@ai-sdk/openai-compatible',
-          options: { baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: 'synthetic-test-key' },
+          options: { baseURL: host.providerURL, apiKey: 'synthetic-test-key' },
           models: { alpha: model, beta: model },
         },
       },
@@ -360,69 +254,7 @@ test(
       JSON.stringify({ model: 'fixture/beta', small_model: 'fixture/beta' }),
     );
     const nativeBytes = await readFile(join(configRoot, 'opencode.jsonc'), 'utf8');
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      XDG_CONFIG_HOME: join(root, 'config'),
-      XDG_DATA_HOME: join(root, 'data'),
-      XDG_STATE_HOME: join(root, 'state'),
-      XDG_CACHE_HOME: join(root, 'cache'),
-      OPENCODE_DISABLE_AUTOUPDATE: '1',
-      OPENCODE_DISABLE_MODELS_FETCH: '1',
-      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true',
-      OPENCODE_TEST_HOME: root,
-      OPENCODE_CONFIG: '',
-      OPENCODE_CONFIG_CONTENT: '',
-      OPENCODE_SERVER_PASSWORD: '',
-      OPENCODE_DB: join(root, 'db.sqlite'),
-    };
-    delete env.OPENCODE_CONFIG_DIR;
-    delete env.OPENCODE_DISABLE_PROJECT_CONFIG;
-    const child = spawn(
-      process.env.OPENCODE_BIN ?? 'opencode',
-      ['serve', '--hostname', '127.0.0.1', '--port', '0', '--print-logs'],
-      { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    runtime.child = child;
-    runtime.exited = once(child, 'exit').catch(() => undefined);
-    let output = '';
-    let launchError: Error | undefined;
-    child.on('error', (error) => {
-      launchError = error;
-    });
-    child.stdout.on('data', (data: Buffer) => {
-      output += data.toString();
-    });
-    child.stderr.on('data', (data: Buffer) => {
-      output += data.toString();
-    });
-    let baseURL: string | undefined;
-    for (let attempt = 0; attempt < 200; attempt++) {
-      if (launchError !== undefined) {
-        throw launchError;
-      }
-      baseURL = /http:\/\/127\.0\.0\.1:\d+/.exec(output)?.[0];
-      if (baseURL !== undefined) {
-        break;
-      }
-      if (child.exitCode !== null) {
-        throw new Error(`OpenCode exited: ${output}`);
-      }
-      await setTimeout(100);
-    }
-    assert.ok(baseURL !== undefined && baseURL.length > 0, `OpenCode did not start: ${output}`);
-    const api = async <T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> => {
-      const response = await fetch(`${baseURL}${path}`, {
-        method,
-        headers: { 'Content-Type': 'application/json', 'x-opencode-directory': project },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(30_000),
-      }).catch((error: unknown) => {
-        throw new Error(`${path}: ${String(error)}\n${output.slice(-6000)}`);
-      });
-      assert.ok(response.ok, `${path}: ${await response.clone().text()}`);
-      const data: unknown = await response.json();
-      return data as T;
-    };
+    await host.start();
     interface Agent {
       name: string;
       model: { providerID: string; modelID: string };
@@ -446,35 +278,13 @@ test(
         };
       }[];
     }
-    const eventAbort = new AbortController();
-    t.after(() => eventAbort.abort());
-    let eventText = '';
-    const eventResponse = await fetch(`${baseURL}/global/event`, { signal: eventAbort.signal });
-    assert.ok(eventResponse.ok && eventResponse.body !== null);
-    const eventReader = eventResponse.body.getReader();
-    const collectEvents = async () => {
-      try {
-        for (;;) {
-          const item = await eventReader.read();
-          if (item.done) {
-            break;
-          }
-          eventText += new TextDecoder().decode(item.value);
-        }
-      } catch {
-        /* Abort ends the isolated event subscription. */
-      }
-    };
-    collectEvents().catch(() => undefined);
+    const notifications = await nativeNotifications(host);
     const agents = await api<Agent[]>('/agent');
     const effective = await api<{
       permission: PermissionPolicy;
       agent: Record<string, { permission?: PermissionPolicy; prompt?: string }>;
     }>('/config');
-    assert.deepEqual(
-      readRuntimeBaseline(effective, { root: project, directory: project }, configRoot).permission,
-      config.permission,
-    );
+    assert.deepEqual((await (await installedEditor(host)).runtime()).baseline.permission, config.permission);
     assert.equal(explainPermission(effective.permission, 'skill', 'included-skill').action, 'deny');
     assert.equal(effective.permission.webfetch, 'allow');
     assert.equal(effective.permission.question, 'ask');
@@ -539,6 +349,7 @@ test(
         explainPermission(policy, permissionName, pattern).action,
         fixture.probe === undefined ? fixture.action : undefined,
       );
+      const beforeRequests = host.requests.length;
       const session = await api<{ id: string }>('/session', { title: `Permission ${fixture.name}` });
       const state = { completed: false };
       const request = api<Message>(`/session/${session.id}/message`, {
@@ -565,6 +376,14 @@ test(
       assert.equal(asked, fixture.action === 'ask', `native approval: ${fixture.name}`);
       assert.equal(result.info.error, undefined, JSON.stringify(result.info.error));
       const messages = await api<Message[]>(`/session/${session.id}/message`);
+      if (fixture.probe === undefined) {
+        const captured = JSON.stringify(host.requests.slice(beforeRequests));
+        assert.equal(
+          captured.includes('SKILL_BODY_BEFORE'),
+          fixture.action !== 'deny',
+          `provider tool content: ${fixture.name}`,
+        );
+      }
       const toolName = fixture.probe === undefined ? 'skill' : `permission_default_${fixture.probe}`;
       const tool = messages.flatMap((message) => message.parts).find((part) => part.tool === toolName);
       if (fixture.name === 'unsupported-deny') {
@@ -581,9 +400,11 @@ test(
         assert.match(tool.state.error ?? '', /rule which prevents you from using this specific tool call/);
       }
     }
-    assert.match(output, /Agent unsupported-allow:.*Fallback may be more permissive/);
-    assert.match(eventText, /tui.toast.show/);
-    assert.match(eventText, /Agent unsupported-allow:.*Fallback may be more permissive/);
+    await notifications.wait(
+      (toast) =>
+        toast.variant === 'warning' && /Agent unsupported-allow:.*Fallback may be more permissive/.test(toast.message),
+    );
+    assert.match(host.stderr, /Agent unsupported-allow:.*Fallback may be more permissive/);
     assert.equal(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), nativeBytes);
     for (const name of ['plan', 'build']) {
       const rules = agents.find((agent) => agent.name === name)?.permission;
@@ -633,7 +454,9 @@ test(
       preservedMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill')?.state?.status,
       'completed',
     );
-    assert.match(output, /Global scope:.*native global permissions remain/);
-    assert.match(eventText, /Global scope:.*native global permissions remain/);
+    await notifications.wait(
+      (toast) => toast.variant === 'warning' && /Global scope:.*native global permissions remain/.test(toast.message),
+    );
+    assert.match(host.stderr, /Global scope:.*native global permissions remain/);
   },
 );
