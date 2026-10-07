@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type * as Storage from '../src/config-composer/storage.ts';
 import type * as Parameters from '../src/config-composer/composition/parameter-authoring.ts';
+import type * as Permissions from '../src/config-composer/composition/permission-authoring.ts';
+import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
@@ -407,6 +409,40 @@ test(
         await previewFilePlan(plan);
       });
     }
+    const { planDefinition } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/authoring.js')).href
+    )) as typeof Authoring;
+    const { planPermissions } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/permission-authoring.js')).href
+    )) as typeof Permissions;
+    const baseline = readRuntimeBaseline(await api('/config'), { root: project, directory: project }, configRoot);
+    const beforePermissions = await loadSnapshot(configRoot, project, baseline, project, '/');
+    const createPermissions = planDefinition(beforePermissions, {
+      operation: 'create',
+      registry: 'configurationPresets',
+      name: 'checks',
+      sourceId: settingsPath,
+      value: { permissions: [] },
+    });
+    await saveFilePlan(createPermissions, async () => {
+      await previewFilePlan(createPermissions);
+    });
+    const permissionSnapshot = await loadSnapshot(configRoot, project, baseline, project, '/');
+    const permissionTarget = configurationTargets(permissionSnapshot, settingsPath).find(
+      (target) => target.label === 'Preset: checks',
+    );
+    assert.ok(permissionTarget !== undefined);
+    const permissionPlan = planPermissions(permissionSnapshot, permissionTarget, [
+      { tool: 'bash', pattern: 'git *', action: 'deny' },
+      { tool: 'bash', pattern: 'git status', action: 'allow' },
+    ]);
+    await saveFilePlan(permissionPlan, async () => {
+      assert.equal(
+        (await previewFilePlan(permissionPlan)).resolved.permissions.length,
+        0,
+        'inactive rules do not affect active agents',
+      );
+    });
     await reload();
     let refreshed = agents;
     for (let attempt = 0; attempt < 100; attempt++) {

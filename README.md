@@ -160,6 +160,21 @@ origins. Back and Escape return across sections; `/agent-models` and `/agent-gro
 The preview distinguishes saved composition from the running configuration and session model selections.
 Ordered permission contributions are inspectable, with enforcement integration still pending.
 
+The permission editor selects a writable source and configuration target, then adds, edits, removes,
+and reorders `{tool, pattern, action}` rules. Repeated rules remain ordered. A blank pattern matches all
+inputs; actions are `allow`, `ask`, or `deny`. Removing local rules or saving an empty list leaves earlier
+contributions available. Permission-only presets can be created without a model binding and remain inactive
+until explicitly selected through a profile layer.
+
+Configured match previews can inspect one definition or an active agent's complete contribution sequence.
+They identify the latest matching rule and its source, including earlier matching candidates. A later
+`allow` can replace an earlier `deny`; a later nonmatch leaves the earlier match intact. No Composer match
+defers to native globals/defaults without guessing their action. These previews do not prove enforcement:
+this draft still cannot apply profiles with permission contributions until the native compiler and host
+failure policy are integrated. Saving and previewing rules do not reload the running server.
+Permission saves show a saved-only result. Explicit Reload rejects selected permission contributions
+before contacting the server, preserving the current running configuration while authoring continues.
+
 The hub's definition editor creates, renames, and deletes component groups, configuration presets, and profiles.
 New definitions require an explicit existing writable JSONC destination and do not activate profiles.
 Group member pickers cover agents, skills, commands, and prompt fragments; profile editors manage parent
