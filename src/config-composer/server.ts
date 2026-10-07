@@ -1,4 +1,4 @@
-import type { Plugin, PluginModule } from '@opencode-ai/plugin';
+import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
 import {
   type AgentSettings,
   type EffectiveChoice,
@@ -46,7 +46,7 @@ const ConfigComposerPlugin: Plugin = async (pluginInput, options) => {
       // Notification transport failures must not discard successfully compiled settings.
     }
   };
-  const globalPermissions = new WeakMap<object, { native: unknown; applied: unknown }>();
+  const globalPermissions = new WeakMap<object, { native: Config['permission']; applied: Config['permission'] }>();
   const authored = new WeakMap<
     AgentSettings,
     {
@@ -215,13 +215,22 @@ const ConfigComposerPlugin: Plugin = async (pluginInput, options) => {
       if (settings.permission !== undefined) {
         config.permission = globalPolicy;
         globalPermissions.set(config, { native: nativeGlobal, applied: globalPolicy });
+      } else if (previousGlobal !== undefined) {
+        if (nativeGlobal === undefined) {
+          delete config.permission;
+        } else {
+          config.permission = nativeGlobal;
+        }
+        globalPermissions.delete(config);
       }
       for (const name of Object.keys(staged)) {
         if (!Object.hasOwn(configured, name)) {
           configured[name] = {};
         }
       }
-      config.agent = configured;
+      if (config.agent !== undefined || Object.keys(staged).length > 0) {
+        config.agent = configured;
+      }
       for (const [name, agent] of Object.entries(configured)) {
         if (agent.disable === true) {
           continue;

@@ -144,6 +144,80 @@ test('runtime uses native permissions as fallbacks beneath Composer groups and o
   assert.equal(await readFile(path, 'utf8'), text);
 });
 
+test('reloading an omitted global contribution restores native permissions and retains other composition', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-permission-reload-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'config-composer.jsonc');
+  const composition = {
+    model: 'composer/main',
+    small_model: 'composer/small',
+    agent: {
+      permission: { bash: 'allow' },
+      groups: { worker: { modelRef: 'opencode:model', permission: { read: 'ask' } } },
+      prompts: { defaults: { append: ['After'] } },
+    },
+  };
+  await writeFile(path, JSON.stringify(composition));
+  const hooks = await server.server({} as PluginInput, { configFile: path });
+  const nativePolicy = { bash: 'deny' as const, edit: 'ask' as const };
+  const config = {
+    model: 'native/main',
+    small_model: 'native/small',
+    permission: nativePolicy,
+    instructions: ['Native instruction'],
+    agent: { worker: { groups: ['worker'], prompt: 'Authored' } },
+  };
+  await hooks.config!(config);
+  assert.equal(explainPermission(config.permission, 'bash', 'git status').action, 'allow');
+  await writeFile(path, JSON.stringify({ ...composition, agent: { ...composition.agent, permission: undefined } }));
+  await hooks.config!(config);
+  assert.equal(config.permission, nativePolicy);
+  assert.equal(config.model, 'composer/main');
+  assert.equal(config.small_model, 'composer/small');
+  assert.deepEqual(config.instructions, ['Native instruction']);
+  const worker: AgentSettings = config.agent.worker;
+  assert.equal(worker.model, 'composer/main');
+  assert.equal(worker.prompt, 'Authored\n\nAfter');
+  assert.equal(explainPermission(worker.permission as PermissionPolicy, 'bash', 'git status').action, 'deny');
+  assert.equal(explainPermission(worker.permission as PermissionPolicy, 'edit', 'file').action, 'ask');
+  assert.equal(explainPermission(worker.permission as PermissionPolicy, 'read', 'file').action, 'ask');
+  const restored = structuredClone(config);
+  await hooks.config!(config);
+  assert.deepEqual(config, restored);
+});
+
+test('removing global overlays restores native shorthand and absence while retaining external edits', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-permission-external-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'config-composer.jsonc');
+  for (const scenario of [
+    { native: 'ask' },
+    {},
+    { native: 'deny', external: { bash: 'ask' } },
+    { native: { bash: 'deny' }, external: undefined },
+  ]) {
+    await writeFile(path, JSON.stringify({ agent: { permission: { bash: 'allow' } } }));
+    const hooks = await server.server({} as PluginInput, { configFile: path });
+    const config = (scenario.native === undefined ? {} : { permission: scenario.native }) as unknown as Parameters<
+      NonNullable<typeof hooks.config>
+    >[0];
+    await hooks.config!(config);
+    if (Object.hasOwn(scenario, 'external')) {
+      if (scenario.external === undefined) {
+        delete config.permission;
+      } else {
+        config.permission = scenario.external as { bash: 'ask' };
+      }
+    }
+    await writeFile(path, '{}');
+    await hooks.config!(config);
+    const expected = Object.hasOwn(scenario, 'external') ? scenario.external : scenario.native;
+    assert.equal(config.permission, expected);
+    assert.equal(Object.hasOwn(config, 'permission'), expected !== undefined);
+    assert.equal(Object.hasOwn(config, 'agent'), false);
+  }
+});
+
 test('invalid native policy fails before mutating global or agent configuration', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'composer-permissions-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -536,6 +610,7 @@ test('unsupported global contribution preserves native fallback and independent 
     permission: { bash: 'deny' as const, 'webfetc?': { a: 'deny' as const } },
     agent: { worker: { groups: ['good'] } },
   };
+  const original = config.permission;
   await hooks.config!(config);
   assert.deepEqual(config.permission, { bash: 'deny', 'webfetc?': { a: 'deny' } });
   const agent: AgentSettings = config.agent.worker;
@@ -545,6 +620,11 @@ test('unsupported global contribution preserves native fallback and independent 
   assert.doesNotThrow(() =>
     resolveLegacy(source, { permission: config.permission, agent: { worker: { groups: ['good'] } } }),
   );
+  await writeFile(path, JSON.stringify({ agent: { groups: value.agent.groups } }));
+  await hooks.config!(config);
+  assert.equal(config.permission, original);
+  assert.equal(explainPermission(nativePermission(agent.permission), 'bash', 'anything').action, 'allow');
+  assert.equal(agent.model, 'fixture/model');
 });
 
 test('unsupported global composition retains native permission provenance', () => {
