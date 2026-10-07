@@ -1,7 +1,7 @@
 import { type AgentSettings, SettingsError, record } from '../settings.ts';
 import { type PromptRead, expandIncludes } from '../prompts.ts';
 import { loadComponents } from './components.ts';
-import { resolveGroupAgentNames } from './membership.ts';
+import { MembershipValidationError, resolveGroupAgentNames } from './membership.ts';
 import type { LoadedSources } from './sources.ts';
 import type {
   AgentConfiguration,
@@ -366,7 +366,12 @@ export async function resolveProfileRuntime(
         for (const key of ['skills', 'commands', 'prompts'] as const) {
           for (const member of group[key] ?? []) {
             if (!Object.hasOwn(components[key], member)) {
-              throw new SettingsError(`Component group ${name} names missing ${key} component ${member}.`);
+              throw new MembershipValidationError(
+                `Component group ${name} names missing ${key} component ${member}.`,
+                name,
+                member,
+                key,
+              );
             }
           }
         }

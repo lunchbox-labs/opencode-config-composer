@@ -2,8 +2,8 @@ import { findNodeAtLocation, parseTree } from 'jsonc-parser';
 import { SettingsError, groupName, record } from '../settings.ts';
 import {
   type FilePlan,
-  type Snapshot,
   type SourceFile,
+  type SourceSnapshot,
   editJson,
   parseAgent,
   parseConfig,
@@ -31,13 +31,13 @@ interface Reference {
   markdown: boolean;
 }
 
-export function definitionDestinations(snapshot: Snapshot): SourceFile[] {
+export function definitionDestinations(snapshot: SourceSnapshot): SourceFile[] {
   return snapshot.files.filter(
     (file) => file.writable !== false && snapshot.sources.documents.some((source) => source.id === file.path),
   );
 }
 
-function references(snapshot: Snapshot, registry: DefinitionRegistry, name: string): Reference[] {
+function references(snapshot: SourceSnapshot, registry: DefinitionRegistry, name: string): Reference[] {
   const result: Reference[] = [];
   const add = (file: SourceFile, path: (string | number)[], value: unknown, markdown = false, indirect = false) => {
     if (value === name || (registry === 'configurationPresets' && value === `preset:${name}`)) {
@@ -146,7 +146,7 @@ function references(snapshot: Snapshot, registry: DefinitionRegistry, name: stri
   return result;
 }
 
-export function planDefinition(snapshot: Snapshot, change: DefinitionChange): FilePlan {
+export function planDefinition<S extends SourceSnapshot>(snapshot: S, change: DefinitionChange): FilePlan<S> {
   groupName(change.name);
   const definitions = snapshot.sources.registry[change.registry] ?? {};
   const pending = new Map<string, { file: SourceFile; text: string }>();

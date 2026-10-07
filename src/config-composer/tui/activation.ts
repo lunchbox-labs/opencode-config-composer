@@ -1,5 +1,5 @@
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
-import type { Snapshot } from '../storage.ts';
+import type { SourceSnapshot } from '../storage.ts';
 import {
   type CompositionScope,
   type ScopeChange,
@@ -15,7 +15,7 @@ interface ActivationUi {
 }
 const label = (profiles: string[]) => (profiles.length === 0 ? 'none' : profiles.join(' → '));
 
-export function openActivation(snapshot: Snapshot, ui: ActivationUi): void {
+export function openActivation(snapshot: SourceSnapshot, ui: ActivationUi): void {
   const ordered = (destination: ScopeDestination) => {
     const pending = [...(destination.selection ?? destination.inherited)];
     ui.menu(`${destination.scope}: ordered active profiles`, () => [

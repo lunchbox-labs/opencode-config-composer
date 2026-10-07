@@ -3,6 +3,7 @@ import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
 import { isDeepStrictEqual } from 'node:util';
 import { type AgentSettings, type EffectiveChoice, SettingsError, record } from './settings.ts';
 import { publishRuntimeBaseline } from './composition/runtime-baseline.ts';
+import { MembershipValidationError } from './composition/membership.ts';
 import { expandIncludes } from './prompts.ts';
 import { loadCompositionSources } from './composition/sources.ts';
 import { type ResolvedModelSettings, resolveProfileRuntime } from './composition/runtime.ts';
@@ -128,11 +129,26 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
       }
       const nextSources = await loadCompositionSources(context);
-      const resolved = await resolveProfileRuntime(nextSources, {
-        ...nativeGlobals,
-        agent: staged,
-        composerOwnedAgents: owned,
-      });
+      let resolved: Awaited<ReturnType<typeof resolveProfileRuntime>>;
+      try {
+        resolved = await resolveProfileRuntime(nextSources, {
+          ...nativeGlobals,
+          agent: staged,
+          composerOwnedAgents: owned,
+        });
+      } catch (error) {
+        if (error instanceof MembershipValidationError) {
+          // Expose exact inspection inputs without applying any part of the invalid composition.
+          publishRuntimeBaseline(
+            config,
+            options,
+            { root: context.root, directory: input.directory },
+            nativeGlobals,
+            staged,
+          );
+        }
+        throw error;
+      }
       // Staging guard only: OpenCode catches config-hook errors and may continue without Composer.
       // This is not fail-closed enforcement; do not release until failure behavior is integrated.
       if (resolved.permissions.length !== 0) {

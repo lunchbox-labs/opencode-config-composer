@@ -14,6 +14,7 @@ import type * as Prompts from '../src/config-composer/composition/prompt-authori
 import type * as PromptSources from '../src/config-composer/composition/prompt-sources.ts';
 import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
+import type * as NativeBaseline from '../src/config-composer/composition/native-baseline.ts';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
 import { installPackage } from './install-package.ts';
@@ -391,7 +392,7 @@ test(
         },
         'PATCH',
       );
-    const { loadSnapshot, previewFilePlan, saveFilePlan } = (await import(
+    const { loadEditorSnapshot, loadSnapshot, previewFilePlan, saveFilePlan, reloadConfiguration } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
     )) as typeof Storage;
     const { configurationTargets, planParameter } = (await import(
@@ -608,6 +609,71 @@ test(
     assert.deepEqual(await readNative(), nativeBytes);
     assert.ok(requests.some((body) => body.model === 'alpha'));
     assert.ok(requests.some((body) => body.model === 'beta'));
+    // A fresh native instance with invalid membership still exposes exact repair inputs.
+    const settingsBeforeFailure = await readFile(settingsPath, 'utf8');
+    const validMembers = (parse(settingsBeforeFailure) as typeof composer).componentGroups.developers.agents;
+    const brokenSettings = applyEdits(
+      settingsBeforeFailure,
+      modify(
+        settingsBeforeFailure,
+        ['componentGroups', 'developers', 'agents'],
+        [...validMembers, 'removed-for-repair'],
+        {},
+      ),
+    );
+    await writeFile(settingsPath, brokenSettings);
+    await api('/instance/dispose', undefined, 'POST');
+    const cachedBaseline = readRuntimeBaseline(await api('/config'), { root: project, directory: project }, configRoot);
+    await assert.rejects(
+      loadEditorSnapshot(configRoot, project, cachedBaseline, project, '/'),
+      /Native agent inputs differ/,
+      'instance disposal alone does not clear the host global config cache; never guess the original native inputs',
+    );
+    await reload();
+    const failedConfig = await api<{ model?: string; agent?: Record<string, unknown> }>('/config');
+    const repairBaseline = readRuntimeBaseline(failedConfig, { root: project, directory: project }, configRoot);
+    assert.equal(failedConfig.model, 'fixture/alpha', 'invalid composition never applies a partial model overlay');
+    assert.equal(failedConfig.agent?.['prompt-consumer'], undefined, 'no partial component publication');
+    assert.deepEqual(failedConfig.agent, repairBaseline.agent);
+    const { nativeAgentProjection } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/native-baseline.js')).href
+    )) as typeof NativeBaseline;
+    const localRepairInputs = await loadEditorSnapshot(configRoot, project, undefined, project, '/');
+    assert.deepEqual(
+      nativeAgentProjection(repairBaseline.agent ?? {}),
+      nativeAgentProjection(localRepairInputs.nativeSourceAgents),
+      'failed native hook publishes original agent inputs for repair',
+    );
+    const inspection = await loadEditorSnapshot(configRoot, project, repairBaseline, project, '/');
+    assert.ok('diagnostic' in inspection);
+    assert.match(inspection.diagnostic.message, /removed-for-repair/);
+    assert.equal('resolved' in inspection, false);
+    const repairPlan = planDefinition(inspection, {
+      operation: 'patch',
+      registry: 'componentGroups',
+      name: 'developers',
+      path: ['agents'],
+      value: validMembers,
+    });
+    await saveFilePlan(repairPlan, async () => {
+      await previewFilePlan(repairPlan);
+    });
+    assert.equal(
+      (await api<{ agent?: Record<string, unknown> }>('/config')).agent?.['prompt-consumer'],
+      undefined,
+      'saving the repair does not apply it',
+    );
+    const repaired = await loadSnapshot(configRoot, project, repairBaseline, project, '/');
+    await reloadConfiguration(repaired, async (plugin) => {
+      await api('/global/config', { plugin }, 'PATCH');
+    });
+    assert.ok((await api<Agent[]>('/agent')).some((agent) => agent.name === 'prompt-consumer'));
+    assert.equal((await request('prompt-consumer')).info.modelID, 'beta');
+    assert.deepEqual(
+      await api<Message[]>(`/session/${skillSession.id}/message`),
+      skillMessages,
+      'repair and explicit reload retain previous conversation records',
+    );
     assert.ok(
       requests.every(
         (body) =>
