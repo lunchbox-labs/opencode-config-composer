@@ -1,0 +1,45 @@
+{
+  // Imported documents contain definitions, without scoped activation/defaults/overrides.
+  "profiles": {
+    "base-workflow": {
+      "layers": [
+        { "componentGroup": "review" },
+        { "componentGroup": "programming" },
+        {
+          "configurationPreset": "review-checks",
+          "target": { "componentGroups": ["review"] },
+        },
+        {
+          "configurationPreset": "programming-checks",
+          "target": { "componentGroups": ["programming"] },
+        },
+      ],
+    },
+    "claude-coding": {
+      "extends": "base-workflow",
+      "layers": [
+        {
+          "configurationPreset": "claude-code",
+          "target": { "componentGroups": ["review", "programming"] },
+        },
+      ],
+      "overrides": {
+        "agents": {
+          "code-reviewer": {
+            // This later git match wins; the earlier npm deny remains available.
+            "permissions": [{ "tool": "bash", "pattern": "git *", "action": "allow" }],
+          },
+        },
+      },
+    },
+    "openai-coding": {
+      "extends": "base-workflow",
+      "layers": [
+        {
+          "configurationPreset": "openai-code",
+          "target": { "componentGroups": ["review", "programming"] },
+        },
+      ],
+    },
+  },
+}
