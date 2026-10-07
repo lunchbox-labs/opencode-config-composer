@@ -51,6 +51,8 @@ import { parameterReview, validateParameterChoice } from './composition/paramete
 import { openActivation } from './tui/activation.ts';
 import { openPermissions } from './tui/permissions.ts';
 import { permissionStatus, planPermissions, previewPermission } from './composition/permission-authoring.ts';
+import { openPrompts } from './tui/prompts.ts';
+import { planPrompt, promptReview } from './composition/prompt-authoring.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 const label = (choice: ModelChoice) =>
@@ -914,9 +916,15 @@ export function registerSettings(
         commands: value.resolved.commands,
         profiles: value.sources.activeProfiles,
       });
-    const changed = Object.entries(preview.resolved.choices).filter(
-      ([name, choice]) => JSON.stringify(choice) !== JSON.stringify(snapshot.resolved.choices[name]),
-    );
+    const changed = Object.entries(preview.resolved.choices).filter(([name, choice]) => {
+      const previous = Object.hasOwn(snapshot.resolved.choices, name) ? snapshot.resolved.choices[name] : undefined;
+      const agent = Object.hasOwn(snapshot.resolved.agent, name) ? snapshot.resolved.agent[name] : undefined;
+      return (
+        choice.model !== (previous?.model ?? agent?.model) ||
+        choice.variant !== (previous?.variant ?? agent?.variant) ||
+        JSON.stringify(choice.parameters) !== JSON.stringify(previous?.parameters)
+      );
+    });
     const globals = (['model', 'small_model'] as const).flatMap((field) =>
       preview.resolved[field] === snapshot.resolved[field] || preview.resolved[field] === undefined
         ? []
@@ -993,6 +1001,44 @@ export function registerSettings(
       [
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
+        {
+          title: 'Prompt operations and inheritance',
+          value: 'prompts',
+          run: async () => {
+            const current = navigation.checkpoint();
+            const snapshot = await load();
+            if (!current()) {
+              return;
+            }
+            openPrompts(snapshot, {
+              menu,
+              back: navigation.back,
+              prompt: (title, value, confirmed) =>
+                navigation.prompt({
+                  title,
+                  value,
+                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                  onConfirm: (text) => run(() => confirmed(text)),
+                }),
+              propose: async (target, change) => {
+                const current = navigation.checkpoint();
+                const plan = await planPrompt(snapshot, target, change);
+                const preview = await previewFilePlan(plan);
+                if (!current()) {
+                  return;
+                }
+                const authored =
+                  change.field === 'reset' || change.value === undefined
+                    ? 'Remove local values; inherit earlier contributions.'
+                    : JSON.stringify(change.value);
+                await proposeComposition(snapshot, plan, undefined, {
+                  title: 'Save prompt operations?',
+                  details: `Authored here: ${authored.slice(0, 1600)}${authored.length > 1600 ? '… (truncated)' : ''}\n\n${promptReview(snapshot, preview)}`,
+                });
+              },
+            });
+          },
+        },
         {
           title: 'Ordered permission rules and configured previews',
           value: 'permissions',

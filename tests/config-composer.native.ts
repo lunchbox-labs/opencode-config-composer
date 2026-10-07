@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import type * as Storage from '../src/config-composer/storage.ts';
 import type * as Parameters from '../src/config-composer/composition/parameter-authoring.ts';
 import type * as Permissions from '../src/config-composer/composition/permission-authoring.ts';
+import type * as Prompts from '../src/config-composer/composition/prompt-authoring.ts';
 import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import { randomUUID } from 'node:crypto';
@@ -443,6 +444,25 @@ test(
         'inactive rules do not affect active agents',
       );
     });
+    const { planPrompt, promptTargets } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/prompt-authoring.js')).href
+    )) as typeof Prompts;
+    const promptSnapshot = await loadSnapshot(configRoot, project, baseline, project, '/');
+    const promptTarget = promptTargets(promptSnapshot, settingsPath).find(
+      (target) => target.label === 'Group: developers',
+    );
+    assert.ok(promptTarget !== undefined);
+    const promptPlan = await planPrompt(promptSnapshot, promptTarget, {
+      field: 'append',
+      value: ['AUTHORED_PROMPT_FIRST\nAUTHORED_PROMPT_SECOND'],
+    });
+    await saveFilePlan(promptPlan, async () => {
+      const preview = await previewFilePlan(promptPlan);
+      assert.match(
+        String(preview.resolved.agent.worker.prompt),
+        /RELOADED_WORKER_GUIDANCE[\s\S]*AUTHORED_PROMPT_FIRST\nAUTHORED_PROMPT_SECOND/,
+      );
+    });
     await reload();
     let refreshed = agents;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -463,6 +483,7 @@ test(
     assert.equal((await request()).info.modelID, 'beta');
     const reloadedRequest = requests.find((body) => JSON.stringify(body).includes('RELOADED_WORKER_GUIDANCE'));
     assert.ok(reloadedRequest !== undefined, 'reread fragments after token reload');
+    assert.match(JSON.stringify(reloadedRequest), /AUTHORED_PROMPT_FIRST\\nAUTHORED_PROMPT_SECOND/);
     assert.equal(reloadedRequest.temperature, 0.35);
     assert.equal(reloadedRequest.top_p, 0.8);
     assert.equal(reloadedRequest.max_tokens, 128);

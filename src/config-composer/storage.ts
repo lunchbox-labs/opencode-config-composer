@@ -58,6 +58,7 @@ export interface SourceFile {
   writable?: boolean;
   canonicalPath?: string;
   aliases?: string[];
+  directories?: { path: string; canonicalPath: string }[];
   writeRoot?: string;
 }
 export interface AgentFile {
@@ -114,9 +115,68 @@ export interface FilePlan {
   snapshot: Snapshot;
   edits: FileEdit[];
   description: string;
+  /** Extra inputs observed while validating newly authored prompt references. */
+  reads?: SourceFile[];
 }
 export interface EditPlan extends FilePlan {
   change: Change;
+}
+
+/** Keep the first observed bytes once per canonical file, including every requested alias. */
+export function collectFileReads(initial: readonly SourceFile[] = []) {
+  const files: SourceFile[] = [];
+  const canonical = new Map<string, SourceFile>();
+  const paths = new Map<string, string>();
+  const aliases = new Map<string, Set<string>>();
+  const directories = new Map<string, Map<string, string>>();
+  const read = (file: SourceFile) => {
+    const identity = file.canonicalPath ?? file.path;
+    const existing = canonical.get(identity);
+    if (existing !== undefined && existing.text !== file.text) {
+      throw new SettingsError('A prompt input changed while editing. Reopen the editor.');
+    }
+    const requested = [file.path, ...(file.aliases ?? [])];
+    for (const path of requested) {
+      if (paths.has(path) && paths.get(path) !== identity) {
+        throw new SettingsError('A prompt input changed identity while editing. Reopen the editor.');
+      }
+      paths.set(path, identity);
+    }
+    const captured = existing ?? { ...file, aliases: [], directories: [] };
+    const known = aliases.get(identity) ?? new Set<string>();
+    for (const path of requested) {
+      if (path !== captured.path && !known.has(path)) {
+        known.add(path);
+        captured.aliases ??= [];
+        captured.aliases.push(path);
+      }
+    }
+    const roots = directories.get(identity) ?? new Map<string, string>();
+    for (const directory of file.directories ?? []) {
+      if (roots.has(directory.path) && roots.get(directory.path) !== directory.canonicalPath) {
+        throw new SettingsError('A prompt source directory changed while editing. Reopen the editor.');
+      }
+      if (!roots.has(directory.path)) {
+        roots.set(directory.path, directory.canonicalPath);
+        captured.directories ??= [];
+        captured.directories.push({ ...directory });
+      }
+    }
+    if (existing === undefined) {
+      canonical.set(identity, captured);
+      aliases.set(identity, known);
+      directories.set(identity, roots);
+      files.push(captured);
+    }
+  };
+  initial.forEach(read);
+  return { files, read };
+}
+
+function planReadCollector(plan: FilePlan) {
+  const reads = collectFileReads(plan.reads);
+  plan.reads = reads.files;
+  return reads;
 }
 
 function checkObjectKeys(node: JsonNode | undefined): void {
@@ -272,6 +332,11 @@ async function observedComposition(sources: LoadedSources): Promise<void> {
 }
 
 async function observedFile(root: string, original: SourceFile): Promise<SourceFile> {
+  for (const directory of original.directories ?? []) {
+    if ((await realpath(directory.path).catch(() => undefined)) !== directory.canonicalPath) {
+      throw new SettingsError('A prompt source directory changed while editing. Reopen the editor.');
+    }
+  }
   for (const alias of original.aliases ?? []) {
     if ((await realpath(alias)) !== (original.canonicalPath ?? original.path)) {
       throw new SettingsError('Settings source identity changed. Reopen the editor.');
@@ -497,10 +562,11 @@ export async function loadSnapshot(
     .filter((agent) => agent.settings.disable !== true)
     .sort((a, b) => a.name.localeCompare(b.name));
   enabled.forEach((agent) => agentGroups(agent.settings));
-  const resolved = await resolveProfileRuntime(sources, { ...nativeModels, agent: nativeAgents }, overlays);
+  const reads = collectFileReads(files);
+  const resolved = await resolveProfileRuntime(sources, { ...nativeModels, agent: nativeAgents }, overlays, reads.read);
   observedNativeVariables(nativeVariables);
   await observedComposition(sources);
-  for (const file of files) {
+  for (const file of reads.files) {
     if ((await observedFile(root, file)).text !== file.text) {
       throw new SettingsError('Settings changed while loading. Reopen the editor.');
     }
@@ -516,7 +582,7 @@ export async function loadSnapshot(
     groups,
     modelPresets,
     agents: enabled,
-    files,
+    files: reads.files,
     sources,
     sourceContext,
     resolved,
@@ -907,7 +973,12 @@ export async function plannedChoices(
   native: NativeModels = plan.snapshot.nativeModels,
 ): Promise<(ModelChoice & { parameters?: ConfigurationParameters })[]> {
   const { snapshot, change } = plan;
-  const overlays = new Map(plan.edits.map((edit) => [edit.file.path, edit.text]));
+  const overlays = new Map(
+    plan.edits.flatMap((edit) => [
+      [edit.file.path, edit.text],
+      [edit.file.canonicalPath ?? edit.file.path, edit.text],
+    ]),
+  );
   const sources = await loadCompositionSources(snapshot.sourceContext, overlays);
   const agents = await previewNativeAgents(snapshot, overlays);
   const defaults =
@@ -916,7 +987,8 @@ export async function plannedChoices(
       : change.kind === 'all'
         ? { model: change.choice.model, small_model: change.choice.model }
         : native;
-  const resolved = await resolveProfileRuntime(sources, { ...defaults, agent: agents }, overlays);
+  const reads = planReadCollector(plan);
+  const resolved = await resolveProfileRuntime(sources, { ...defaults, agent: agents }, overlays, reads.read);
   const choices: (ModelChoice & { parameters?: ConfigurationParameters })[] = Object.entries(resolved.choices)
     .filter(([name, choice]) => {
       const previous = Object.hasOwn(snapshot.resolved.choices, name) ? snapshot.resolved.choices[name] : undefined;
@@ -1094,7 +1166,7 @@ async function observedSourceList(snapshot: Snapshot): Promise<void> {
 
 export async function previewFilePlan(
   plan: FilePlan,
-): Promise<{ sources: LoadedSources; resolved: ResolvedProfileRuntime }> {
+): Promise<{ sources: LoadedSources; resolved: ResolvedProfileRuntime; reads: SourceFile[] }> {
   const overlays = new Map<string, string>();
   for (const file of plan.snapshot.files) {
     overlays.set(file.path, file.text);
@@ -1110,8 +1182,9 @@ export async function previewFilePlan(
     new Set(plan.edits.filter((edit) => edit.create === true).map((edit) => edit.file.path)),
   );
   const agent = await previewNativeAgents(plan.snapshot, overlays);
-  const resolved = await resolveProfileRuntime(sources, { ...plan.snapshot.nativeModels, agent }, overlays);
-  return { sources, resolved };
+  const reads = planReadCollector(plan);
+  const resolved = await resolveProfileRuntime(sources, { ...plan.snapshot.nativeModels, agent }, overlays, reads.read);
+  return { sources, resolved, reads: reads.files };
 }
 
 export async function saveFilePlan(
@@ -1131,7 +1204,7 @@ export async function saveFilePlan(
   try {
     const assertAuthorized = await authorize?.();
     await observedComposition(plan.snapshot.sources);
-    for (const original of plan.snapshot.files) {
+    for (const original of collectFileReads([...plan.snapshot.files, ...(plan.reads ?? [])]).files) {
       const current = await observedFile(plan.snapshot.root, original);
       if (current.text !== original.text) {
         throw new SettingsError('Settings changed while the dialog was open. Reopen it and try again.');
@@ -1144,7 +1217,7 @@ export async function saveFilePlan(
     await observedSourceList(plan.snapshot);
     observedNativeVariables(plan.snapshot.nativeVariables);
     await observedComposition(plan.snapshot.sources);
-    for (const original of plan.snapshot.files) {
+    for (const original of collectFileReads([...plan.snapshot.files, ...(plan.reads ?? [])]).files) {
       if ((await observedFile(plan.snapshot.root, original)).text !== original.text) {
         throw new SettingsError('Settings changed during validation. Reopen the editor.');
       }
