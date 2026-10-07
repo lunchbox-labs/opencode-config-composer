@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config as PluginConfig, PluginInput } from '@opencode-ai/plugin';
 import server from '../src/server.ts';
+import { bundledSkillDirectory } from '../src/config-composer/bundled-skills.ts';
 import { loadCompositionSources } from '../src/config-composer/composition/sources.ts';
 import { resolveProfileRuntime } from '../src/config-composer/composition/runtime.ts';
 type Config = PluginConfig & Pick<NativeConfig, 'skills'>;
@@ -137,7 +138,7 @@ test('invalid selected targets and model-reference cycles leave native configura
     const config: Config = { model: 'fixture/native', agent: { worker: { prompt: 'Untouched' } } };
     const before = structuredClone(config);
     await assert.rejects(f.hooks.config!(config), /cycle|selected|unavailable/);
-    assert.deepEqual(config, before);
+    assert.deepEqual(config, { ...before, skills: { paths: [bundledSkillDirectory] } });
   }
 });
 
@@ -188,14 +189,14 @@ test('imported agent files retain frontmatter and activate only through selected
   assert.equal(agent(config, 'idle'), undefined);
   assert.equal(config.command?.review.template, 'Review $ARGUMENTS');
   assert.equal(config.command.review.agent, 'reviewer');
-  assert.deepEqual(skillPaths(config), [join(f.root, 'library/checks')]);
+  assert.deepEqual(skillPaths(config), [bundledSkillDirectory, join(f.root, 'library/checks')]);
   assert.notEqual(agent(config, 'reviewer')?.prompt?.includes('On demand only.'), true);
   config.skills!.paths!.push('/another-plugin');
   await writeFile(join(f.root, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
   await f.hooks.config!(config);
   assert.equal(agent(config, 'reviewer'), undefined);
   assert.equal(config.command.review, undefined);
-  assert.deepEqual(skillPaths(config), ['/another-plugin']);
+  assert.deepEqual(skillPaths(config), [bundledSkillDirectory, '/another-plugin']);
 });
 
 test('mixed groups reject missing components and unavailable command agents before mutation', async (t) => {
@@ -207,7 +208,7 @@ test('mixed groups reject missing components and unavailable command agents befo
     });
     const config: Config = {};
     await assert.rejects(f.hooks.config!(config), /missing/);
-    assert.deepEqual(config, {});
+    assert.deepEqual(config, { skills: { paths: [bundledSkillDirectory] } });
   }
 });
 
@@ -382,7 +383,7 @@ test('replay retains unrelated native resource edits without treating Composer e
   await writeFile(f.file, '{}');
   await f.hooks.config!(config);
   assert.deepEqual(config.command, { native: { template: 'Original' }, added: { template: 'Another plugin' } });
-  assert.deepEqual(config.skills!.paths, ['/native', '/other-plugin']);
+  assert.deepEqual(config.skills!.paths, ['/native', bundledSkillDirectory, '/other-plugin']);
 });
 
 test('model identity changes mark removed parameter field origins as unset', async (t) => {
@@ -423,7 +424,7 @@ test('file-backed agents reject mismatched identities and invalid native fields 
     await writeFile(join(f.root, 'worker.md'), `---\n${metadata}\n---\nBody`);
     const config: Config = {};
     await assert.rejects(f.hooks.config!(config), /frontmatter|name|identity|native|permission/i);
-    assert.deepEqual(config, {});
+    assert.deepEqual(config, { skills: { paths: [bundledSkillDirectory] } });
   }
 });
 
@@ -555,12 +556,10 @@ test('an installation without optional sources publishes a native baseline for f
     model: 'fixture/native',
     agent: { worker: { prompt: 'Native body.' } },
   });
-  await assert.rejects(
-    server.server({ directory: root, worktree: root } as PluginInput, {
-      configFile: join(root, 'explicitly-missing.jsonc'),
-    }),
-    /Cannot|missing|read|exist/i,
-  );
+  const missing = await server.server({ directory: root, worktree: root } as PluginInput, {
+    configFile: join(root, 'explicitly-missing.jsonc'),
+  });
+  await assert.rejects(missing.config!({}), /Cannot|missing|read|exist/i);
   await writeFile(join(root, 'config-composer.jsonc'), '{broken');
   await assert.rejects(hooks.config!(config), /JSONC|syntax|invalid/i);
 });

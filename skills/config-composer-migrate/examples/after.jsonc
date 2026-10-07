@@ -1,0 +1,13 @@
+// Native agents remain in native files. Their reviewers membership is retained.
+{
+  "configurationPresets": { "balanced": { "model": "fixture/review" } },
+  "componentGroups": {
+    "reviewers": { "configuration": { "modelRef": "preset:balanced", "prompt": { "append": ["Check your changes."] } } }
+  },
+  "defaults": { "agents": { "prompt": { "append": ["Shared guidance."] } } },
+  "overrides": {
+    "agents": { "worker": { "prompt": { "inheritDefaults": false, "prepend": ["Review carefully."] } } }
+  },
+  "profiles": { "migrated": { "layers": [{ "componentGroup": "reviewers" }] } },
+  "activeProfiles": ["migrated"]
+}
