@@ -137,9 +137,12 @@ export async function verifyCompositionInputs(sources: LoadedSources, files: rea
  * A new instance can observe new bytes while inheriting old cached native values. Native JSON edits require restart.
  */
 export async function observeNativeFiles(directory = configurationDirectory()): Promise<string> {
+  // The native host can receive an 8.3 path or directory alias while the editor uses realpath.
+  // Compare the same physical directory without discarding file identities or exact authored bytes.
+  const observedDirectory = (await identity(directory)) ?? directory;
   const inputs: unknown[] = [];
   for (const name of ['config.json', 'opencode.json', 'opencode.jsonc']) {
-    const path = join(directory, name);
+    const path = join(observedDirectory, name);
     const canonical = await identity(path);
     inputs.push([path, canonical ?? null, canonical === undefined ? null : (await configurationFile(canonical)).text]);
   }

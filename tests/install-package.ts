@@ -1,19 +1,27 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
+const npm = process.env.npm_execpath;
+assert.ok(npm !== undefined, 'run package/native tests through npm run');
+const npmArgs = [npm];
 const repository = fileURLToPath(new URL('../', import.meta.url));
 
 export async function installPackage(root: string) {
   const output = join(root, 'tarballs');
   await mkdir(output, { recursive: true });
-  const packed = await exec('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', output], {
-    cwd: repository,
-  });
+  const packed = await exec(
+    process.execPath,
+    [...npmArgs, 'pack', '--ignore-scripts', '--json', '--pack-destination', output],
+    {
+      cwd: repository,
+      timeout: 30_000,
+    },
+  );
   const result = JSON.parse(packed.stdout) as { filename: string; files: { path: string }[] }[];
   assert.equal(result.length, 1);
   const files = result[0].files.map((file) => file.path);
@@ -54,17 +62,27 @@ export async function installPackage(root: string) {
   const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8')) as { name: string };
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   await exec(
-    'npm',
-    ['install', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', join(output, result[0].filename)],
-    { cwd: root },
+    process.execPath,
+    [
+      ...npmArgs,
+      'install',
+      '--ignore-scripts',
+      '--omit=dev',
+      '--no-audit',
+      '--no-fund',
+      join(output, result[0].filename),
+    ],
+    { cwd: root, timeout: 120_000 },
   );
-  const directory = join(root, 'node_modules', manifest.name);
+  // Node resolves imports to canonical paths; use the same package identity when
+  // the OS temp directory contains a Windows short-name or symlink alias.
+  const directory = await realpath(join(root, 'node_modules', manifest.name));
   const metadata = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as Record<string, unknown>;
   assert.equal(metadata.name, '@lunchbox-labs/opencode-config-composer');
   assert.equal(metadata.license, 'MIT');
   const license = await readFile(join(directory, 'LICENSE'), 'utf8');
   assert.equal(license, await readFile(join(repository, 'LICENSE'), 'utf8'));
-  assert.match(license, /^MIT License\n\nCopyright \(c\) 2026 Lunchbox Labs\n/);
+  assert.match(license, /^MIT License\r?\n\r?\nCopyright \(c\) 2026 Lunchbox Labs\r?\n/);
   assert.match(license, /The above copyright notice and this permission notice shall be included/);
   assert.match(await readFile(join(directory, 'README.md'), 'utf8'), /licensed under MIT/);
   assert.equal(metadata.bin, undefined, 'the package is a plugin, with no executable command');
