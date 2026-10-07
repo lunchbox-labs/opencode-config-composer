@@ -1,3 +1,4 @@
+import { validateShortcutCommands } from './shortcuts.ts';
 import { createHash } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -36,7 +37,10 @@ export interface LoadedSources {
 }
 
 type Registry = Required<
-  Pick<CompositionDocument, 'sourceDirectories' | 'componentGroups' | 'configurationPresets' | 'profiles'>
+  Pick<
+    CompositionDocument,
+    'sourceDirectories' | 'componentGroups' | 'configurationPresets' | 'profiles' | 'profileShortcuts'
+  >
 > & { components: Required<Components> };
 
 function pointerPart(key: string): string {
@@ -74,6 +78,7 @@ export async function loadCompositionSources(
     componentGroups: {},
     configurationPresets: {},
     profiles: {},
+    profileShortcuts: {},
   };
   let totalBytes = 0;
   async function load(
@@ -231,6 +236,7 @@ export async function loadCompositionSources(
     register(registry.componentGroups, value.componentGroups, '/componentGroups', source);
     register(registry.configurationPresets, value.configurationPresets, '/configurationPresets', source);
     register(registry.profiles, value.profiles, '/profiles', source);
+    register(registry.profileShortcuts, value.profileShortcuts, '/profileShortcuts', source);
   }
   const root = resolve(context.root);
   const roots = [
@@ -328,6 +334,18 @@ export async function loadCompositionSources(
   for (const name of Object.keys(registry.profiles)) {
     profileChain(name, new Set());
   }
+  if (Object.keys(registry.profileShortcuts).length > 128) {
+    fail('Use at most 128 profile shortcuts across all sources.', undefined, '/profileShortcuts');
+  }
+  for (const [name, shortcut] of Object.entries(registry.profileShortcuts)) {
+    for (const [index, profile] of shortcut.activeProfiles.entries()) {
+      profileChain(profile, new Set(), {
+        sourceId: provenance[`/profileShortcuts/${name}`].sourceId,
+        pointer: `/profileShortcuts/${name}/activeProfiles/${index}`,
+      });
+    }
+  }
+  validateShortcutCommands({ registry, provenance }, Object.keys(registry.components.commands));
   const orderedProfiles = activeProfiles.flatMap((name, index) =>
     profileChain(name, new Set(), { sourceId: activeSource?.id, pointer: `/activeProfiles/${index}` }),
   );

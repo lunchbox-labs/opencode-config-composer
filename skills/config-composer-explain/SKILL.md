@@ -17,6 +17,12 @@ replaces the shared/project list; an absent key inherits and `[]` selects none. 
 A later matching permission rule wins even if looser. An unsupported scope skips its Composer permissions,
 warns, and can become more permissive. Session approvals are outside configured previews.
 
+`profileShortcuts` declares named TUI actions with an ordered `activeProfiles` list and optional description.
+Invoking one chooses shared, project, or local scope, then previews and saves through Composer's normal flow.
+An empty list selects none. Declaring a shortcut does not activate it, apply settings, or send a model prompt.
+Native prompt-command and TUI alias collisions require a different shortcut name; refresh shortcuts in `/compose`
+after editing their definitions.
+
 Saved Composer edits require explicit apply or restart. Apply affects the current instance using its running native
 baseline; native JSON edits require restart. Existing session
 model selections remain. Native defaults and explicit agent model pins can survive profile changes.

@@ -93,6 +93,11 @@ function references(snapshot: SourceSnapshot, registry: DefinitionRegistry, name
       }
     }
     if (registry === 'profiles') {
+      for (const [shortcut, selection] of Object.entries(value.profileShortcuts ?? {})) {
+        for (const [index, profile] of selection.activeProfiles.entries()) {
+          add(file, ['profileShortcuts', shortcut, 'activeProfiles', index], profile);
+        }
+      }
       for (const [index, profile] of (value.activeProfiles ?? []).entries()) {
         add(file, ['activeProfiles', index], profile);
       }

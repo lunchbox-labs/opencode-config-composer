@@ -1,3 +1,4 @@
+import { validateShortcutCommands } from './composition/shortcuts.ts';
 import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
 import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
@@ -189,6 +190,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           throw new SettingsError(`Component command ${name} conflicts with an existing native command.`);
         }
       }
+      validateShortcutCommands(nextSources, Object.keys(nativeCommands));
       const nextCommands = { ...nativeCommands, ...resolved.commands };
       const nativeSkills = config.skills ?? {};
       const nativePaths = (nativeSkills.paths ?? []).filter((path) => previousResources?.addedPaths.has(path) !== true);
