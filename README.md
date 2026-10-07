@@ -162,6 +162,8 @@ Ordered permission contributions are inspectable, with enforcement integration s
 
 The prompt screen selects an explicit writable JSONC source and target, then edits ordered multiline
 prepend/append fragments. Fragments can contain include markers or a complete `@source/file.md` shorthand.
+Effective prompt provenance lists the authored base, contributing fragment pointers, reusable prompt
+definitions, inheritance controls, and included files; unavailable native origins stay explicit.
 Agent components and explicit agent overrides also expose `inheritDefaults` and `inheritGroups` controls.
 Removing a local operation or resetting prompt settings preserves earlier contributions and the authored
 base body. Prompts without an authored native body remain native. The confirmation shows affected authored
@@ -171,6 +173,20 @@ Prompt previews use pending file edits when a snippet is also an edited source. 
 newly activated references, are captured once per canonical path and checked again before writes. A changed
 file or redirected alias requires reopening the editor. Invalid or missing includes are rejected even for
 an inactive prompt target.
+
+The prompt-source screen creates, edits, renames, and deletes reusable `components.prompts` and
+`sourceDirectories` aliases. New definitions require an explicit JSONC destination. Existing definitions
+show their declaring file; relative paths keep that origin, including definitions imported from another
+directory. Prompt bodies can be multiline text or an explicit file. Composer agent components can append,
+reorder, repeat, remove, and reset their `promptRefs` without replacing their base prompt.
+
+Renames review known loaded consumers and update writable JSONC references; referenced deletion is rejected.
+Alias references in retained Markdown/native bodies or nested snippets must first be changed in their
+own declaring source. Reference inspection covers loaded definitions, declared component files, native agent
+bodies, and their nested includes; it does not scan directories for additional consumers. Escaped literal
+include markers are preserved. New files and directory identities are captured through confirmation so
+changed content or redirected aliases abort before writes, including inactive definitions. A corrected alias
+path is validated against the proposed directory. Built-in bodies and native skill files are not rewritten.
 
 The permission editor selects a writable source and configuration target, then adds, edits, removes,
 and reorders `{tool, pattern, action}` rules. Repeated rules remain ordered. A blank pattern matches all

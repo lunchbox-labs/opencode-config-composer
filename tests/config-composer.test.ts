@@ -1881,3 +1881,72 @@ test('prompt UI validates includes before writing and resets local inheritance c
     undefined,
   );
 });
+
+test('prompt source UI creates aliases and reusable multiline bodies with cancellation and ordered references', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  await mkdir(join(root, 'snippets'));
+  const document = parseConfig(await readFile(path, 'utf8'));
+  document.components = { agents: { authored: { prompt: 'Authored base' } } };
+  const groups = document.componentGroups as Record<string, { agents?: string[] }>;
+  groups.developers.agents = ['authored'];
+  await writeFile(path, JSON.stringify(document));
+  const ui = uiHarness(root);
+  const open = async (registry: string) => {
+    await ui.command('config-composer.compose');
+    await ui.select('prompt-sources');
+    await ui.select(registry);
+  };
+  await open('sourceDirectories');
+  await ui.select('+create');
+  await ui.enter('snippets');
+  await ui.select(path);
+  await ui.enter('./snippets');
+  await ui.confirm();
+  assert.equal((await loadSnapshot(root)).sources.registry.sourceDirectories?.snippets, join(root, 'snippets'));
+  await open('prompts');
+  await ui.select('+create');
+  await ui.enter('notes');
+  await ui.select(path);
+  await ui.select('text');
+  await ui.enter('First\nSecond');
+  await ui.cancel();
+  assert.equal((await loadSnapshot(root)).sources.registry.components?.prompts?.notes, undefined);
+  await ui.enter('First\nSecond');
+  await ui.confirm();
+  await open('references');
+  await ui.select('agent:authored');
+  await ui.select('+add');
+  await ui.select('prompt:notes');
+  await ui.select('+add');
+  await ui.select('prompt:notes');
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('+save');
+  assert.match(ui.message(), /Authored base/);
+  await ui.confirm();
+  assert.equal(
+    (await loadSnapshot(root)).resolved.agent.authored.prompt,
+    'Authored base\n\nFirst\nSecond\n\nFirst\nSecond',
+  );
+  await open('prompts');
+  await ui.select('asset:notes');
+  await ui.select('rename');
+  await ui.enter('review/notes');
+  assert.match(ui.message(), /authored\/promptRefs/);
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.components?.agents?.authored.promptRefs, [
+    'review/notes',
+    'review/notes',
+  ]);
+  await open('references');
+  await ui.select('agent:authored');
+  await ui.select('+reset');
+  await ui.confirm();
+  await open('prompts');
+  await ui.select('asset:review/notes');
+  await ui.select('delete');
+  await ui.confirm();
+  assert.equal((await loadSnapshot(root)).sources.registry.components?.prompts?.['review/notes'], undefined);
+  assert.equal(ui.updates, 0);
+});
