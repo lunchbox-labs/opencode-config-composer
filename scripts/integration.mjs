@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -42,7 +42,7 @@ const suites = {
     'tests/integration/permission-notifications.integration.ts',
   ],
   'runtime-terminal': ['tests/integration/runtime-terminal.integration.ts'],
-  'scoped-apply': ['tests/integration/scoped-apply.integration.ts'],
+  'scoped-apply': ['tests/integration/scoped-apply.integration.ts', 'tests/integration/alias-native.integration.ts'],
   shortcuts: ['tests/integration/shortcuts.integration.ts'],
   availability: [
     'tests/integration/availability.integration.ts',
@@ -138,7 +138,7 @@ async function runCommand(command, args, options = {}, capture = (data) => proce
 
 export async function runNativeTests({ files, env = process.env, signal, timeout = 480_000, capture } = {}) {
   const cancellation = cancellationSignals(signal);
-  const root = await mkdtemp(join(env.INTEGRATION_FIXTURE_ROOT ?? tmpdir(), 'composer test runner '));
+  const root = await realpath(await mkdtemp(join(env.INTEGRATION_FIXTURE_ROOT ?? tmpdir(), 'composer test runner ')));
   const registry = env.INTEGRATION_PROCESS_REGISTRY ?? join(root, 'processes');
   await mkdir(registry, { recursive: true });
   const childEnv = { ...env, INTEGRATION_FIXTURE_ROOT: root, INTEGRATION_PROCESS_REGISTRY: registry };
@@ -182,7 +182,7 @@ async function main() {
   const artifacts = join(repository, 'integration-results');
   await rm(artifacts, { recursive: true, force: true });
   await mkdir(artifacts);
-  const root = await mkdtemp(join(tmpdir(), 'composer runner '));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'composer runner ')));
   const cancellation = cancellationSignals();
   let transcript = '';
   const capture = (data) => {

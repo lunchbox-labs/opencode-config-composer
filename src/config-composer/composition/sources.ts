@@ -239,9 +239,21 @@ export async function loadCompositionSources(
     register(registry.profileShortcuts, value.profileShortcuts, '/profileShortcuts', source);
   }
   const root = resolve(context.root);
+  let globalDirectory = configurationDirectory();
+  // An implicit global lookup and the editor's canonical base file must attest the same source.
+  // Explicit baseFile values retain their authored lexical path and relative-parent semantics.
+  if (context.baseFile === undefined) {
+    try {
+      globalDirectory = await realpath(globalDirectory);
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        throw error;
+      }
+    }
+  }
   const roots = [
     {
-      path: configurationPath(context.baseFile ?? 'config-composer.jsonc', configurationDirectory()),
+      path: configurationPath(context.baseFile ?? 'config-composer.jsonc', globalDirectory),
       optional: !context.baseExplicit,
     },
     { path: join(root, '.opencode/config-composer.jsonc'), optional: true },

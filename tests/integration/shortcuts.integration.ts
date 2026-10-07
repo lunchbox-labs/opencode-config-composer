@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
@@ -48,6 +48,46 @@ const named = (name: string, title?: string) => (commands: RegisteredCommand[]) 
       command.slashName === name &&
       (title === undefined || command.title === title),
   );
+
+async function visibleShortcutWarning(terminal: Awaited<ReturnType<typeof nativeTerminal>>, expected: string) {
+  const compact = (text: string) => text.replace(/\s/g, '');
+  let warning = '';
+  for (let attempt = 0; attempt < 600; attempt++) {
+    const lines = terminal.text().split('\n');
+    const titleRow = lines.findIndex((line) => line.includes('Profile shortcuts'));
+    if (titleRow !== -1) {
+      const heading = lines[titleRow];
+      const titleColumn = heading.indexOf('Profile shortcuts');
+      const left = heading.lastIndexOf('┃', titleColumn);
+      const right = heading.indexOf('┃', titleColumn + 'Profile shortcuts'.length);
+      if (left !== -1 && right !== -1) {
+        const contents: string[] = [];
+        for (let row = titleRow + 1; row < lines.length; row++) {
+          const line = lines[row];
+          if (line[left] !== '┃' || line[right] !== '┃') {
+            break;
+          }
+          contents.push(line.slice(left + 1, right).trim());
+        }
+        // Native wrapping can split even a source path, and background text sits
+        // outside the toast on the same rows. Compare only its visible contents.
+        warning = contents.join('\n');
+        if (compact(warning).includes(compact(expected))) {
+          const artifacts = process.env.INTEGRATION_ARTIFACT_DIR;
+          if (artifacts !== undefined) {
+            await mkdir(artifacts, { recursive: true });
+            await writeFile(join(artifacts, 'profile-shortcuts-visible-collision.txt'), warning);
+          }
+          return;
+        }
+      }
+    }
+    await setTimeout(50);
+  }
+  assert.fail(
+    `Native shortcut warning did not visibly render ${JSON.stringify(expected)}:\n${warning}\n${terminal.text()}`,
+  );
+}
 
 test(
   'native registered shortcuts review scopes, persist ordered saves, apply all linked agents and clear without losing session choices',
@@ -256,7 +296,11 @@ test(
     await f.write(f.paths.shared, edited);
     const collisionBytes = await readFile(f.paths.shared, 'utf8');
     await refresh();
-    await terminal.wait(['conflicts with an existing command or alias.', 'Choose a different shortcut name.']);
+    await visibleShortcutWarning(
+      terminal,
+      `${await realpath(f.paths.shared)}/profileShortcuts/native-action: ` +
+        'Shortcut /native-action conflicts with an existing command or alias. Choose a different shortcut name.',
+    );
     await registry((commands) => !commands.some((command) => command.name.startsWith('config-composer.shortcut.')));
     assert.equal(await readFile(f.paths.shared, 'utf8'), collisionBytes);
     assert.equal(f.host.requests.length, 1, 'refresh and rejected collisions send no model request');

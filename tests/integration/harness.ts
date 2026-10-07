@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,7 +60,9 @@ export function isolatedEnvironment(root: string): NodeJS.ProcessEnv {
 
 export async function nativeHarness(t: TestContext, name: string) {
   // Spaces exercise executable arguments and package/config paths on both platforms.
-  const root = await mkdtemp(join(process.env.INTEGRATION_FIXTURE_ROOT ?? tmpdir(), 'composer integration '));
+  const root = await realpath(
+    await mkdtemp(join(process.env.INTEGRATION_FIXTURE_ROOT ?? tmpdir(), 'composer integration ')),
+  );
   const project = join(root, 'project');
   const configRoot = join(root, 'config', 'opencode');
   const requests: Record<string, unknown>[] = [];
@@ -267,16 +269,28 @@ export async function nativeHarness(t: TestContext, name: string) {
     }
   };
   const start = async (
-    options: { variables?: Record<string, string>; configContent?: Record<string, unknown> } = {},
+    options: {
+      variables?: Record<string, string>;
+      configContent?: Record<string, unknown>;
+      configurationAlias?: string;
+    } = {},
   ) => {
     assert.equal(child, undefined, 'stop the host before restarting');
     assert.ok(
       Object.keys(options.variables ?? {}).every((name) => name.startsWith('COMPOSER_FIXTURE_')),
       'only explicit synthetic fixture variables may supplement the isolated environment',
     );
+    if (options.configurationAlias !== undefined) {
+      assert.equal(
+        await realpath(options.configurationAlias),
+        await realpath(configRoot),
+        'an explicit native configuration alias must refer to this isolated fixture configuration',
+      );
+    }
     environment = {
       ...isolatedEnvironment(root),
       ...options.variables,
+      ...(options.configurationAlias === undefined ? {} : { OPENCODE_CONFIG_DIR: options.configurationAlias }),
       ...(options.configContent === undefined
         ? {}
         : { OPENCODE_CONFIG_CONTENT: JSON.stringify(options.configContent) }),
