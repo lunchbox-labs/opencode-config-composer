@@ -7,6 +7,11 @@ import { compositionFixture } from './composition-fixture.ts';
 import { httpRelay } from './http-relay.ts';
 import { nativeTerminal } from './terminal.ts';
 
+// These are pinned-host limitation/recovery observations, not the desired
+// Composer switching contract in profile-recomposition.integration.ts.
+// Recheck them when changing the host baseline; repaired cases must assert
+// destination behavior instead of preserving stale-selection expectations.
+
 interface Message {
   info: {
     id: string;
@@ -143,8 +148,6 @@ test(
       await f.saveScope('shared', { operation: 'selection', profiles });
       await terminal.command('/reload-configs', 'Settings saved');
       await terminal.choose('Reload now', 'Apply saved revision?', 'only this instance');
-      // The first assertion is deliberately bounded: old code only promised to
-      // retain selections and did not tell users how to remove a profile seed.
       await warning('Apply confirmation');
       await terminal.press('\r', 'Composer revision applied');
       await warning('Apply toast');

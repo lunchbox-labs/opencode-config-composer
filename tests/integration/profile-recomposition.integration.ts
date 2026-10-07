@@ -130,7 +130,32 @@ async function profileFixture(t: TestContext, name: string) {
       'selection and apply retain every conversation record',
     );
     await unchanged();
-    return f.editor.snapshot();
+    const snapshot = await f.editor.snapshot();
+    const config = await f.host.api<{
+      model?: string;
+      small_model?: string;
+      default_agent?: string;
+      agent: Partial<Record<string, { model?: string; variant?: string }>>;
+    }>('/config');
+    assert.equal(config.model, snapshot.resolved.model, 'native model updates before any continuation');
+    assert.equal(
+      config.small_model,
+      snapshot.resolved.small_model,
+      'native small_model updates before any continuation',
+    );
+    assert.equal(config.default_agent, snapshot.resolved.default_agent, 'native default agent remains consistent');
+    for (const name of ['worker', 'component', 'pinned']) {
+      const expected = Object.hasOwn(snapshot.resolved.agent, name) ? snapshot.resolved.agent[name] : undefined;
+      assert.equal(config.agent[name]?.model, expected?.model, `${name} model is applied immediately`);
+      assert.equal(config.agent[name]?.variant, expected?.variant, `${name} variant is applied immediately`);
+    }
+    assert.equal(
+      Object.hasOwn(config.agent, 'component'),
+      Object.hasOwn(snapshot.resolved.agent, 'component'),
+      'component selection is applied before any continuation',
+    );
+    assert.equal(f.host.requests.length, requests, 'immediate config checks require no model request');
+    return snapshot;
   };
   const continuation = async (agent = 'worker') => {
     // Public native message requests omit model/variant so the destination agent
