@@ -4,7 +4,7 @@ import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
-import type { Config, SessionStatus } from '@opencode-ai/sdk/v2';
+import type { Config } from '@opencode-ai/sdk/v2';
 import { dialogNavigation } from '../tui/navigation.ts';
 import { permissionReview } from './tui/permission-review.ts';
 import {
@@ -17,7 +17,6 @@ import {
   catalogModels,
   groupName,
   presetName,
-  record,
   resolveGroup,
   validateChoice,
 } from './settings.ts';
@@ -35,7 +34,6 @@ import {
   planChange,
   plannedChoices,
   previewFilePlan,
-  reloadConfiguration,
   saveFilePlan,
   savePlan,
 } from './storage.ts';
@@ -44,6 +42,7 @@ import { verifySharedFilesystem } from './connection.ts';
 import {
   type EditorNativeBaseline,
   readRuntimeBaseline,
+  readRuntimeRevision,
   sameNativePermissionOrder,
 } from './composition/runtime-baseline.ts';
 import { editorSettings } from './composition/editor.ts';
@@ -69,6 +68,8 @@ import {
   validatePromptAssets,
 } from './composition/prompt-sources.ts';
 import { planPrompt, promptReview } from './composition/prompt-authoring.ts';
+import { type ApplyFailure, applySavedComposition, applyStatus } from './composition/apply.ts';
+import { compositionRevision } from './composition/revision.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 const label = (choice: ModelChoice) =>
@@ -91,6 +92,8 @@ export function registerSettings(
 ): void {
   const navigation = dialogNavigation(api);
   let busy = false;
+  let nativeSaveNeedsRestart = false;
+  let lastFailure: (ApplyFailure & { directory: string }) | undefined;
   const native = new WeakMap<Snapshot, NativeModels>();
   const context = (snapshot: Snapshot): ResolutionContext => ({
     modelPresets: snapshot.modelPresets,
@@ -247,7 +250,7 @@ export function registerSettings(
     assertProject();
     return assertProject;
   };
-  const load = async (reloading = false) => {
+  const load = async () => {
     const { root } = await connection();
     const path = api.state.path as { worktree?: string; directory?: string };
     const project = currentProject(root);
@@ -255,7 +258,7 @@ export function registerSettings(
     const snapshot = await loadSnapshot(
       root,
       project,
-      reloading ? { model: baseline.model, small_model: baseline.small_model } : baseline,
+      baseline,
       path.directory ?? project,
       typeof path.worktree === 'string' && path.worktree !== '' ? path.worktree : project,
     );
@@ -360,67 +363,143 @@ export function registerSettings(
       current.model,
     );
   };
-  const reload = async () => {
-    const status: { error?: unknown; data?: Record<string, SessionStatus> | null } = await api.client.session.status();
-    if (Boolean(status.error) || status.data === undefined || status.data === null) {
-      throw new SettingsError('Could not check running agents. Settings are saved; restart when idle.');
+  const prepareApply = async () => {
+    const snapshot = await load();
+    const response = await api.client.config.get();
+    if (Boolean(response.error) || response.data === undefined) {
+      throw new SettingsError('Could not read the applied revision. Saved changes are retained.');
     }
-    if (Object.values(status.data).some((item) => item.type !== 'idle')) {
-      throw new SettingsError(
-        'Agents are still running in this workspace. Settings are saved; reload when they finish.',
+    const location = { root: snapshot.sourceContext.root, directory: snapshot.nativeDirectory };
+    const runtime = readRuntimeRevision(response.data, location, snapshot.root);
+    const { client, assertCurrent } = await connection(snapshot.root);
+    const assertInstance = () => {
+      assertCurrent();
+      const path = api.state.path as { directory?: string };
+      if (currentProject(snapshot.root) !== location.root || (path.directory ?? location.root) !== location.directory) {
+        throw new SettingsError('The current instance changed. Reopen the apply view. Saved changes are retained.');
+      }
+    };
+    assertInstance();
+    return { snapshot, location, runtime, client, assertInstance };
+  };
+  const reload = async (prepared: Awaited<ReturnType<typeof prepareApply>>) => {
+    const { snapshot, location, runtime, client, assertInstance } = prepared;
+    try {
+      assertInstance();
+      if (nativeSaveNeedsRestart) {
+        throw new SettingsError('Native settings were saved. Restart OpenCode to apply them.');
+      }
+      const verified = await connection(snapshot.root);
+      assertInstance();
+      if (verified.client !== client) {
+        throw new SettingsError('The server connection changed. Reopen the apply view.');
+      }
+      const revision = await applySavedComposition(snapshot, runtime, {
+        assertCurrent: assertInstance,
+        activity: async () => {
+          const result = await client.session.status({ directory: location.directory });
+          if (Boolean(result.error) || result.data === undefined) {
+            throw new SettingsError('Could not check running agents. Settings are saved; retry or restart when idle.');
+          }
+          return result.data;
+        },
+        dispose: async () => {
+          const result = await client.instance.dispose({ directory: location.directory });
+          if (Boolean(result.error) || result.data !== true) {
+            throw new SettingsError('Instance apply failed. Settings are saved; retry or restart OpenCode.');
+          }
+        },
+        refresh: async () => {
+          const config = await client.config.get({ directory: location.directory });
+          const [providers, agents] = await Promise.all([
+            client.config.providers({ directory: location.directory }),
+            client.app.agents({ directory: location.directory }),
+          ]);
+          if (
+            Boolean(config.error) ||
+            config.data === undefined ||
+            Boolean(providers.error) ||
+            providers.data === undefined ||
+            Boolean(agents.error) ||
+            agents.data === undefined
+          ) {
+            throw new SettingsError(
+              'Could not refresh configuration, providers and agents. Saved changes are retained; retry apply.',
+            );
+          }
+          return readRuntimeRevision(config.data, location, snapshot.root);
+        },
+      });
+      assertInstance();
+      lastFailure = undefined;
+      navigation.close();
+      api.ui.toast({
+        variant: 'success',
+        title: 'Composer revision applied',
+        message: `Applied ${revision.sources.slice(0, 12)} to ${location.directory}. Uses the running native baseline; native JSON edits require restart. Conversations and session model selections remain.`,
+        duration: 8000,
+      });
+    } catch (error) {
+      lastFailure = {
+        phase: 'apply-failed',
+        directory: location.directory,
+        message: error instanceof Error ? error.message : 'Apply failed',
+      };
+      throw error;
+    }
+  };
+  const offerReload = async (root = false) => {
+    if (nativeSaveNeedsRestart) {
+      menu(
+        'Native settings saved',
+        [
+          {
+            title: 'Restart OpenCode to apply native settings',
+            value: 'later',
+            description: 'Instance apply uses the running native baseline. Conversations remain saved.',
+            run: navigation.close,
+          },
+        ],
+        undefined,
+        root,
       );
-    }
-    // Saved native edits legitimately differ from the still-running server until this reload.
-    const snapshot = await load(true);
-    if ((await realpath(globalDirectory).catch(() => undefined)) !== snapshot.root) {
-      throw new SettingsError(
-        'Settings are saved. Restart OpenCode to apply edits in a custom configuration directory.',
-      );
-    }
-    if (api.lifecycle.signal.aborted) {
       return;
     }
-    // Complete the network proof before reloadConfiguration's final stale-file checks.
-    const { client, assertCurrent } = await connection(snapshot.root);
-    await reloadConfiguration(snapshot, async (plugins) => {
-      const plugin = plugins.map((entry): string | [string, Record<string, unknown>] => {
-        if (typeof entry === 'string') {
-          return entry;
-        }
-        if (Array.isArray(entry) && typeof entry[0] === 'string' && record(entry[1])) {
-          return [entry[0], entry[1]];
-        }
-        throw new SettingsError('Settings were saved, but a plugin entry is invalid. Fix it before reloading.');
-      });
-      assertCurrent();
-      const result = await client.global.config.update({ config: { plugin } });
-      const failed = Boolean(result.error);
-      if (failed) {
-        throw new SettingsError('Settings were saved, but reload failed. Restart OpenCode to apply them.');
-      }
-    });
-    navigation.close();
-    api.ui.toast({
-      variant: 'success',
-      title: 'Settings reloaded',
-      message: 'New agent calls use the saved defaults. A session model selection can still override them.',
-      duration: 8000,
-    });
-  };
-  const offerReload = (root = false) =>
+    const current = navigation.checkpoint();
+    const prepared = await prepareApply();
+    const { snapshot, location, runtime } = prepared;
+    if (!current()) {
+      return;
+    }
+    const saved = compositionRevision(snapshot.sources, snapshot.resolved, snapshot.files);
+    const status = () =>
+      nativeSaveNeedsRestart
+        ? 'Native settings saved; restart OpenCode to apply them'
+        : applyStatus(saved, runtime, lastFailure?.directory === location.directory ? lastFailure : undefined);
     menu(
       'Settings saved',
-      [
+      () => [
+        {
+          title: status(),
+          value: '+status',
+          description: `Instance: ${location.directory}; worktree: ${location.root}`,
+          run: () =>
+            navigation.alert({
+              title: 'Composition revision',
+              message: `${status()}\nInstance: ${location.directory}\nWorktree: ${location.root}\nSaved: ${saved.sources}\nApplied: ${runtime.revision?.sources ?? 'none'}\nComposer revisions use the running native baseline. Native JSON edits require restart.`,
+            }),
+        },
         {
           title: 'Reload now…',
           value: 'reload',
-          description: 'Apply saved settings to this OpenCode server',
+          description: 'Apply saved composition to this instance; retain other instances and conversations',
           run: () =>
             confirm(
-              'Reload OpenCode settings?',
-              'This reloads ALL workspaces on this server. Wait for agents in every workspace to finish first.\n\n' +
-                'Existing session model selections remain; use /models to change the current session.',
-              reload,
+              'Apply saved revision?',
+              `This reloads only this instance: ${location.directory}\nWorktree: ${location.root}\n\n` +
+                'Wait for its agents to finish. Saved changes remain pending if applying fails. Other opened instances retain their current revision.\n\n' +
+                'This applies Composer inputs against the running native baseline. Native JSON edits require restart. Existing session model selections remain.',
+              () => reload(prepared),
             ),
         },
         { title: 'Apply on next restart', value: 'later', run: navigation.close },
@@ -432,6 +511,25 @@ export function registerSettings(
       undefined,
       root,
     );
+  };
+  const save = async (plan: FilePlan<SourceSnapshot>, action: () => Promise<void>) => {
+    try {
+      await action();
+      nativeSaveNeedsRestart ||= plan.edits.some(
+        (edit) =>
+          edit.file.path === plan.snapshot.configFile.path ||
+          plan.snapshot.nativeLayers.some((layer) => layer.file.path === edit.file.path),
+      );
+      lastFailure = undefined;
+    } catch (error) {
+      lastFailure = {
+        phase: 'save-failed',
+        directory: plan.snapshot.nativeDirectory,
+        message: error instanceof Error ? error.message : 'Save failed',
+      };
+      throw error;
+    }
+  };
   const propose = async (snapshot: Snapshot, change: Change) => {
     const isCurrent = navigation.checkpoint();
     const plan = planChange(snapshot, change);
@@ -494,8 +592,8 @@ export function registerSettings(
         if (api.lifecycle.signal.aborted) {
           return;
         }
-        await savePlan(plan, () => authorizePlan(plan));
-        offerReload(true);
+        await save(plan, () => savePlan(plan, () => authorizePlan(plan)));
+        await offerReload(true);
       },
     );
   };
@@ -994,19 +1092,21 @@ export function registerSettings(
         if (api.lifecycle.signal.aborted) {
           return;
         }
-        await saveFilePlan(
-          plan,
-          async () => {
-            await refreshNative(snapshot);
-            const current = await previewFilePlan(plan);
-            await review?.validate?.(current);
-            if (projection(current) !== projection(preview)) {
-              throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
-            }
-          },
-          () => authorizePlan(plan),
+        await save(plan, () =>
+          saveFilePlan(
+            plan,
+            async () => {
+              await refreshNative(snapshot);
+              const current = await previewFilePlan(plan);
+              await review?.validate?.(current);
+              if (projection(current) !== projection(preview)) {
+                throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
+              }
+            },
+            () => authorizePlan(plan),
+          ),
         );
-        offerReload(true);
+        await offerReload(true);
       },
     );
   };
@@ -1101,14 +1201,16 @@ export function registerSettings(
             if (api.lifecycle.signal.aborted) {
               return;
             }
-            await saveFilePlan(
-              plan,
-              async () => {
-                await validate();
-              },
-              () => authorizePlan(plan),
+            await save(plan, () =>
+              saveFilePlan(
+                plan,
+                async () => {
+                  await validate();
+                },
+                () => authorizePlan(plan),
+              ),
             );
-            offerReload(true);
+            await offerReload(true);
           },
         );
       },
@@ -1427,6 +1529,17 @@ export function registerSettings(
         },
       },
       {
+        name: 'config-composer.reload',
+        title: 'Apply saved composition',
+        category: 'Config',
+        namespace: 'palette',
+        slashName: 'reload-configs',
+        run: () => {
+          navigation.reset();
+          return run(() => offerReload(true));
+        },
+      },
+      {
         name: 'config-composer.membership',
         title: 'Agent groups',
         category: 'Config',
@@ -1435,17 +1548,6 @@ export function registerSettings(
         run: () => {
           navigation.reset();
           return run(() => groupsMenu());
-        },
-      },
-      {
-        name: 'config-composer.reload',
-        title: 'Reload saved settings',
-        category: 'Config',
-        namespace: 'palette',
-        slashName: 'reload-configs',
-        run: () => {
-          navigation.reset();
-          return run(() => offerReload(true));
         },
       },
     ],

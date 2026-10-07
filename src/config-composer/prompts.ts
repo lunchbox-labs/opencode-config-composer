@@ -20,6 +20,7 @@ const SOURCE_REFERENCE = /^@([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\/(.+)$/;
 export interface PromptDependency {
   path: string;
   canonicalPath: string;
+  includePaths?: string[];
   text: string;
   mode: number;
   writable: false;
@@ -105,6 +106,7 @@ async function snippet(reference: string, context: Expansion): Promise<{ text: s
       context.onRead?.({
         path: resolve(root, path),
         canonicalPath: target,
+        includePaths: [resolve(root, path)],
         text,
         mode: current.mode & 0o777,
         writable: false,

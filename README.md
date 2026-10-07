@@ -264,8 +264,8 @@ reuse the existing picker.
 Previews use the server's uncomposed native model and agent baseline, including native config-content inputs.
 Clearing a profile override therefore restores the native fallback, including `opencode:model` references.
 The matching Composer server plugin must be loaded. Different client/server native agent inputs or later
-plugin changes block editing with reload guidance. Runtime baseline metadata is never written to source files;
-reload accepts saved native edits that have not yet reached the running server.
+plugin changes block editing with restart guidance. Runtime baseline metadata is never written to source files.
+Native configuration edits require restart; Composer apply uses the running native baseline.
 
 The activation screen explicitly selects shared, project, or local scope. An ordered local list replaces
 an earlier selection; an absent key inherits, and an empty list selects no profiles. Later explicit
@@ -295,9 +295,19 @@ Use `/agent-groups` for ordered memberships. Model and variant choices come from
 Review the proposed scope and retained pins before saving. The editor preserves prompts, comments,
 unrelated settings, and permissions. Stale snapshots, concurrent edits, and symlinked settings are rejected.
 
-Reload is explicit. It invalidates configuration in **all workspaces on the server**.
-Wait for all agents to finish first; the editor can check activity only in the current workspace.
-Saved changes can instead take effect at restart. A current session's selected model may still take precedence.
+Use `/reload-configs` or the hub's reload action to explicitly apply saved Composer changes to the **current instance**.
+The review shows its directory/worktree and saved/applied revision. Saving leaves changes pending; failed saves and
+failed applies remain distinguishable. Other opened instances keep their current configuration and conversations
+remain saved. Before disposal the editor checks all session activity in that instance, including child sessions;
+a busy instance requires an explicit retry. OpenCode has no atomic idle-and-dispose API, so avoid starting another
+request while applying. Confirmation rejects changed sources, instances, and connections. Success requires a fresh
+config publication for the exact reviewed Composer inputs and effective result, plus refreshed provider/agent APIs.
+
+Apply uses the running native baseline. **Native JSON or native-agent edits require restart**; instance disposal does
+not invalidate OpenCode's global config cache. Even a newly opened instance can inherit older native globals after
+a disk edit. An observed native file digest detects changes since observation, but does not prove cache freshness.
+Native JSON saves in the editor show a restart requirement. Composer's applied revision never claims those native
+bytes were loaded. A current session's selected model can still take precedence over newly applied defaults.
 Nested dialogs retain Back/Escape navigation without reopening after lifecycle or route changes.
 
 ## Development and checks

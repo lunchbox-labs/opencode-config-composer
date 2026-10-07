@@ -37,6 +37,6 @@ behavior with explicit targeted layers/overrides only after proving equivalence.
 contain top-level defaults, overrides, or activeProfiles; keep those in scope files.
 
 Validate the candidate and review sources, selected agents, pins, prompt order, permission outcomes, and
-unchanged native bytes. Save and apply are separate; reload or restart only when requested. Current reload
-affects all server workspaces and does not clear session model selections. Report unproven equivalence or
+unchanged native bytes. Save and apply are separate; reload or restart only when requested. Apply affects the current
+instance using the running native baseline; native JSON edits require restart. Session model selections remain. Report unproven equivalence or
 missing source evidence explicitly rather than silently deleting unknown settings or adding a fallback mode.
