@@ -145,6 +145,7 @@ test(
       join(project, 'opencode.json'),
       JSON.stringify({ model: 'fixture/beta', small_model: 'fixture/beta' }),
     );
+    await harness.prepareConfigurationDependencies([observerProject]);
     await harness.start();
     interface Agent {
       permission: NativePermissionRule[];
@@ -740,6 +741,7 @@ test(
     const freshProject = join(root, 'opened-after-native-edit');
     await mkdir(join(freshProject, '.opencode'), { recursive: true });
     await writeFile(join(freshProject, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
+    await harness.prepareConfigurationDependencies([freshProject]);
     await writeFile(nativePath, applyEdits(nativeBeforeEdit, modify(nativeBeforeEdit, ['model'], 'fixture/beta', {})));
     try {
       const freshConfig = await api<{ model: string }>('/config', undefined, 'GET', freshProject);

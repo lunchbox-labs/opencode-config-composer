@@ -50,6 +50,7 @@ test(
     const observer = join(f.host.root, 'observer');
     await mkdir(join(observer, '.opencode'), { recursive: true });
     await writeFile(join(observer, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
+    await f.host.prepareConfigurationDependencies([observer]);
     await f.host.start();
     const server = await httpRelay(t, () => f.host.url);
     const { readRuntimeBaseline, readRuntimeRevision } = (await import(

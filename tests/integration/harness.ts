@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import type { TestContext } from 'node:test';
@@ -261,10 +261,31 @@ export async function nativeHarness(t: TestContext, name: string) {
     prepared.add(directory);
   };
   let environment = isolatedEnvironment(root);
-  const prepareConfigurationDependencies = async () => {
+  const prepareConfigurationDependencies = async (additionalProjects: readonly string[] = []) => {
+    const additionalDirectories: string[] = [];
+    for (const directory of additionalProjects) {
+      const canonical = await realpath(directory);
+      const within = relative(root, canonical);
+      assert.ok(
+        !isAbsolute(within) && within !== '..' && !within.startsWith(`..${sep}`),
+        'additional native projects must remain within this isolated fixture',
+      );
+      const configuration = await realpath(join(canonical, '.opencode'));
+      const configurationWithin = relative(root, configuration);
+      assert.ok(
+        !isAbsolute(configurationWithin) && configurationWithin !== '..' && !configurationWithin.startsWith(`..${sep}`),
+        'additional native configuration directories must remain within this isolated fixture',
+      );
+      additionalDirectories.push(configuration);
+    }
     // npm installations share a cache even when their target config directories
     // are isolated. Avoid overlapping cold SDK preparations in one fixture.
-    for (const directory of [configRoot, join(root, '.opencode'), join(project, '.opencode')]) {
+    for (const directory of [
+      configRoot,
+      join(root, '.opencode'),
+      join(project, '.opencode'),
+      ...additionalDirectories,
+    ]) {
       await prepareDependencies(directory);
     }
   };
