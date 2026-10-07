@@ -65,6 +65,7 @@ export function sameNativePermissionOrder(left: EditorNativeBaseline, right: Edi
   );
 }
 const globals = (value: NativeModels) => ({
+  default_agent: typeof value.default_agent === 'string' ? value.default_agent : null,
   model: typeof value.model === 'string' ? value.model : null,
   small_model: typeof value.small_model === 'string' ? value.small_model : null,
   permission: structuredClone(value.permission ?? null),
@@ -148,8 +149,14 @@ export function readRuntimeBaseline(
   }
   const validGlobals = (
     value: unknown,
-  ): value is { model: string | null; small_model: string | null; permission?: unknown } =>
-    record(value) && [value.model, value.small_model].every((value) => value === null || typeof value === 'string');
+  ): value is {
+    model: string | null;
+    small_model: string | null;
+    default_agent: string | null;
+    permission?: unknown;
+  } =>
+    record(value) &&
+    [value.model, value.small_model, value.default_agent].every((value) => value === null || typeof value === 'string');
   if (
     !validGlobals(marker.native) ||
     !validGlobals(marker.applied) ||
@@ -164,6 +171,9 @@ export function readRuntimeBaseline(
   };
   if (marker.applied.model !== applied.model || marker.applied.small_model !== applied.small_model) {
     return fail('Global models changed after Composer applied its configuration.');
+  }
+  if (marker.applied.default_agent !== (typeof config.default_agent === 'string' ? config.default_agent : null)) {
+    return fail('The native default_agent changed after Composer applied its configuration.');
   }
   if (!samePermission(marker.applied.permission ?? null, config.permission ?? null)) {
     return fail('Global permissions changed after Composer applied its configuration.');
@@ -180,6 +190,7 @@ export function readRuntimeBaseline(
     }
   }
   return {
+    ...(marker.native.default_agent === null ? {} : { default_agent: marker.native.default_agent }),
     ...(marker.native.permission === null || marker.native.permission === undefined
       ? {}
       : { permission: structuredClone(marker.native.permission) }),

@@ -87,6 +87,7 @@ export function compositionRevision(
       inputs: [...inputs].sort(([a], [b]) => a.localeCompare(b)),
     }),
     effective: digest({
+      default_agent: resolved.default_agent,
       model: resolved.model,
       small_model: resolved.small_model,
       permission: resolved.permission,

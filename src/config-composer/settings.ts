@@ -14,6 +14,7 @@ export type GroupChoice = ModelChoice & { modelRef?: string; prompt?: PromptOper
 export type Groups = Record<string, GroupChoice>;
 export type ModelPresets = Record<string, ModelChoice>;
 export interface NativeModels {
+  default_agent?: string;
   permission?: unknown;
   model?: string;
   small_model?: string;

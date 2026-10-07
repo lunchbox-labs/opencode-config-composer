@@ -1445,6 +1445,48 @@ test('profile layer edits retain order, preview impact, and can be cancelled wit
   );
 });
 
+test('profile availability editor includes disabled and dormant agents, preserves cancellation and saves without applying', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const document = parseConfig(await readFile(path, 'utf8'));
+  document.components = {
+    agents: { dormant: { prompt: 'Dormant body' }, '+save': { prompt: 'Reserved-looking name' } },
+  };
+  await writeFile(path, JSON.stringify(document));
+  const before = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('work');
+  await ui.select('availability');
+  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
+  assert.ok(ui.dialog.options.some((option) => option.value === 'agent:disabled'));
+  assert.ok(ui.dialog.options.some((option) => option.value === 'agent:dormant'));
+  assert.ok(!ui.dialog.options.some((option) => option.value === 'agent:title'));
+  await ui.select('agent:+save');
+  assert.equal(ui.title(), 'work: +save');
+  await ui.select('inherit');
+  await ui.select('agent:build');
+  await ui.select('disable');
+  await ui.select('+save');
+  await ui.cancel();
+  assert.equal(await readFile(path, 'utf8'), before);
+  await ui.select('+save');
+  await ui.confirm();
+  const saved = await loadSnapshot(root);
+  assert.equal(saved.sources.registry.profiles?.work.agentAvailability?.build, false);
+  assert.equal(saved.resolved.agentAvailability.build.status, 'disabled');
+  assert.equal(saved.resolved.agentAvailability.dormant.status, 'unselected');
+  assert.equal(ui.updates, 0);
+  await ui.command('config-composer.compose');
+  await ui.select('effective');
+  await ui.select('+availability');
+  await ui.select('build');
+  assert.match(ui.message(), /disabled.*primary/);
+  assert.match(ui.message(), /profiles\/work\/agentAvailability\/build/);
+});
+
 test('registry UI renames an active group and its native memberships without changing model outcomes', async (t) => {
   const root = await fixture(t);
   const before = await loadSnapshot(root);

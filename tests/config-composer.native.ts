@@ -19,6 +19,7 @@ import type * as Apply from '../src/config-composer/composition/apply.ts';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
 import { installPackage } from './install-package.ts';
+import { type NativePermissionRule, normalizeBundledPermissions } from './native-bundled-permissions.ts';
 import { applyEdits, modify, parse } from 'jsonc-parser';
 
 // Real V1 configuration loading, provider dispatch, and cache invalidation; only the remote model is synthetic.
@@ -154,7 +155,7 @@ test(
       plugin: [installed.directory],
       model: 'fixture/alpha',
       small_model: 'fixture/alpha',
-      default_agent: 'worker',
+      default_agent: 'main-follower',
       enabled_providers: ['fixture'],
       provider: {
         fixture: {
@@ -298,6 +299,7 @@ test(
       return data as T;
     };
     interface Agent {
+      permission: NativePermissionRule[];
       name: string;
       model: { providerID: string; modelID: string };
       variant?: string;
@@ -876,6 +878,141 @@ test(
     } finally {
       await writeFile(nativePath, nativeBeforeEdit);
     }
+    // Workflow availability changes native admission, retaining authored definitions and conversation records.
+    const availabilitySession = await api<{ id: string }>('/session', { title: 'Workflow availability history' });
+    await api(`/session/${availabilitySession.id}/message`, {
+      agent: 'worker',
+      parts: [{ type: 'text', text: 'Reply with verified.' }],
+    });
+    const availabilityHistory = await api<Message[]>(`/session/${availabilitySession.id}/message`);
+    const enabledRegistry = await api<Agent[]>('/agent');
+    const availableSource = await readFile(settingsPath, 'utf8');
+    const disabledNames = ['worker', 'build', 'prompt-consumer'];
+    const disabledSource = applyEdits(
+      availableSource,
+      modify(
+        availableSource,
+        ['profiles', 'work', 'agentAvailability'],
+        Object.fromEntries(disabledNames.map((name) => [name, false])),
+        {},
+      ),
+    );
+    await writeFile(settingsPath, disabledSource);
+    assert.ok(
+      (await api<Agent[]>('/agent')).some((agent) => agent.name === 'worker'),
+      'saving availability alone does not change admission',
+    );
+    const availabilityBaseline = readRuntimeBaseline(
+      await api('/config'),
+      { root: project, directory: project },
+      configRoot,
+    );
+    assert.equal(availabilityBaseline.default_agent, 'main-follower');
+    await applyInstance(await loadSnapshot(configRoot, project, availabilityBaseline, project, '/'));
+    for (const name of disabledNames) {
+      assert.ok(
+        !(await api<Agent[]>('/agent')).some((agent) => agent.name === name),
+        `${name} is disabled after explicit apply`,
+      );
+    }
+    const providerBeforeDisabled = requests.length;
+    const disabledResponse = await fetch(`${baseURL}/session/${availabilitySession.id}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-opencode-directory': project },
+      body: JSON.stringify({
+        agent: 'worker',
+        parts: [{ type: 'text', text: 'Disabled request must fail.' }],
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    assert.equal(disabledResponse.status, 500);
+    assert.equal(((await disabledResponse.json()) as { name: string }).name, 'UnknownError');
+    assert.equal(requests.length, providerBeforeDisabled, 'disabled selection does not reach the provider');
+    assert.deepEqual(await api(`/session/${availabilitySession.id}/message`), availabilityHistory);
+    const continued = await api<Message>(`/session/${availabilitySession.id}/message`, {
+      agent: 'main-follower',
+      parts: [{ type: 'text', text: 'Reply with verified.' }],
+    });
+    assert.equal(continued.info.error, undefined);
+    const continuedHistory = await api(`/session/${availabilitySession.id}/message`);
+    // A process restart preserves the saved workflow selection and the same native database history.
+    runtime.child.kill();
+    await runtime.exited;
+    const restarted = spawn(
+      process.env.OPENCODE_BIN ?? 'opencode',
+      ['serve', '--hostname', '127.0.0.1', '--port', '0', '--print-logs'],
+      { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    runtime.child = restarted;
+    runtime.exited = once(restarted, 'exit').catch(() => undefined);
+    let restartedOutput = '';
+    restarted.stdout.on('data', (data: Buffer) => {
+      restartedOutput += data.toString();
+      output += data.toString();
+    });
+    restarted.stderr.on('data', (data: Buffer) => {
+      restartedOutput += data.toString();
+      output += data.toString();
+    });
+    let restartedUrl: string | undefined;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      restartedUrl = /http:\/\/127\.0\.0\.1:\d+/.exec(restartedOutput)?.[0];
+      if (restartedUrl !== undefined) {
+        break;
+      }
+      if (restarted.exitCode !== null) {
+        throw new Error(restartedOutput);
+      }
+      await setTimeout(100);
+    }
+    assert.ok(restartedUrl !== undefined, restartedOutput);
+    baseURL = restartedUrl;
+    assert.ok(!(await api<Agent[]>('/agent')).some((agent) => agent.name === 'worker'));
+    assert.deepEqual(await api(`/session/${availabilitySession.id}/message`), continuedHistory);
+    const enabledSource = applyEdits(
+      disabledSource,
+      modify(
+        disabledSource,
+        ['profiles', 'work', 'agentAvailability'],
+        Object.fromEntries(disabledNames.map((name) => [name, true])),
+        {},
+      ),
+    );
+    await writeFile(settingsPath, enabledSource);
+    const enabledBaseline = readRuntimeBaseline(
+      await api('/config'),
+      { root: project, directory: project },
+      configRoot,
+    );
+    await applyInstance(await loadSnapshot(configRoot, project, enabledBaseline, project, '/'));
+    const reenabled = await api<Agent[]>('/agent');
+    // Native optional fields serialize as null after a builtin gets an explicit config entry.
+    // Preserve all other fields/order except complete disjoint bundled native skill-grant blocks.
+    const definition = (agent: Agent | undefined) =>
+      agent === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(agent)
+              .filter(
+                ([key, value]) =>
+                  value !== null ||
+                  !['color', 'hidden', 'prompt', 'steps', 'temperature', 'topP', 'variant'].includes(key),
+              )
+              .map(([key, value]) => [
+                key,
+                key === 'permission' ? normalizeBundledPermissions(agent.permission, installed.directory) : value,
+              ]),
+          );
+    for (const name of disabledNames) {
+      assert.deepEqual(
+        definition(reenabled.find((agent) => agent.name === name)),
+        definition(enabledRegistry.find((agent) => agent.name === name)),
+        `${name} restores the native/composed definition`,
+      );
+    }
+    assert.equal((await request('worker')).info.error, undefined);
+    assert.equal(await readFile(nativePath, 'utf8'), nativeBeforeEdit, 'workflow toggles never rewrite native JSON');
+    await writeFile(settingsPath, availableSource);
     // Migration help must load through the native host while the source is rejected.
     const legacy = await readFile(
       join(installed.directory, 'skills/config-composer-migrate/examples/before.jsonc'),

@@ -628,6 +628,13 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "agentAvailability": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/componentName" },
+          "additionalProperties": { "type": "boolean" },
+          "maxProperties": 256,
+          "description": "Enable or disable named workflow agents without deleting definitions. Later profile occurrences win; internal title, summary and compaction agents cannot be toggled."
+        },
         "extends": {
           "$ref": "#/$defs/name"
         },

@@ -13,7 +13,8 @@ import termios
 import time
 
 
-binary, project = sys.argv[1:]
+binary, project = sys.argv[1:3]
+availability = len(sys.argv) > 3 and sys.argv[3] == 'availability'
 pid, terminal = pty.fork()
 if pid == 0:
     os.chdir(project)
@@ -77,20 +78,26 @@ def command(name, label):
     os.write(terminal, b"\r")
 
 
-try:
-    wait_for("Ask anything")
-    command("/quiet", "Select no profiles")
-    wait_for("/quiet: save profile selection in", "local", "shared")
+def activate(name, description, profiles, agent=None):
+    command('/' + name, description)
+    wait_for('/' + name + ': save profile selection in', "local", "shared")
     filter_menu("local")
     os.write(terminal, b"\r")
-    wait_for("Shortcut /quiet: none", "Destination: local", "Confirm")
+    wait_for('Shortcut /' + name + ': ' + profiles, "Destination: local", "Confirm")
     os.write(terminal, b"\r")
-    wait_for("Settings saved", "pending")
+    wait_for("Saved Composer revision", "pending")
     filter_menu("Reload now")
     os.write(terminal, b"\r")
     wait_for("Apply saved revision?", "only this instance")
     os.write(terminal, b"\r")
-    wait_for("Composer revision applied")
+    wait_for(*(["Composer revision applied", agent] if agent else ["Composer revision applied"]))
+
+
+try:
+    wait_for(*(["Ask anything", "Build"] if availability else ["Ask anything"]))
+    if availability:
+        activate('planning', 'Select planning agents', 'planning', 'Plan')
+    activate('quiet', 'Select no profiles', 'none', 'Build' if availability else None)
     print("native TUI saved and applied profile shortcut without a model request")
 except BaseException:
     print(" ".join(screen().split())[-6000:], file=sys.stderr)
