@@ -218,6 +218,47 @@ test('removing global overlays restores native shorthand and absence while retai
   }
 });
 
+test('in-place external permission edits remain native when a Composer contribution is removed', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-permission-inplace-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(path, JSON.stringify({ agent: { permission: { bash: 'allow', edit: 'deny' } } }));
+  const hooks = await server.server({} as PluginInput, { configFile: path });
+  const config = { permission: { read: 'ask' } } as unknown as Parameters<NonNullable<typeof hooks.config>>[0];
+  await hooks.config!(config);
+  const externallyEdited = config.permission as PermissionPolicy;
+  externallyEdited.bash = 'ask';
+  await writeFile(path, '{}');
+  await hooks.config!(config);
+  // As with an externally replaced policy, an edited object is now native as a whole.
+  assert.equal(config.permission, externallyEdited);
+  assert.deepEqual(config.permission, { read: 'ask', bash: 'ask', edit: 'deny' });
+  const restored = structuredClone(config);
+  await hooks.config!(config);
+  assert.deepEqual(config, restored);
+});
+
+test('in-place external permission reordering remains effective after Composer removal', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'composer-permission-reorder-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(path, JSON.stringify({ agent: { permission: { '*': 'allow', bash: 'deny' } } }));
+  const hooks = await server.server({} as PluginInput, { configFile: path });
+  const config = { permission: { read: 'ask' } } as unknown as Parameters<NonNullable<typeof hooks.config>>[0];
+  await hooks.config!(config);
+  const externallyEdited = config.permission as PermissionPolicy;
+  assert.equal(explainPermission(externallyEdited, 'bash', 'git status').action, 'deny');
+  delete externallyEdited['*'];
+  externallyEdited['*'] = 'allow';
+  const order = Object.keys(externallyEdited);
+  assert.equal(explainPermission(externallyEdited, 'bash', 'git status').action, 'allow');
+  await writeFile(path, '{}');
+  await hooks.config!(config);
+  assert.equal(config.permission, externallyEdited);
+  assert.deepEqual(Object.keys(config.permission as PermissionPolicy), order);
+  assert.equal(explainPermission(nativePermission(config.permission), 'bash', 'git status').action, 'allow');
+});
+
 test('invalid native policy fails before mutating global or agent configuration', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'composer-permissions-'));
   t.after(() => rm(root, { recursive: true, force: true }));

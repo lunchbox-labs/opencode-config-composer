@@ -46,7 +46,10 @@ const ConfigComposerPlugin: Plugin = async (pluginInput, options) => {
       // Notification transport failures must not discard successfully compiled settings.
     }
   };
-  const globalPermissions = new WeakMap<object, { native: Config['permission']; applied: Config['permission'] }>();
+  const globalPermissions = new WeakMap<
+    object,
+    { native: Config['permission']; applied: Config['permission']; appliedSnapshot: Config['permission'] }
+  >();
   const authored = new WeakMap<
     AgentSettings,
     {
@@ -109,8 +112,11 @@ const ConfigComposerPlugin: Plugin = async (pluginInput, options) => {
       const effective = resolveNativeDefaults(native, nextSettings);
       const context = { modelPresets, native: effective };
       const previousGlobal = globalPermissions.get(config);
+      // External value or order edits claim the whole policy, just like an outer replacement.
       const nativeGlobal =
-        previousGlobal !== undefined && config.permission === previousGlobal.applied
+        previousGlobal !== undefined &&
+        config.permission === previousGlobal.applied &&
+        JSON.stringify(config.permission) === JSON.stringify(previousGlobal.appliedSnapshot)
           ? previousGlobal.native
           : config.permission;
       const nextWarnings = new Map<string, string>();
@@ -214,7 +220,11 @@ const ConfigComposerPlugin: Plugin = async (pluginInput, options) => {
       settings = nextSettings;
       if (settings.permission !== undefined) {
         config.permission = globalPolicy;
-        globalPermissions.set(config, { native: nativeGlobal, applied: globalPolicy });
+        globalPermissions.set(config, {
+          native: nativeGlobal,
+          applied: globalPolicy,
+          appliedSnapshot: structuredClone(globalPolicy),
+        });
       } else if (previousGlobal !== undefined) {
         if (nativeGlobal === undefined) {
           delete config.permission;
