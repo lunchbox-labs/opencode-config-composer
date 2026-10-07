@@ -266,7 +266,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         { root: context.root, directory: input.directory },
         nativeGlobals,
         staged,
-        { revision, observedNativeFiles },
+        { revision, observedNativeFiles, choices: resolved.choices },
       );
       await notifications.applied(resolved.permissionWarnings);
     },

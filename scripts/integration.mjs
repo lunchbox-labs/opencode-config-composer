@@ -41,7 +41,10 @@ const suites = {
     'tests/integration/permission-runtime.integration.ts',
     'tests/integration/permission-notifications.integration.ts',
   ],
-  'runtime-terminal': ['tests/integration/runtime-terminal.integration.ts'],
+  'runtime-terminal': [
+    'tests/integration/runtime-terminal.integration.ts',
+    'tests/integration/running-inspector.integration.ts',
+  ],
   'scoped-apply': ['tests/integration/scoped-apply.integration.ts', 'tests/integration/alias-native.integration.ts'],
   shortcuts: ['tests/integration/shortcuts.integration.ts'],
   availability: [

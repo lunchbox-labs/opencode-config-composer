@@ -6,9 +6,37 @@ import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import { configurationDirectory } from '../configuration.ts';
 import { type AgentSettings, type NativeModels, SettingsError, record } from '../settings.ts';
 import { serverEntry } from '../registration.ts';
+import type { ConfigurationParameters } from './document-types.ts';
+import { parseParameters } from './parameters.ts';
 import type { CompositionRevision } from './revision.ts';
+import type { ResolvedModelSettings } from './runtime.ts';
 
 const key = '__configComposerRuntime';
+
+function validateParameters(value: unknown): asserts value is ConfigurationParameters {
+  parseParameters(value);
+}
+
+function publishedChoices(choices: Record<string, ResolvedModelSettings>): Record<string, ResolvedModelSettings> {
+  return Object.fromEntries(
+    Object.entries(choices).map(([name, value]) => {
+      const choice: ResolvedModelSettings = {};
+      for (const field of ['model', 'modelRef', 'variant'] as const) {
+        if (value[field] !== undefined) {
+          choice[field] = value[field];
+        }
+      }
+      if (value.parameters !== undefined) {
+        const parameters = Object.fromEntries(
+          Object.entries(value.parameters).filter(([, item]) => item !== undefined),
+        );
+        validateParameters(parameters);
+        choice.parameters = parameters;
+      }
+      return [name, structuredClone(choice)];
+    }),
+  );
+}
 
 // OpenCode 1.18.34's /config response serializes known names in schema order.
 // Unknown-name order and pattern-map order survive transport and remain semantic.
@@ -78,7 +106,11 @@ export function publishRuntimeBaseline(
   location: RuntimeLocation,
   native: NativeModels,
   agent: Record<string, AgentSettings> = {},
-  state?: { revision?: CompositionRevision; observedNativeFiles: string },
+  state?: {
+    revision?: CompositionRevision;
+    observedNativeFiles: string;
+    choices?: Record<string, ResolvedModelSettings>;
+  },
 ): void {
   const plugins = config.plugin ?? [];
   const matches = plugins.flatMap((entry, index) =>
@@ -112,7 +144,9 @@ export function publishRuntimeBaseline(
         ...(state === undefined
           ? {}
           : {
-              ...state,
+              observedNativeFiles: state.observedNativeFiles,
+              ...(state.revision === undefined ? {} : { revision: structuredClone(state.revision) }),
+              ...(state.choices === undefined ? {} : { appliedChoices: publishedChoices(state.choices) }),
               appliedCommands: structuredClone(config.command ?? {}),
               appliedSkillPaths: [...(config.skills?.paths ?? [])],
             }),
@@ -248,4 +282,66 @@ export function readRuntimeRevision(
     observedNativeFiles: marker.observedNativeFiles,
     ...(revision === undefined ? {} : { revision }),
   };
+}
+
+/** Applied dispatch choices belong to this runtime instance, independently of saved source edits. */
+export function readRuntimeChoices(
+  config: unknown,
+  location: RuntimeLocation,
+  registrationRoot = configurationDirectory(),
+): { id: string; choices: Record<string, ResolvedModelSettings> } {
+  const revision = readRuntimeRevision(config, location, registrationRoot);
+  const fail = (): never => {
+    throw new SettingsError(
+      'Applied runtime choices are unavailable. Reload the matching Config Composer server plugin.',
+    );
+  };
+  if (!record(config) || !Array.isArray(config.plugin)) {
+    return fail();
+  }
+  const marker: unknown = config.plugin.flatMap((entry: unknown) =>
+    Array.isArray(entry) && serverEntry(entry[0], registrationRoot) && record(entry[1]) && record(entry[1][key])
+      ? [entry[1][key]]
+      : [],
+  )[0];
+  const plain = (value: unknown): value is Record<string, unknown> =>
+    record(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+  if (
+    !record(marker) ||
+    marker.id !== revision.id ||
+    !Object.hasOwn(marker, 'appliedChoices') ||
+    !plain(marker.appliedChoices)
+  ) {
+    return fail();
+  }
+  const choices = Object.fromEntries(
+    Object.entries(marker.appliedChoices).map(([name, value]): [string, ResolvedModelSettings] => {
+      if (
+        ['__proto__', 'prototype', 'constructor'].includes(name) ||
+        !plain(value) ||
+        Object.keys(value).some((field) => !['model', 'modelRef', 'variant', 'parameters'].includes(field))
+      ) {
+        return fail();
+      }
+      const choice: ResolvedModelSettings = {};
+      for (const field of ['model', 'modelRef', 'variant'] as const) {
+        if (!Object.hasOwn(value, field) || value[field] === undefined) {
+          continue;
+        }
+        if (typeof value[field] !== 'string') {
+          return fail();
+        }
+        choice[field] = value[field];
+      }
+      if (Object.hasOwn(value, 'parameters') && value.parameters !== undefined) {
+        if (!plain(value.parameters)) {
+          return fail();
+        }
+        validateParameters(value.parameters);
+        choice.parameters = value.parameters;
+      }
+      return [name, choice];
+    }),
+  );
+  return { id: revision.id, choices: structuredClone(choices) };
 }
