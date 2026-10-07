@@ -13,8 +13,10 @@ export async function reloadFromTerminal(
     'Reload now',
     'Apply saved revision?',
     'only this instance',
-    'Existing',
-    'session model selections remain',
+    'cannot reset',
+    '/models',
+    '/variants',
+    'Default',
   );
   await terminal.press('\r', 'Composer revision applied');
   // A previous toast can remain visible during another reload. Observe this
