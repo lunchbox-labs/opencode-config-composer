@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   loadSnapshot,
@@ -11,6 +11,7 @@ import {
   reloadConfiguration,
   savePlan,
 } from '../src/config-composer/storage.ts';
+import { nativeAncestorPaths } from '../src/config-composer/composition/native-sources.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 
 async function fixture(t: TestContext) {
@@ -252,4 +253,21 @@ test('native substitution environment and file changes invalidate an open save o
     /changed/i,
   );
   assert.equal(updates, 0);
+});
+
+test('native non-Git discovery interprets the slash sentinel on the project drive or UNC share', () => {
+  assert.deepEqual(nativeAncestorPaths('/', 'D:\\work\\project', win32), ['D:\\work\\project', 'D:\\work', 'D:\\']);
+  assert.deepEqual(nativeAncestorPaths('/', '\\\\server\\share\\project', win32), [
+    '\\\\server\\share\\project',
+    '\\\\server\\share\\',
+  ]);
+  assert.deepEqual(nativeAncestorPaths('/', '/work/project', posix), ['/work/project', '/work', '/']);
+  assert.deepEqual(nativeAncestorPaths('C:\\repo', 'C:\\repo\\..nested', win32), ['C:\\repo\\..nested', 'C:\\repo']);
+  for (const directory of ['D:\\project', 'C:\\repo-other', '\\\\server\\other\\project']) {
+    assert.throws(() => nativeAncestorPaths('C:\\repo', directory, win32), /inside its worktree/);
+  }
+  assert.throws(
+    () => nativeAncestorPaths('/', '/' + Array.from({ length: 65 }, () => 'nested').join('/'), posix),
+    /64 directories/,
+  );
 });

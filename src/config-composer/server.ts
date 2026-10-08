@@ -1,12 +1,22 @@
+import { validateShortcutCommands } from './composition/shortcuts.ts';
 import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
+import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { type AgentSettings, type EffectiveChoice, SettingsError, record } from './settings.ts';
+import { permissionNotifications } from './composition/permission-warnings.ts';
 import { publishRuntimeBaseline } from './composition/runtime-baseline.ts';
+import { MembershipValidationError } from './composition/membership.ts';
 import { expandIncludes } from './prompts.ts';
 import { loadCompositionSources } from './composition/sources.ts';
 import { type ResolvedModelSettings, resolveProfileRuntime } from './composition/runtime.ts';
 import { filterParameters, mergeOptions, parametersForDispatch, unprotectedOptions } from './composition/parameters.ts';
+import {
+  captureCompositionInputs,
+  compositionRevision,
+  observeNativeFiles,
+  verifyCompositionInputs,
+} from './composition/revision.ts';
 
 const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
   if (
@@ -26,8 +36,12 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           : process.cwd(),
     baseFile: typeof options.configFile === 'string' ? options.configFile : undefined,
     baseExplicit: options.configFile !== undefined,
+    // An optional empty installation must expose native state so the editor can create its first source.
+    allowEmpty: true,
   };
-  let sources = await loadCompositionSources(context);
+  await validateBundledSkills();
+  let sources: Awaited<ReturnType<typeof loadCompositionSources>> | undefined;
+  const notifications = permissionNotifications(input.client);
   let agents: Partial<Record<string, AgentSettings>> = {};
   let choices: Partial<Record<string, EffectiveChoice & ResolvedModelSettings>> = {};
   interface Authored {
@@ -63,13 +77,17 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     const result = { ...value };
     if (previous !== undefined) {
       for (const key of [...new Set([...Object.keys(previous.native), ...Object.keys(previous.applied)])]) {
-        if (isDeepStrictEqual(value[key], previous.applied[key])) {
+        if (
+          key === 'permission'
+            ? JSON.stringify(value[key]) === JSON.stringify(previous.applied[key])
+            : isDeepStrictEqual(value[key], previous.applied[key])
+        ) {
           if (Object.hasOwn(previous.native, key)) {
             result[key] = previous.native[key];
           } else {
             Reflect.deleteProperty(result, key);
           }
-        } else if (recursive && record(value[key]) && record(previous.applied[key])) {
+        } else if (key !== 'permission' && recursive && record(value[key]) && record(previous.applied[key])) {
           const restored = restore(
             value[key],
             {
@@ -89,6 +107,9 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     return result;
   }
   return {
+    'chat.message': async (input, output) => {
+      await notifications.session(input.sessionID, output.message.agent);
+    },
     'tool.execute.after': async (input, output) => {
       if (input.tool !== 'skill') {
         return;
@@ -99,16 +120,30 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         );
       }
       if (output.output.includes('{{include:')) {
+        sources ??= await loadCompositionSources(context);
         output.output = await expandIncludes(output.output, sources.registry.sourceDirectories ?? {});
       }
     },
-    config: async (config: Config & Pick<NativeConfig, 'skills'>) => {
+    config: async (config: Config & Pick<NativeConfig, 'skills' | 'default_agent'>) => {
+      // Packaged help stays discoverable even when a source requires migration or repair.
+      config.skills = {
+        ...config.skills,
+        paths: [...new Set([...(config.skills?.paths ?? []), bundledSkillDirectory])],
+      };
       const configured: unknown = config.agent ?? {};
       if (!agentConfigurations(configured)) {
         throw new SettingsError('An agent configuration must be an object.');
       }
       const previous = configurations.get(config);
-      const nativeGlobals = restore({ model: config.model, small_model: config.small_model }, previous);
+      const nativeGlobals = restore(
+        {
+          model: config.model,
+          small_model: config.small_model,
+          permission: config.permission,
+          default_agent: config.default_agent,
+        },
+        previous,
+      );
       const staged: Record<string, AgentSettings> = {};
       const owned: Record<string, AgentSettings> = {};
       for (const [name, value] of Object.entries(configured)) {
@@ -126,17 +161,29 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
       }
       const nextSources = await loadCompositionSources(context);
-      const resolved = await resolveProfileRuntime(nextSources, {
-        ...nativeGlobals,
-        agent: staged,
-        composerOwnedAgents: owned,
-      });
-      // Staging guard only: OpenCode catches config-hook errors and may continue without Composer.
-      // This is not fail-closed enforcement; do not release until failure behavior is integrated.
-      if (resolved.permissions.length !== 0) {
-        throw new SettingsError(
-          'Selected profiles contain permission contributions. This runtime requires the canonical permission compiler before these profiles can be activated.',
+      const inputs = await captureCompositionInputs(nextSources);
+      const observedNativeFiles = await observeNativeFiles();
+      let resolved: Awaited<ReturnType<typeof resolveProfileRuntime>>;
+      try {
+        resolved = await resolveProfileRuntime(
+          nextSources,
+          { ...nativeGlobals, agent: staged, composerOwnedAgents: owned },
+          new Map(inputs.map((file) => [file.path, file.text])),
+          (file) => inputs.push(file),
         );
+      } catch (error) {
+        if (error instanceof MembershipValidationError) {
+          // Expose exact inspection inputs without applying any part of the invalid composition.
+          publishRuntimeBaseline(
+            config,
+            options,
+            { root: context.root, directory: input.directory },
+            nativeGlobals,
+            staged,
+            { observedNativeFiles },
+          );
+        }
+        throw error;
       }
       const previousResources = resources.get(config);
       const nativeCommands = restore(config.command ?? {}, previousResources?.commands);
@@ -148,13 +195,16 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           throw new SettingsError(`Component command ${name} conflicts with an existing native command.`);
         }
       }
+      validateShortcutCommands(nextSources, Object.keys(nativeCommands));
       const nextCommands = { ...nativeCommands, ...resolved.commands };
       const nativeSkills = config.skills ?? {};
       const nativePaths = (nativeSkills.paths ?? []).filter((path) => previousResources?.addedPaths.has(path) !== true);
       const nextSkills = {
         ...nativeSkills,
-        paths: [...new Set([...nativePaths, ...resolved.skillPaths])],
+        paths: [...new Set([...nativePaths, bundledSkillDirectory, ...resolved.skillPaths])],
       };
+      const revision = compositionRevision(nextSources, resolved, inputs);
+      await verifyCompositionInputs(nextSources, inputs);
       // Validate the complete candidate before mutating host objects.
       for (const key of ['model', 'small_model'] as const) {
         if (resolved[key] === undefined) {
@@ -163,22 +213,18 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           config[key] = resolved[key];
         }
       }
-      for (const name of Object.keys(configured)) {
-        if (!Object.hasOwn(resolved.agent, name)) {
-          Reflect.deleteProperty(configured, name);
-        }
+      if (resolved.permission === undefined) {
+        delete config.permission;
+      } else {
+        Object.assign(config, { permission: structuredClone(resolved.permission) });
       }
       const authored = new Map<string, Authored>();
+      const nextAgents: Record<string, AgentSettings> = {};
       for (const [name, value] of Object.entries(resolved.agent)) {
-        const existing = configured[name];
-        const target = record(existing) ? existing : {};
-        for (const key of Object.keys(target)) {
-          if (!Object.hasOwn(value, key)) {
-            Reflect.deleteProperty(target, key);
-          }
-        }
-        Object.assign(target, value);
-        configured[name] = target;
+        // Native config merges may retain objects owned by the server-wide cache.
+        // Publish an instance-owned map and values rather than modifying those shared inputs.
+        const target = structuredClone(value);
+        nextAgents[name] = target;
         const snapshot = {
           native: structuredClone(
             Object.hasOwn(staged, name) ? staged[name] : Object.hasOwn(owned, name) ? owned[name] : {},
@@ -189,10 +235,15 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         authored.set(name, snapshot);
         agentSnapshots.set(target, snapshot);
       }
-      config.agent = configured;
+      config.agent = nextAgents;
       configurations.set(config, {
-        native: nativeGlobals,
-        applied: { model: config.model, small_model: config.small_model },
+        native: structuredClone(nativeGlobals),
+        applied: structuredClone({
+          model: config.model,
+          small_model: config.small_model,
+          default_agent: config.default_agent,
+          permission: config.permission,
+        }),
         added: new Set(Object.keys(resolved.agent).filter((name) => !Object.hasOwn(staged, name))),
         agents: authored,
       });
@@ -204,7 +255,9 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       config.skills = nextSkills;
       resources.set(config, {
         commands: { native: structuredClone(nativeCommands), applied: structuredClone(nextCommands) },
-        addedPaths: new Set(resolved.skillPaths.filter((path) => !nativePaths.includes(path))),
+        addedPaths: new Set(
+          [bundledSkillDirectory, ...resolved.skillPaths].filter((path) => !nativePaths.includes(path)),
+        ),
       });
       sources = nextSources;
       publishRuntimeBaseline(
@@ -213,7 +266,9 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         { root: context.root, directory: input.directory },
         nativeGlobals,
         staged,
+        { revision, observedNativeFiles },
       );
+      await notifications.applied(resolved.permissionWarnings);
     },
     // eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning parameter hook.
     'chat.params': async (input, output) => {

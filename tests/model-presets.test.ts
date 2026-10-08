@@ -386,6 +386,7 @@ function uiHarness(root: string) {
         dialog = props;
       },
       dialog: {
+        setSize: () => {},
         get open() {
           return dialog !== undefined;
         },
@@ -402,8 +403,8 @@ function uiHarness(root: string) {
     },
     client: {
       file: {
-        read: async (input: { path: string }) => ({
-          data: { type: 'text', content: await readFile(input.path, 'utf8') },
+        read: async (input: { path: string; directory: string }) => ({
+          data: { type: 'text', content: await readFile(join(input.directory, input.path), 'utf8') },
         }),
       },
       config: {
@@ -562,7 +563,7 @@ test('TUI blocks stale effective defaults and unavailable catalogs before writin
   await ui.select('developers');
   await ui.select('opencode:model');
   await ui.select('low');
-  ui.setNative(context.native);
+  ui.setNative({ ...context.native, permission: { edit: 'ask' } });
   await ui.confirm();
   assert.match(ui.toasts.at(-1)!.message, /Effective model defaults changed/);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), original);

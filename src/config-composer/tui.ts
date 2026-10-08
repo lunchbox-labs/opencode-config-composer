@@ -2,10 +2,11 @@ import { verifyNativeAgents } from './composition/native-baseline.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
-import type { Config, SessionStatus } from '@opencode-ai/sdk/v2';
+import type { Config } from '@opencode-ai/sdk/v2';
 import { dialogNavigation } from '../tui/navigation.ts';
+import { permissionReview } from './tui/permission-review.ts';
 import {
   type CatalogModel,
   type GroupChoice,
@@ -16,32 +17,60 @@ import {
   catalogModels,
   groupName,
   presetName,
-  record,
   resolveGroup,
   validateChoice,
 } from './settings.ts';
 import {
   type Change,
+  type FilePlan,
   type Snapshot,
+  type SourceSnapshot,
   type StoredAgent,
   affectedGroups,
   groupNames,
+  loadEditorSnapshot,
   loadSnapshot,
   memberships,
   planChange,
   plannedChoices,
-  reloadConfiguration,
+  previewFilePlan,
   saveFilePlan,
   savePlan,
 } from './storage.ts';
 import { configurationDirectory } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
-import { type EditorNativeBaseline, readRuntimeBaseline } from './composition/runtime-baseline.ts';
+import {
+  type EditorNativeBaseline,
+  readRuntimeBaseline,
+  readRuntimeRevision,
+  sameNativePermissionOrder,
+} from './composition/runtime-baseline.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveProfileRuntime } from './composition/runtime.ts';
 import { openEffective } from './tui/compose.ts';
 import { openAuthoring } from './tui/authoring.ts';
-import { type DefinitionChange, planDefinition, previewDefinition } from './composition/authoring.ts';
+import { type DefinitionChange, planDefinition } from './composition/authoring.ts';
+import { profileShortcutRegistration } from './tui/shortcuts.ts';
+import { planScope, scopeDestinations } from './composition/activation.ts';
+import { openParameters } from './tui/parameters.ts';
+import { planParameter } from './composition/parameter-authoring.ts';
+import { parameterReview, validateParameterChoice } from './composition/parameter-review.ts';
+import { openActivation } from './tui/activation.ts';
+import { openMembershipRepair } from './tui/membership-repair.ts';
+import { planMembershipRepair } from './composition/membership-repair.ts';
+import { openPermissions } from './tui/permissions.ts';
+import { permissionStatus, planPermissions, previewPermission } from './composition/permission-authoring.ts';
+import { openPrompts } from './tui/prompts.ts';
+import { openPromptSources } from './tui/prompt-sources.ts';
+import {
+  type PromptAssetPlan,
+  planPromptAsset,
+  planPromptReferences,
+  validatePromptAssets,
+} from './composition/prompt-sources.ts';
+import { planPrompt, promptReview } from './composition/prompt-authoring.ts';
+import { type ApplyFailure, applySavedComposition, applyStatus } from './composition/apply.ts';
+import { compositionRevision } from './composition/revision.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 const label = (choice: ModelChoice) =>
@@ -61,9 +90,11 @@ export function registerSettings(
       : join(homedir(), '.config'),
     'opencode',
   ),
-): void {
+): { refreshShortcuts: () => Promise<void> } {
   const navigation = dialogNavigation(api);
   let busy = false;
+  let nativeSaveNeedsRestart = false;
+  let lastFailure: (ApplyFailure & { directory: string }) | undefined;
   const native = new WeakMap<Snapshot, NativeModels>();
   const context = (snapshot: Snapshot): ResolutionContext => ({
     modelPresets: snapshot.modelPresets,
@@ -85,7 +116,11 @@ export function registerSettings(
   };
   const refreshNative = async (snapshot: Snapshot) => {
     const models = await readNative();
-    if (!isDeepStrictEqual(snapshot.nativeModels.agent, models.agent)) {
+    if (
+      !isDeepStrictEqual(snapshot.nativeModels.agent, models.agent) ||
+      snapshot.nativeModels.default_agent !== models.default_agent ||
+      !sameNativePermissionOrder(snapshot.nativeModels, models)
+    ) {
       throw new SettingsError(
         'Native agent settings changed on the server. Reopen the editor and review the new preview.',
       );
@@ -152,6 +187,7 @@ export function registerSettings(
   const confirm = (title: string, message: string, action: () => Promise<void>) => {
     // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
     navigation.confirm({ title, message, onConfirm: () => run(action) });
+    api.ui.dialog.setSize('xlarge');
   };
   const connection = async (expectedRoot?: string) => {
     const serverPath = api.state.path.config;
@@ -187,18 +223,44 @@ export function registerSettings(
     assertCurrent();
     return { root, client, assertCurrent };
   };
-  const load = async (reloading = false) => {
-    const { root } = await connection();
+  const currentProject = (root: string) => {
     const path = api.state.path as { worktree?: string; directory?: string };
-    const project =
+    return resolve(
       typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
         ? path.worktree
-        : (path.directory ?? root);
+        : (path.directory ?? root),
+    );
+  };
+  const authorizePlan = async (plan: FilePlan<SourceSnapshot>) => {
+    const { assertCurrent, client } = await connection(plan.snapshot.root);
+    const projectWrite = plan.edits.some(
+      (edit) => edit.file.writeRoot !== undefined && edit.file.writeRoot !== plan.snapshot.root,
+    );
+    const assertProject = () => {
+      assertCurrent();
+      if (projectWrite && currentProject(plan.snapshot.root) !== plan.snapshot.sourceContext.root) {
+        throw new SettingsError('The current project changed. Reopen the settings editor.');
+      }
+    };
+    assertProject();
+    if (projectWrite) {
+      const verified = await verifySharedFilesystem(api, plan.snapshot.scopeRoot, plan.snapshot.sourceContext.root);
+      if (verified !== client) {
+        throw new SettingsError('The server connection changed. Reopen the editor.');
+      }
+    }
+    assertProject();
+    return assertProject;
+  };
+  const load = async () => {
+    const { root } = await connection();
+    const path = api.state.path as { worktree?: string; directory?: string };
+    const project = currentProject(root);
     const baseline = await readNative();
     const snapshot = await loadSnapshot(
       root,
       project,
-      reloading ? { model: baseline.model, small_model: baseline.small_model } : baseline,
+      baseline,
       path.directory ?? project,
       typeof path.worktree === 'string' && path.worktree !== '' ? path.worktree : project,
     );
@@ -303,67 +365,146 @@ export function registerSettings(
       current.model,
     );
   };
-  const reload = async () => {
-    const status: { error?: unknown; data?: Record<string, SessionStatus> | null } = await api.client.session.status();
-    if (Boolean(status.error) || status.data === undefined || status.data === null) {
-      throw new SettingsError('Could not check running agents. Settings are saved; restart when idle.');
+  const prepareApply = async () => {
+    const snapshot = await load();
+    const response = await api.client.config.get();
+    if (Boolean(response.error) || response.data === undefined) {
+      throw new SettingsError('Could not read the applied revision. Saved changes are retained.');
     }
-    if (Object.values(status.data).some((item) => item.type !== 'idle')) {
-      throw new SettingsError(
-        'Agents are still running in this workspace. Settings are saved; reload when they finish.',
+    const location = { root: snapshot.sourceContext.root, directory: snapshot.nativeDirectory };
+    const runtime = readRuntimeRevision(response.data, location, snapshot.root);
+    const { client, assertCurrent } = await connection(snapshot.root);
+    const assertInstance = () => {
+      assertCurrent();
+      const path = api.state.path as { directory?: string };
+      if (currentProject(snapshot.root) !== location.root || (path.directory ?? location.root) !== location.directory) {
+        throw new SettingsError('The current instance changed. Reopen the apply view. Saved changes are retained.');
+      }
+    };
+    assertInstance();
+    return { snapshot, location, runtime, client, assertInstance };
+  };
+  const reload = async (prepared: Awaited<ReturnType<typeof prepareApply>>) => {
+    const { snapshot, location, runtime, client, assertInstance } = prepared;
+    try {
+      assertInstance();
+      if (nativeSaveNeedsRestart) {
+        throw new SettingsError('Native settings were saved. Restart OpenCode to apply them.');
+      }
+      const verified = await connection(snapshot.root);
+      assertInstance();
+      if (verified.client !== client) {
+        throw new SettingsError('The server connection changed. Reopen the apply view.');
+      }
+      const revision = await applySavedComposition(snapshot, runtime, {
+        assertCurrent: assertInstance,
+        activity: async () => {
+          const result = await client.session.status({ directory: location.directory });
+          if (Boolean(result.error) || result.data === undefined) {
+            throw new SettingsError('Could not check running agents. Settings are saved; retry or restart when idle.');
+          }
+          return result.data;
+        },
+        dispose: async () => {
+          const result = await client.instance.dispose({ directory: location.directory });
+          if (Boolean(result.error) || result.data !== true) {
+            throw new SettingsError('Instance apply failed. Settings are saved; retry or restart OpenCode.');
+          }
+        },
+        refresh: async () => {
+          const config = await client.config.get({ directory: location.directory });
+          const [providers, agents] = await Promise.all([
+            client.config.providers({ directory: location.directory }),
+            client.app.agents({ directory: location.directory }),
+          ]);
+          if (
+            Boolean(config.error) ||
+            config.data === undefined ||
+            Boolean(providers.error) ||
+            providers.data === undefined ||
+            Boolean(agents.error) ||
+            agents.data === undefined
+          ) {
+            throw new SettingsError(
+              'Could not refresh configuration, providers and agents. Saved changes are retained; retry apply.',
+            );
+          }
+          return readRuntimeRevision(config.data, location, snapshot.root);
+        },
+      });
+      assertInstance();
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Apply runs after all handlers initialize.
+      await shortcuts.refresh();
+      assertInstance();
+      lastFailure = undefined;
+      navigation.close();
+      api.ui.toast({
+        variant: 'success',
+        title: 'Composer revision applied',
+        message: `Applied ${revision.sources.slice(0, 12)} to ${location.directory}. Uses the running native baseline; native JSON edits require restart. Conversations and session model selections remain.`,
+        duration: 8000,
+      });
+    } catch (error) {
+      lastFailure = {
+        phase: 'apply-failed',
+        directory: location.directory,
+        message: error instanceof Error ? error.message : 'Apply failed',
+      };
+      throw error;
+    }
+  };
+  const offerReload = async (root = false) => {
+    if (nativeSaveNeedsRestart) {
+      menu(
+        'Native settings saved',
+        [
+          {
+            title: 'Restart OpenCode to apply native settings',
+            value: 'later',
+            description: 'Instance apply uses the running native baseline. Conversations remain saved.',
+            run: navigation.close,
+          },
+        ],
+        undefined,
+        root,
       );
-    }
-    // Saved native edits legitimately differ from the still-running server until this reload.
-    const snapshot = await load(true);
-    if ((await realpath(globalDirectory).catch(() => undefined)) !== snapshot.root) {
-      throw new SettingsError(
-        'Settings are saved. Restart OpenCode to apply edits in a custom configuration directory.',
-      );
-    }
-    if (api.lifecycle.signal.aborted) {
       return;
     }
-    // Complete the network proof before reloadConfiguration's final stale-file checks.
-    const { client, assertCurrent } = await connection(snapshot.root);
-    await reloadConfiguration(snapshot, async (plugins) => {
-      const plugin = plugins.map((entry): string | [string, Record<string, unknown>] => {
-        if (typeof entry === 'string') {
-          return entry;
-        }
-        if (Array.isArray(entry) && typeof entry[0] === 'string' && record(entry[1])) {
-          return [entry[0], entry[1]];
-        }
-        throw new SettingsError('Settings were saved, but a plugin entry is invalid. Fix it before reloading.');
-      });
-      assertCurrent();
-      const result = await client.global.config.update({ config: { plugin } });
-      const failed = Boolean(result.error);
-      if (failed) {
-        throw new SettingsError('Settings were saved, but reload failed. Restart OpenCode to apply them.');
-      }
-    });
-    navigation.close();
-    api.ui.toast({
-      variant: 'success',
-      title: 'Settings reloaded',
-      message: 'New agent calls use the saved defaults. A session model selection can still override them.',
-      duration: 8000,
-    });
-  };
-  const offerReload = (root = false) =>
+    const current = navigation.checkpoint();
+    const prepared = await prepareApply();
+    const { snapshot, location, runtime } = prepared;
+    if (!current()) {
+      return;
+    }
+    const saved = compositionRevision(snapshot.sources, snapshot.resolved, snapshot.files);
+    const status = () =>
+      nativeSaveNeedsRestart
+        ? 'Native settings saved; restart OpenCode to apply them'
+        : applyStatus(saved, runtime, lastFailure?.directory === location.directory ? lastFailure : undefined);
     menu(
       'Settings saved',
-      [
+      () => [
+        {
+          title: status(),
+          value: '+status',
+          description: `Instance: ${location.directory}; worktree: ${location.root}`,
+          run: () =>
+            navigation.alert({
+              title: 'Composition revision',
+              message: `${status()}\nInstance: ${location.directory}\nWorktree: ${location.root}\nSaved: ${saved.sources}\nApplied: ${runtime.revision?.sources ?? 'none'}\nComposer revisions use the running native baseline. Native JSON edits require restart.`,
+            }),
+        },
         {
           title: 'Reload now…',
           value: 'reload',
-          description: 'Apply saved settings to this OpenCode server',
+          description: 'Apply saved composition to this instance; retain other instances and conversations',
           run: () =>
             confirm(
-              'Reload OpenCode settings?',
-              'This reloads ALL workspaces on this server. Wait for agents in every workspace to finish first.\n\n' +
-                'Existing session model selections remain; use /models to change the current session.',
-              reload,
+              'Apply saved revision?',
+              `This reloads only this instance: ${location.directory}\nWorktree: ${location.root}\n\n` +
+                'Wait for its agents to finish. Saved changes remain pending if applying fails. Other opened instances retain their current revision.\n\n' +
+                'This applies Composer inputs against the running native baseline. Native JSON edits require restart. Existing session model selections remain.',
+              () => reload(prepared),
             ),
         },
         { title: 'Apply on next restart', value: 'later', run: navigation.close },
@@ -375,6 +516,25 @@ export function registerSettings(
       undefined,
       root,
     );
+  };
+  const save = async (plan: FilePlan<SourceSnapshot>, action: () => Promise<void>) => {
+    try {
+      await action();
+      nativeSaveNeedsRestart ||= plan.edits.some(
+        (edit) =>
+          edit.file.path === plan.snapshot.configFile.path ||
+          plan.snapshot.nativeLayers.some((layer) => layer.file.path === edit.file.path),
+      );
+      lastFailure = undefined;
+    } catch (error) {
+      lastFailure = {
+        phase: 'save-failed',
+        directory: plan.snapshot.nativeDirectory,
+        message: error instanceof Error ? error.message : 'Save failed',
+      };
+      throw error;
+    }
+  };
   const propose = async (snapshot: Snapshot, change: Change) => {
     const isCurrent = navigation.checkpoint();
     const plan = planChange(snapshot, change);
@@ -406,7 +566,14 @@ export function registerSettings(
       change.kind === 'global' || change.kind === 'all'
         ? '\nOther native fallback consumers can also change. Workspace overrides and session selections still apply.'
         : '';
-    const modelsPreview = [...new Set(preview.map(label))].join(', ');
+    const modelsPreview = [
+      ...new Set(
+        preview.map(
+          (choice) =>
+            `${label(choice)}${choice.parameters === undefined ? '' : ` · parameters ${JSON.stringify(choice.parameters).slice(0, 1200)}`}`,
+        ),
+      ),
+    ].join(', ');
     confirm(
       'Save agent settings?',
       `${plan.description}\n${choiceLabel}${impact}${scope}\nModels to validate: ${modelsPreview === '' ? 'Native fallback' : modelsPreview}\n\n` +
@@ -424,17 +591,14 @@ export function registerSettings(
         if (choices.some((choice) => typeof choice.model === 'string' && choice.model !== '')) {
           const available = await models();
           for (const choice of choices) {
-            validateChoice(choice, available);
+            validateParameterChoice(choice, available);
           }
         }
         if (api.lifecycle.signal.aborted) {
           return;
         }
-        await savePlan(plan, async () => {
-          const { assertCurrent } = await connection(snapshot.root);
-          return assertCurrent;
-        });
-        offerReload(true);
+        await save(plan, () => savePlan(plan, () => authorizePlan(plan)));
+        await offerReload(true);
       },
     );
   };
@@ -848,10 +1012,18 @@ export function registerSettings(
       root,
     );
   };
-  const proposeDefinition = async (snapshot: Snapshot, change: DefinitionChange) => {
+  const proposeComposition = async (
+    snapshot: Snapshot,
+    plan: FilePlan,
+    change?: DefinitionChange,
+    review?: {
+      title: string;
+      details: string;
+      validate?: (preview: Awaited<ReturnType<typeof previewFilePlan>>) => Promise<void>;
+    },
+  ) => {
     const isCurrent = navigation.checkpoint();
-    const plan = planDefinition(snapshot, change);
-    const preview = await previewDefinition(plan);
+    const preview = await previewFilePlan(plan);
     if (!isCurrent()) {
       return;
     }
@@ -859,16 +1031,26 @@ export function registerSettings(
       JSON.stringify({
         model: value.resolved.model,
         small_model: value.resolved.small_model,
+        default_agent: value.resolved.default_agent,
         choices: value.resolved.choices,
         agent: value.resolved.agent,
         permissions: value.resolved.permissions,
+        globalPermissions: value.resolved.globalPermissions,
+        permission: value.resolved.permission,
+        permissionWarnings: value.resolved.permissionWarnings,
         skillPaths: value.resolved.skillPaths,
         commands: value.resolved.commands,
         profiles: value.sources.activeProfiles,
       });
-    const changed = Object.entries(preview.resolved.choices).filter(
-      ([name, choice]) => JSON.stringify(choice) !== JSON.stringify(snapshot.resolved.choices[name]),
-    );
+    const changed = Object.entries(preview.resolved.choices).filter(([name, choice]) => {
+      const previous = Object.hasOwn(snapshot.resolved.choices, name) ? snapshot.resolved.choices[name] : undefined;
+      const agent = Object.hasOwn(snapshot.resolved.agent, name) ? snapshot.resolved.agent[name] : undefined;
+      return (
+        choice.model !== (previous?.model ?? agent?.model) ||
+        choice.variant !== (previous?.variant ?? agent?.variant) ||
+        JSON.stringify(choice.parameters) !== JSON.stringify(previous?.parameters)
+      );
+    });
     const globals = (['model', 'small_model'] as const).flatMap((field) =>
       preview.resolved[field] === snapshot.resolved[field] || preview.resolved[field] === undefined
         ? []
@@ -884,23 +1066,27 @@ export function registerSettings(
       ...new Set([...Object.keys(snapshot.resolved.agent), ...Object.keys(preview.resolved.agent)]),
     ].filter((name) => JSON.stringify(snapshot.resolved.agent[name]) !== JSON.stringify(preview.resolved.agent[name]));
     confirm(
-      'Save composition definition?',
-      `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+      review?.title ?? (change === undefined ? 'Save profile selection?' : 'Save composition definition?'),
+      permissionReview(preview.resolved.permissionWarnings) +
+        `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+        (review === undefined ? '' : `${review.details}\n\n`) +
         `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
         `Changed global models: ${globals.length === 0 ? 'none' : globals.map(({ field, model }) => `${field}: ${model}`).join(', ')}.\n` +
         `Changed command models: ${commands.length === 0 ? 'none' : commands.map(({ name, model }) => `${name}: ${model}`).join(', ')}.\n` +
         `Commands: ${Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
         `Active profiles: ${preview.sources.activeProfiles.join(' → ')}.\n` +
+        `Available workflow agents: ${Object.values(preview.resolved.agentAvailability).filter((agent) => agent.enabled && !agent.internal).length}. Native default: ${preview.resolved.default_agent ?? 'OpenCode fallback'}.\n` +
         'Save preserves conversations. Reload saved settings to apply changes.',
       async () => {
         await refreshNative(snapshot);
-        const latest = await previewDefinition(plan);
+        const latest = await previewFilePlan(plan);
+        await review?.validate?.(latest);
         if (projection(latest) !== projection(preview)) {
           throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
         }
-        const choices: ModelChoice[] = [...changed.map(([, choice]) => choice), ...globals, ...commands];
+        const choices = [...changed.map(([, choice]) => choice), ...globals, ...commands];
         if (
-          change.registry === 'configurationPresets' &&
+          change?.registry === 'configurationPresets' &&
           (change.operation === 'create' || change.operation === 'patch')
         ) {
           // Inactive presets have no affected agents, but their chosen model must still be available at save time.
@@ -908,34 +1094,408 @@ export function registerSettings(
         }
         if (choices.some((choice) => choice.model !== undefined)) {
           const catalog = await models();
-          choices.forEach((choice) => validateChoice(choice, catalog));
+          choices.forEach((choice) => validateParameterChoice(choice, catalog));
         }
         if (api.lifecycle.signal.aborted) {
           return;
         }
-        await saveFilePlan(
-          plan,
-          async () => {
-            await refreshNative(snapshot);
-            if (projection(await previewDefinition(plan)) !== projection(preview)) {
-              throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
-            }
-          },
-          async () => {
-            const { assertCurrent } = await connection(snapshot.root);
-            return assertCurrent;
-          },
+        await save(plan, () =>
+          saveFilePlan(
+            plan,
+            async () => {
+              await refreshNative(snapshot);
+              const current = await previewFilePlan(plan);
+              await review?.validate?.(current);
+              if (projection(current) !== projection(preview)) {
+                throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
+              }
+            },
+            () => authorizePlan(plan),
+          ),
         );
-        offerReload(true);
+        await offerReload(true);
       },
     );
   };
+  const proposeDefinition = (snapshot: Snapshot, change: DefinitionChange) =>
+    proposeComposition(snapshot, planDefinition(snapshot, change), change);
+  const repairMenu = async () => {
+    const current = navigation.checkpoint();
+    const { root } = await connection();
+    const project = currentProject(root);
+    const path = api.state.path as { directory?: string; worktree?: string };
+    const baseline = await readNative();
+    const snapshot = await loadEditorSnapshot(
+      root,
+      project,
+      baseline,
+      path.directory ?? project,
+      path.worktree ?? project,
+    );
+    if (!current()) {
+      return;
+    }
+    if (!('diagnostic' in snapshot)) {
+      navigation.alert({
+        title: 'Saved membership is valid',
+        message: 'No active membership errors need repair. Use the regular composition editors for other changes.',
+      });
+      return;
+    }
+    const assertBaseline = async () => {
+      const current = await readNative();
+      if (!isDeepStrictEqual(current, baseline) || !sameNativePermissionOrder(current, baseline)) {
+        throw new SettingsError(
+          'Native server inputs changed. Reopen the repair editor and review the candidate again.',
+        );
+      }
+    };
+    openMembershipRepair(snapshot, {
+      menu,
+      back: navigation.back,
+      refresh: navigation.refresh,
+      alert: (title, message) => navigation.alert({ title, message }),
+      prompt: (title, value, confirmed) =>
+        navigation.prompt({
+          title,
+          value,
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run catches asynchronous failures.
+          onConfirm: (value) => run(() => confirmed(value)),
+        }),
+      review: async (draft) => {
+        const current = navigation.checkpoint();
+        const plan = planMembershipRepair(snapshot, draft);
+        if (plan.edits.length === 0) {
+          throw new SettingsError('Choose membership repairs or a scoped profile selection before reviewing.');
+        }
+        const preview = await previewFilePlan(plan);
+        if (!current()) {
+          return;
+        }
+        const projection = JSON.stringify({ sources: preview.sources.activeProfiles, resolved: preview.resolved });
+        const validate = async () => {
+          await assertBaseline();
+          const next = await previewFilePlan(plan);
+          if (JSON.stringify({ sources: next.sources.activeProfiles, resolved: next.resolved }) !== projection) {
+            throw new SettingsError('The repair candidate changed. Reopen the editor and review it again.');
+          }
+          return next;
+        };
+        confirm(
+          'Save membership repair?',
+          permissionReview(preview.resolved.permissionWarnings) +
+            `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+            'The previous saved configuration is invalid; no effective before-state is available.\n' +
+            `Validated candidate profiles: ${preview.sources.activeProfiles.length === 0 ? 'none' : preview.sources.activeProfiles.join(' → ')}.\n` +
+            `Selected agents: ${preview.resolved.selectedAgents.length === 0 ? 'none' : preview.resolved.selectedAgents.join(', ')}.\n` +
+            `Commands: ${Object.keys(preview.resolved.commands).length === 0 ? 'none' : Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
+            'Save preserves native files and conversations. Apply remains an explicit reload.',
+          async () => {
+            const next = await validate();
+            const choices = [
+              ...Object.values(next.resolved.choices),
+              ...(['model', 'small_model'] as const).flatMap((field) =>
+                next.resolved[field] === undefined ? [] : [{ model: next.resolved[field] }],
+              ),
+              ...Object.values(next.resolved.commands).flatMap((command) =>
+                command.model === undefined ? [] : [{ model: command.model }],
+              ),
+            ];
+            if (choices.some((choice) => choice.model !== undefined)) {
+              const catalog = await models();
+              choices.forEach((choice) => validateParameterChoice(choice, catalog));
+            }
+            if (api.lifecycle.signal.aborted) {
+              return;
+            }
+            await save(plan, () =>
+              saveFilePlan(
+                plan,
+                async () => {
+                  await validate();
+                },
+                () => authorizePlan(plan),
+              ),
+            );
+            await offerReload(true);
+          },
+        );
+      },
+    });
+  };
+  const shortcuts = profileShortcutRegistration(
+    api,
+    load,
+    (snapshot, name, validate) => {
+      navigation.reset();
+      const shortcut = snapshot.sources.registry.profileShortcuts?.[name];
+      if (shortcut === undefined) {
+        throw new SettingsError('The shortcut changed. Refresh shortcuts in Compose.');
+      }
+      const selection = shortcut.activeProfiles;
+      menu(
+        `/${name}: save profile selection in…`,
+        scopeDestinations(snapshot).map((destination) => ({
+          title: destination.scope,
+          value: destination.scope,
+          description: `${destination.path} · profiles: ${selection.length === 0 ? 'none' : selection.join(' → ')}${destination.maskedBy === undefined ? '' : ` · masked by ${destination.maskedBy}`}${destination.writable ? '' : ' · read-only'}`,
+          run: () =>
+            proposeComposition(
+              snapshot,
+              planScope(snapshot, destination.scope, { operation: 'selection', profiles: [...selection] }),
+              undefined,
+              {
+                title: `Save /${name} profile selection?`,
+                validate,
+                details: `Shortcut /${name}: ${selection.length === 0 ? 'none' : selection.join(' → ')}\nDestination: ${destination.scope} · ${destination.path}${destination.maskedBy === undefined ? '' : `\nMasked by ${destination.maskedBy} selection`}`,
+              },
+            ),
+        })),
+        undefined,
+        true,
+      );
+    },
+    run,
+    () => navigation.checkpoint(),
+  );
   const composeMenu = () =>
     menu(
       'Compose',
       [
+        {
+          title: 'Refresh profile shortcuts',
+          value: 'shortcuts',
+          description: 'Register saved profile actions for this instance',
+          run: shortcuts.refresh,
+        },
+        { title: 'Repair invalid memberships', value: 'repair', run: repairMenu },
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
+        {
+          title: 'Reusable prompts and include source aliases',
+          value: 'prompt-sources',
+          run: async () => {
+            const current = navigation.checkpoint();
+            const snapshot = await load();
+            if (!current()) {
+              return;
+            }
+            const propose = async (pending: Promise<PromptAssetPlan>) => {
+              const current = navigation.checkpoint();
+              const plan = await pending;
+              const preview = await validatePromptAssets(plan);
+              if (!current()) {
+                return;
+              }
+              await proposeComposition(snapshot, plan, undefined, {
+                title: 'Save prompt source definition?',
+                details: `Known reference consumers:\n${plan.consumers.length === 0 ? 'none' : plan.consumers.join('\n')}\n\n${promptReview(snapshot, preview)}`,
+                validate: async () => {
+                  await validatePromptAssets(plan);
+                },
+              });
+            };
+            openPromptSources(snapshot, {
+              menu,
+              back: navigation.back,
+              alert: (title, message) => navigation.alert({ title, message }),
+              prompt: (title, value, confirmed) =>
+                navigation.prompt({
+                  title,
+                  value,
+                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                  onConfirm: (text) => run(() => confirmed(text)),
+                }),
+              propose: (change) => propose(planPromptAsset(snapshot, change)),
+              references: (agent, references) => propose(planPromptReferences(snapshot, agent, references)),
+            });
+          },
+        },
+        {
+          title: 'Prompt operations and inheritance',
+          value: 'prompts',
+          run: async () => {
+            const current = navigation.checkpoint();
+            const snapshot = await load();
+            if (!current()) {
+              return;
+            }
+            openPrompts(snapshot, {
+              menu,
+              back: navigation.back,
+              prompt: (title, value, confirmed) =>
+                navigation.prompt({
+                  title,
+                  value,
+                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                  onConfirm: (text) => run(() => confirmed(text)),
+                }),
+              propose: async (target, change) => {
+                const current = navigation.checkpoint();
+                const plan = await planPrompt(snapshot, target, change);
+                const preview = await previewFilePlan(plan);
+                if (!current()) {
+                  return;
+                }
+                const authored =
+                  change.field === 'reset' || change.value === undefined
+                    ? 'Remove local values; inherit earlier contributions.'
+                    : JSON.stringify(change.value);
+                await proposeComposition(snapshot, plan, undefined, {
+                  title: 'Save prompt operations?',
+                  details: `Authored here: ${authored.slice(0, 1600)}${authored.length > 1600 ? '… (truncated)' : ''}\n\n${promptReview(snapshot, preview)}`,
+                });
+              },
+            });
+          },
+        },
+        {
+          title: 'Ordered permission rules and configured previews',
+          value: 'permissions',
+          description: 'Ordered rules, native compilation, and scope-specific fallback warnings',
+          run: async () => {
+            const isCurrent = navigation.checkpoint();
+            const snapshot = await load();
+            if (!isCurrent()) {
+              return;
+            }
+            const ask = (title: string, value: string, confirmed: (value: string) => void | Promise<void>) =>
+              navigation.prompt({
+                title,
+                value,
+                // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                onConfirm: (value) => run(() => confirmed(value)),
+              });
+            openPermissions(snapshot, {
+              menu,
+              prompt: ask,
+              back: navigation.back,
+              refresh: navigation.refresh,
+              create: (sourceId, name) =>
+                proposeDefinition(snapshot, {
+                  operation: 'create',
+                  registry: 'configurationPresets',
+                  name,
+                  sourceId,
+                  value: { permissions: [] },
+                }),
+              propose: (target, rules) =>
+                proposeComposition(snapshot, planPermissions(snapshot, target, rules), undefined, {
+                  title: 'Save configured permission rules?',
+                  details: `${permissionStatus}\n\n${rules === undefined ? 'Remove local contributions.' : rules.map((rule, index) => `${index + 1}. ${rule.tool} ${rule.pattern ?? '*'} → ${rule.action}`).join('\n')}`,
+                }),
+              preview: async (target, rules) => {
+                const current = navigation.checkpoint();
+                const candidate = await previewFilePlan(planPermissions(snapshot, target, rules));
+                if (!current()) {
+                  return;
+                }
+                const local = rules.map((rule, index) => ({
+                  agent: 'local',
+                  rule,
+                  origin: {
+                    sourceId: target.sourceId,
+                    pointer: `/${[...target.path, 'permissions', String(index), 'action'].map((part) => part.replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`,
+                    layer: 'selected definition',
+                    operation: 'set' as const,
+                    references: [],
+                    overwritten: [],
+                  },
+                }));
+                const testMatch = (agent: string, contributions: typeof candidate.resolved.permissions) =>
+                  ask('Permission tool to test', 'bash', (tool) =>
+                    ask('Permission input to test', '', (input) => {
+                      const result = previewPermission(contributions, agent, tool, input);
+                      navigation.alert({
+                        title: 'Configured permission match',
+                        message: `${permissionStatus}\n\n${result.fallback === 'native' ? 'No Composer rule matches. Defer to native globals/defaults; no native action is inferred.' : `${result.action}: ${result.matched.permission} ${result.matched.pattern}\n${result.origin?.sourceId ?? ''}#${result.origin?.pointer ?? ''}\nEarlier matching contributions: ${result.origin?.overwritten.map((origin) => `${origin.sourceId ?? ''}#${origin.pointer}`).join(', ') ?? 'none'}`}\n\n${candidate.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}`,
+                      });
+                    }),
+                  );
+                menu('Permission preview scope', [
+                  {
+                    title: 'This definition’s rules only',
+                    value: '+local',
+                    description: 'Excludes other layers and active selections',
+                    run: () => testMatch('local', local),
+                  },
+                  {
+                    title: 'Global configured rules',
+                    value: '+global',
+                    run: () =>
+                      testMatch(
+                        'global',
+                        candidate.resolved.globalPermissions.map((item) => ({ ...item, agent: 'global' })),
+                      ),
+                  },
+                  ...candidate.resolved.selectedAgents.map((agent) => ({
+                    title: agent,
+                    value: `agent:${agent}`,
+                    description: 'All configured active contributions in replay order',
+                    run: () =>
+                      testMatch(agent, [
+                        ...candidate.resolved.globalPermissions.map((item) => ({ ...item, agent })),
+                        ...candidate.resolved.permissions,
+                      ]),
+                  })),
+                ]);
+              },
+            });
+          },
+        },
+        {
+          title: 'Model parameters and provider options',
+          value: 'parameters',
+          run: async () => {
+            const isCurrent = navigation.checkpoint();
+            const snapshot = await load();
+            if (!isCurrent()) {
+              return;
+            }
+            openParameters(snapshot, {
+              menu,
+              prompt: (title, value, confirmed) =>
+                navigation.prompt({
+                  title,
+                  value,
+                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                  onConfirm: (value) => run(() => confirmed(value)),
+                }),
+              propose: async (target, field, text) => {
+                const current = navigation.checkpoint();
+                const plan = planParameter(snapshot, target, field, text);
+                const preview = await previewFilePlan(plan);
+                const details = parameterReview(snapshot, target, preview, await models());
+                if (!current()) {
+                  return;
+                }
+                await proposeComposition(snapshot, plan, undefined, {
+                  title: 'Save model parameters?',
+                  details,
+                  validate: async (candidate) => {
+                    parameterReview(snapshot, target, candidate, await models());
+                  },
+                });
+              },
+            });
+          },
+        },
+        {
+          title: 'Profile activation and scope files',
+          value: 'activation',
+          run: async () => {
+            const isCurrent = navigation.checkpoint();
+            const snapshot = await load();
+            if (!isCurrent()) {
+              return;
+            }
+            openActivation(snapshot, {
+              menu,
+              back: navigation.back,
+              propose: (scope, change) => proposeComposition(snapshot, planScope(snapshot, scope, change)),
+            });
+          },
+        },
         {
           title: 'Author groups, presets and profiles',
           value: 'registry',
@@ -1017,6 +1577,17 @@ export function registerSettings(
         },
       },
       {
+        name: 'config-composer.reload',
+        title: 'Apply saved composition',
+        category: 'Config',
+        namespace: 'palette',
+        slashName: 'reload-configs',
+        run: () => {
+          navigation.reset();
+          return run(() => offerReload(true));
+        },
+      },
+      {
         name: 'config-composer.membership',
         title: 'Agent groups',
         category: 'Config',
@@ -1027,24 +1598,16 @@ export function registerSettings(
           return run(() => groupsMenu());
         },
       },
-      {
-        name: 'config-composer.reload',
-        title: 'Reload saved settings',
-        category: 'Config',
-        namespace: 'palette',
-        slashName: 'reload-configs',
-        run: () => {
-          navigation.reset();
-          return run(() => offerReload(true));
-        },
-      },
     ],
   });
-  api.lifecycle.onDispose(unregister);
+  api.lifecycle.onDispose(() => {
+    unregister();
+    shortcuts.dispose();
+  });
+  return { refreshShortcuts: shortcuts.refresh };
 }
 
-// eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning TUI initializer.
 const ConfigComposerTui: TuiPlugin = async (api) => {
-  registerSettings(api);
+  await registerSettings(api).refreshShortcuts();
 };
 export default { id: 'config-composer', tui: ConfigComposerTui } satisfies TuiPluginModule;

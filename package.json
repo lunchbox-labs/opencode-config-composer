@@ -34,7 +34,8 @@
     "tsconfig.build.json",
     "schema.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -44,6 +45,7 @@
     "format:check": "prettier --check src tests scripts package.json tsconfig*.json *.config.mjs schema.json",
     "test": "node --experimental-strip-types --test tests/*.test.*",
     "test:package": "npm run build && node --experimental-strip-types --test tests/package.integration.ts",
+    "test:integration": "npm run build && node --experimental-strip-types scripts/integration.mjs",
     "test:native": "npm run build && node scripts/opencode.mjs test",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run test:package",
     "prepack": "npm run build"
@@ -62,10 +64,12 @@
     "@opentui/keymap": "0.4.5",
     "@opentui/solid": "0.4.5",
     "@types/node": "24.19.1",
+    "@xterm/headless": "6.0.0",
     "eslint": "10.11.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-regexp": "3.3.1",
     "globals": "17.13.0",
+    "node-pty": "1.1.0",
     "prettier": "3.9.9",
     "solid-js": "1.9.12",
     "typescript": "6.0.3",

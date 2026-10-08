@@ -81,12 +81,14 @@ export type ProfileLayer =
   | { configurationPreset: string; target: PresetTarget; componentGroup?: never };
 
 export interface CompositionDefaults {
+  permissions?: PermissionRule[];
   model?: string;
   small_model?: string;
   agents?: AgentConfiguration;
 }
 
 export interface CompositionOverrides {
+  permissions?: PermissionRule[];
   model?: string;
   small_model?: string;
   agents?: Record<string, AgentConfiguration>;
@@ -94,9 +96,16 @@ export interface CompositionOverrides {
 
 export interface CompositionProfile {
   extends?: string;
+  /** Later profile occurrences replace earlier decisions; absence inherits earlier/native availability. */
+  agentAvailability?: Record<string, boolean>;
   /** Replay parent layers before child layers; do not merge these arrays. */
   layers?: ProfileLayer[];
   overrides?: CompositionOverrides;
+}
+
+export interface ProfileShortcut {
+  activeProfiles: string[];
+  description?: string;
 }
 
 export interface CompositionDocument {
@@ -107,6 +116,7 @@ export interface CompositionDocument {
   componentGroups?: Record<string, ComponentGroup>;
   configurationPresets?: Record<string, ConfigurationPreset>;
   profiles?: Record<string, CompositionProfile>;
+  profileShortcuts?: Record<string, ProfileShortcut>;
   defaults?: CompositionDefaults;
   overrides?: CompositionOverrides;
   /** Absence inherits the shared selection; [] explicitly selects none. */

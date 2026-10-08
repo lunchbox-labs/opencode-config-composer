@@ -1,31 +1,31 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { setTimeout } from 'node:timers/promises';
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { installPackage } from './install-package.ts';
+import { nativeHarness } from './integration/harness.ts';
+import { installedEditor } from './integration/editor.ts';
+import { bundledPermissions } from './integration/bundled-permissions.ts';
 import type * as Storage from '../src/config-composer/storage.ts';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
+import type * as Activation from '../src/config-composer/composition/activation.ts';
 import type * as Authoring from '../src/config-composer/composition/authoring.ts';
-import { nativeAgentNames } from '../src/config-composer/composition/runtime.ts';
+import type * as Runtime from '../src/config-composer/composition/runtime.ts';
 
 // The native registry is the oracle: neither config debug output nor a copied built-in prompt is used.
 test(
   'activated profiles overlay native built-ins and imported custom agents without shadow declarations',
-  { timeout: 120_000 },
+  { timeout: 300_000 },
   async (t) => {
-    const root = await mkdtemp(join(tmpdir(), 'composer-canonical-native-'));
-    const configRoot = join(root, 'config/opencode');
-    const project = join(root, 'project');
-    await mkdir(configRoot, { recursive: true });
+    const host = await nativeHarness(t, 'canonical-native-registry');
+    const { root, configRoot, project, installed } = host;
+    const { snapshot, runtime } = await installedEditor(host);
+    const { nativeAgentNames } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime.js')).href
+    )) as typeof Runtime;
     await mkdir(join(project, '.opencode'), { recursive: true });
     await mkdir(join(root, 'library/checks'), { recursive: true });
-    const installed = await installPackage(configRoot);
-    const { loadSnapshot, planChange, savePlan, saveFilePlan } = (await import(
+    const { planChange, savePlan, saveFilePlan, previewFilePlan, reloadConfiguration } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
     )) as typeof Storage;
     const { planDefinition, previewDefinition } = (await import(
@@ -34,20 +34,32 @@ test(
     const { readRuntimeBaseline } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
     )) as typeof Baseline;
-    const previousModel = process.env.COMPOSER_NATIVE_AGENT_MODEL;
-    process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/project-pin';
+    const previousModel = process.env.COMPOSER_FIXTURE_AGENT_MODEL;
+    process.env.COMPOSER_FIXTURE_AGENT_MODEL = 'fixture/project-pin';
     t.after(() => {
       if (previousModel === undefined) {
-        Reflect.deleteProperty(process.env, 'COMPOSER_NATIVE_AGENT_MODEL');
+        Reflect.deleteProperty(process.env, 'COMPOSER_FIXTURE_AGENT_MODEL');
       } else {
-        process.env.COMPOSER_NATIVE_AGENT_MODEL = previousModel;
+        process.env.COMPOSER_FIXTURE_AGENT_MODEL = previousModel;
       }
     });
     await writeFile(join(project, 'native-agent-prompt.txt'), 'Native project JSON body.\n');
+    const { planScope } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/activation.js')).href
+    )) as typeof Activation;
+    const activate = async (profiles?: string[]) => {
+      const plan = planScope(await snapshot(), 'local', {
+        operation: 'selection',
+        profiles,
+      });
+      await saveFilePlan(plan, async () => {
+        await previewFilePlan(plan);
+      });
+    };
     const projectJson = JSON.stringify({
       $schema: 'https://opencode.ai/config.json',
       agent: {
-        'project-json': { model: '{env:COMPOSER_NATIVE_AGENT_MODEL}', prompt: '{file:./native-agent-prompt.txt}' },
+        'project-json': { model: '{env:COMPOSER_FIXTURE_AGENT_MODEL}', prompt: '{file:./native-agent-prompt.txt}' },
       },
     });
     const projectMarkdown =
@@ -124,69 +136,13 @@ test(
         agent: { plan: { model: 'fixture/pinned' } },
       }),
     );
-    await assert.rejects(loadSnapshot(configRoot, project, undefined, project, '/'), /Duplicate native agent identity/);
+    await assert.rejects(snapshot(), /Duplicate native agent identity/);
     await rm(join(project, '.opencode/agent/project-md.md'));
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      XDG_CONFIG_HOME: join(root, 'config'),
-      XDG_DATA_HOME: join(root, 'data'),
-      XDG_STATE_HOME: join(root, 'state'),
-      XDG_CACHE_HOME: join(root, 'cache'),
-      OPENCODE_TEST_HOME: root,
-      OPENCODE_DB: join(root, 'db.sqlite'),
-      OPENCODE_DISABLE_AUTOUPDATE: '1',
-      OPENCODE_DISABLE_MODELS_FETCH: '1',
-      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true',
-      OPENCODE_CONFIG: '',
-      OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'fixture/native' }),
-      OPENCODE_SERVER_PASSWORD: '',
-    };
-    delete env.OPENCODE_CONFIG_DIR;
-    const child = spawn(
-      process.env.OPENCODE_BIN ?? 'opencode',
-      ['serve', '--hostname', '127.0.0.1', '--port', '0', '--print-logs'],
-      { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    const exited = once(child, 'exit').catch(() => undefined);
-    t.after(async () => {
-      child.kill();
-      const force = globalThis.setTimeout(() => child.kill('SIGKILL'), 3000);
-      force.unref();
-      await exited;
-      globalThis.clearTimeout(force);
-      child.stdout.destroy();
-      child.stderr.destroy();
-      await rm(root, { recursive: true, force: true });
+    await host.start({
+      variables: { COMPOSER_FIXTURE_AGENT_MODEL: 'fixture/project-pin' },
+      configContent: { model: 'fixture/native' },
     });
-    let logs = '';
-    child.stdout.on('data', (data: Buffer) => {
-      logs += data.toString();
-    });
-    child.stderr.on('data', (data: Buffer) => {
-      logs += data.toString();
-    });
-    let url: string | undefined;
-    for (let i = 0; i < 200; i++) {
-      url = /http:\/\/127\.0\.0\.1:\d+/.exec(logs)?.[0];
-      if (url !== undefined) {
-        break;
-      }
-      if (child.exitCode !== null) {
-        throw new Error(logs);
-      }
-      await setTimeout(100);
-    }
-    assert.ok(url !== undefined, logs);
-    async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-      const response = await fetch(`${url}${path}`, {
-        method,
-        headers: { 'x-opencode-directory': project, 'content-type': 'application/json' },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        signal: AbortSignal.timeout(30_000),
-      });
-      assert.ok(response.ok, `${path}: ${await response.clone().text()}\n${logs.slice(-3000)}`);
-      return (await response.json()) as T;
-    }
+    const api = <T>(path: string, method = 'GET', body?: unknown) => host.api<T>(path, body, method);
     interface Agent {
       name: string;
       native: boolean;
@@ -197,22 +153,39 @@ test(
       options: Record<string, unknown>;
       model?: { providerID: string; modelID: string };
     }
+    const sharedPath = join(configRoot, 'config-composer.jsonc');
+    const sharedText = await readFile(sharedPath, 'utf8');
+    await rm(sharedPath);
+    const emptySnapshot = await snapshot();
+    assert.equal(emptySnapshot.sources.documents.length, 0);
+    const firstSource = planScope(emptySnapshot, 'shared', { operation: 'create' });
+    await saveFilePlan(firstSource, async () => {
+      await previewFilePlan(firstSource);
+    });
+    const savedEmpty = await snapshot();
+    await reloadConfiguration(savedEmpty, async (plugin) => {
+      await api('/global/config', 'PATCH', { plugin });
+    });
+    assert.equal((await runtime()).baseline.model, 'fixture/native');
+    assert.equal(await readFile(sharedPath, 'utf8'), '{}\n');
+    await writeFile(sharedPath, sharedText);
+    await api('/instance/dispose', 'POST');
     const baseline = await api<Agent[]>('/agent');
     const conversation = await api<{ id: string; title: string }>('/session', 'POST', {
       title: 'Existing project conversation',
     });
-    const runtimeLocation = { root: project, directory: project };
+    const runtimeLocation = (await runtime()).location;
     const localBaseline = join(project, '.opencode/config-composer.local.jsonc');
     await writeFile(localBaseline, '{"activeProfiles":["global-child"]}');
     await api('/instance/dispose', 'POST');
     const composed = await api<Record<string, unknown>>('/config');
-    assert.equal(composed.model, 'fixture/composer', logs.slice(-5000));
+    assert.equal(composed.model, 'fixture/composer', 'the profile global override applies');
     const native = readRuntimeBaseline(composed, runtimeLocation, configRoot);
     assert.equal(native.model, 'fixture/native', 'native config-content input supersedes disk model');
-    process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/different-client-environment';
-    await assert.rejects(loadSnapshot(configRoot, project, native, project, '/'), /same environment.*reload/s);
-    process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/project-pin';
-    const parentSnapshot = await loadSnapshot(configRoot, project, native, project, '/');
+    process.env.COMPOSER_FIXTURE_AGENT_MODEL = 'fixture/different-client-environment';
+    await assert.rejects(snapshot(), /same environment.*restart/s);
+    process.env.COMPOSER_FIXTURE_AGENT_MODEL = 'fixture/project-pin';
+    const parentSnapshot = await snapshot();
     const clearParent = planDefinition(parentSnapshot, {
       operation: 'patch',
       registry: 'profiles',
@@ -239,27 +212,15 @@ test(
     assert.ok(!(await readFile(join(configRoot, 'opencode.json'), 'utf8')).includes('__configComposerRuntime'));
     await rm(localBaseline);
     await api('/instance/dispose', 'POST');
-    const snapshot = await loadSnapshot(
-      configRoot,
-      project,
-      readRuntimeBaseline(await api('/config'), runtimeLocation, configRoot),
-      project,
-      '/',
-    );
-    assert.ok(snapshot.agents.some((agent) => agent.name === 'project-json'));
-    assert.ok(snapshot.agents.some((agent) => agent.name === 'project-md'));
-    assert.ok(snapshot.agents.some((agent) => agent.name === 'ancestor'));
-    assert.equal(snapshot.nativeAgents['project-md'].model, undefined);
+    const observed = await snapshot();
+    assert.ok(observed.agents.some((agent) => agent.name === 'project-json'));
+    assert.ok(observed.agents.some((agent) => agent.name === 'project-md'));
+    assert.ok(observed.agents.some((agent) => agent.name === 'ancestor'));
+    assert.equal(observed.nativeAgents['project-md'].model, undefined);
     await savePlan(
-      planChange(snapshot, { kind: 'membership', agent: 'project-md', groups: ['work', 'editor-created'] }),
+      planChange(observed, { kind: 'membership', agent: 'project-md', groups: ['work', 'editor-created'] }),
     );
-    assert.equal(
-      (
-        (await loadSnapshot(configRoot, project, undefined, project, '/')).config.agent as
-          Record<string, unknown> | undefined
-      )?.['project-md'],
-      undefined,
-    );
+    assert.equal(((await snapshot()).config.agent as Record<string, unknown> | undefined)?.['project-md'], undefined);
     assert.equal(await readFile(join(project, 'opencode.jsonc'), 'utf8'), projectJson);
     assert.equal(await readFile(join(project, '.opencode/agents/project-md.md'), 'utf8'), projectMarkdown);
     assert.deepEqual(
@@ -276,7 +237,7 @@ test(
         operation: 'create',
         registry: 'profiles',
         name: 'editor-profile',
-        sourceId: join(configRoot, 'config-composer.jsonc'),
+        sourceId: await realpath(join(configRoot, 'config-composer.jsonc')),
       },
       {
         operation: 'patch',
@@ -288,18 +249,29 @@ test(
       { operation: 'rename', registry: 'profiles', name: 'editor-profile', nextName: 'edited-profile' },
     ] as const) {
       const plan = planDefinition(
-        await loadSnapshot(configRoot, project, undefined, project, '/'),
+        await snapshot(),
         change.operation === 'patch' ? { ...change, path: [...change.path] } : change,
       );
       await saveFilePlan(plan, async () => {
         await previewDefinition(plan);
       });
     }
-    assert.deepEqual((await loadSnapshot(configRoot, project, undefined, project, '/')).sources.activeProfiles, []);
-    const local = join(project, '.opencode/config-composer.local.jsonc');
-    await writeFile(local, '{"activeProfiles":["edited-profile","work"]}');
+    assert.deepEqual((await snapshot()).sources.activeProfiles, []);
+    await activate(['edited-profile', 'work']);
     await api('/instance/dispose', 'POST');
     const activated = await api<Agent[]>('/agent');
+    const skills = await api<{ name: string; location: string }[]>('/skill');
+    const checks = skills.find((item) => item.name === 'checks');
+    assert.ok(checks !== undefined);
+    assert.equal(await realpath(checks.location), await realpath(join(root, 'library/checks/SKILL.md')));
+    const skillRule: Agent['permission'][number] = {
+      permission: 'external_directory',
+      pattern: join(dirname(checks.location), '*'),
+      action: 'allow',
+    };
+    const normalizeBundled = await bundledPermissions(host);
+    const normalizeRegistry = (agents: Agent[]) =>
+      agents.map((agent) => ({ ...agent, permission: normalizeBundled(agent.permission) }));
     for (const before of baseline.filter((item) => item.native)) {
       const after = activated.find((item) => item.name === before.name);
       assert.ok(after !== undefined, before.name);
@@ -307,16 +279,10 @@ test(
       assert.equal(after.prompt ?? undefined, before.prompt ?? undefined, `preserve ${before.name} native prompt`);
       assert.equal(after.mode, before.mode);
       assert.equal(after.hidden ?? undefined, before.hidden ?? undefined);
-      // OpenCode itself grants access to configured native skill directories.
-      const skillRule = {
-        permission: 'external_directory',
-        pattern: `${join(root, 'library/checks')}/*`,
-        action: 'allow',
-      };
       assert.ok(after.permission.some((rule) => JSON.stringify(rule) === JSON.stringify(skillRule)));
       assert.deepEqual(
-        after.permission.filter((rule) => rule.pattern !== skillRule.pattern),
-        before.permission,
+        normalizeBundled(after.permission.filter((rule) => rule.pattern !== skillRule.pattern)),
+        normalizeBundled(before.permission),
       );
       assert.deepEqual(after.model, {
         providerID: 'fixture',
@@ -341,12 +307,21 @@ test(
     assert.deepEqual(reviewer.options.groups, ['work']);
     const commands = await api<{ name: string; agent?: string }[]>('/command');
     assert.equal(commands.find((item) => item.name === 'review')?.agent, 'reviewer');
-    const skills = await api<{ name: string; location: string }[]>('/skill');
-    assert.ok(skills.some((item) => item.name === 'checks' && item.location === join(root, 'library/checks/SKILL.md')));
-    await writeFile(local, '{"activeProfiles":[]}');
+    await activate([]);
     await api('/instance/dispose', 'POST');
     const cleared = await api<Agent[]>('/agent');
-    assert.deepEqual(cleared, baseline, 'empty local selection restores the exact native registry');
+    assert.deepEqual(
+      normalizeRegistry(cleared),
+      normalizeRegistry(baseline),
+      'empty local selection restores the native registry with equivalent bundled directory grants',
+    );
+    await activate();
+    await api('/instance/dispose', 'POST');
+    assert.deepEqual(
+      normalizeRegistry(await api<Agent[]>('/agent')),
+      normalizeRegistry(baseline),
+      'absent local selection inherits empty shared selection',
+    );
     const retained = await api<{ id: string; title: string }>(`/session/${conversation.id}`);
     assert.equal(retained.id, conversation.id);
     assert.equal(retained.title, conversation.title);

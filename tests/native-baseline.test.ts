@@ -12,7 +12,7 @@ test('server and editor native agent comparison normalizes groups but rejects di
     { worker: { ...server.worker, prompt: 'Other prompt' } },
     { worker: { ...server.worker, options: { groups: [] } } },
   ]) {
-    assert.throws(() => verifyNativeAgents(local, changed), /same environment.*reload/s);
+    assert.throws(() => verifyNativeAgents(local, changed), /same environment.*restart/s);
   }
 });
 

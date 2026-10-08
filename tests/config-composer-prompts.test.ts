@@ -118,7 +118,7 @@ test('server stages every model and prompt before mutation and recomposes withou
     }),
   );
   const hooks = await server.server({} as PluginInput, { configFile: file });
-  const agents: Record<string, AgentSettings> = {
+  let agents: Record<string, AgentSettings> = {
     good: { groups: ['developers'], prompt: 'Authored' },
     bad: { groups: ['developers'], prompt: '{{include:@shared/missing.md}}' },
     title: { groups: ['developers'] },
@@ -127,12 +127,16 @@ test('server stages every model and prompt before mutation and recomposes withou
   await assert.rejects(hooks.config!({ agent: agents }), /Could not read/);
   assert.deepEqual(agents, before);
   await writeFile(join(root, 'shared/missing.md'), 'Now available');
-  await hooks.config!({ agent: agents });
+  const next = { agent: agents };
+  await hooks.config!(next);
+  assert.deepEqual(agents, before, 'native input remains unchanged');
+  agents = next.agent;
   assert.equal(agents.good.model, 'fixture/fast');
   assert.equal(agents.good.variant, 'high');
   assert.equal(agents.good.prompt, 'Authored\n\nDefault after');
   assert.equal(agents.title.prompt, undefined);
-  await hooks.config!({ agent: agents });
+  await hooks.config!(next);
+  agents = next.agent;
   assert.equal(agents.good.prompt, 'Authored\n\nDefault after');
   assert.equal(agents.bad.prompt, 'Now available\n\nDefault after');
   assert.equal(agents.good.model, 'fixture/fast');
@@ -228,20 +232,25 @@ test('recomposition reloads fragments, removes prior inherited fields, and retai
     }),
   );
   const hooks = await server.server({} as PluginInput, { configFile: file });
-  const worker: AgentSettings = { groups: ['base'], prompt: '{{include:@shared/worker.md}}' };
-  await hooks.config!({ model: 'fixture/first', agent: { worker } });
+  let worker: AgentSettings = { groups: ['base'], prompt: '{{include:@shared/worker.md}}' };
+  const compose = async (model: string) => {
+    const config = { model, agent: { worker } };
+    await hooks.config!(config);
+    worker = config.agent.worker;
+  };
+  await compose('fixture/first');
   assert.equal(worker.model, 'fixture/first');
   await writeFile(join(root, 'shared/worker.md'), 'Second');
-  await hooks.config!({ model: 'fixture/second', agent: { worker } });
+  await compose('fixture/second');
   assert.equal(worker.model, 'fixture/second');
   assert.equal(worker.prompt, 'Second');
   worker.groups = [];
-  await hooks.config!({ model: 'fixture/second', agent: { worker } });
+  await compose('fixture/second');
   assert.equal(worker.model, undefined);
   worker.model = 'fixture/pinned';
   worker.variant = 'high';
   worker.prompt = 'New authored prompt';
-  await hooks.config!({ model: 'fixture/second', agent: { worker } });
+  await compose('fixture/second');
   assert.equal(worker.model, 'fixture/pinned');
   assert.equal(worker.variant, 'high');
   assert.equal(worker.prompt, 'New authored prompt');
@@ -255,11 +264,14 @@ test('recomposition reloads fragments, removes prior inherited fields, and retai
     }),
   );
   const variantHooks = await server.server({} as PluginInput, { configFile: variantFile });
-  const inherited: AgentSettings = { groups: ['base'], prompt: 'Authored' };
-  await variantHooks.config!({ agent: { inherited } });
+  let inherited: AgentSettings = { groups: ['base'], prompt: 'Authored' };
+  const candidate = { agent: { inherited } };
+  await variantHooks.config!(candidate);
+  inherited = candidate.agent.inherited;
   assert.equal(inherited.variant, 'low');
   inherited.groups = [];
-  await variantHooks.config!({ agent: { inherited } });
+  await variantHooks.config!(candidate);
+  inherited = candidate.agent.inherited;
   assert.equal(inherited.model, undefined);
   assert.equal(inherited.variant, undefined);
 });

@@ -17,9 +17,22 @@ export const MAX_INCLUDES = 256;
 const INCLUDE = /\\?\{\{include:([^{}]*)\}\}|\\?\{\{include:/g;
 const SOURCE_REFERENCE = /^@([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\/(.+)$/;
 
+export interface PromptDependency {
+  path: string;
+  canonicalPath: string;
+  includePaths?: string[];
+  text: string;
+  mode: number;
+  writable: false;
+  directories: { path: string; canonicalPath: string }[];
+}
+export type PromptRead = (dependency: PromptDependency) => void;
+
 interface Expansion {
   sources: Record<string, string>;
   includes: number;
+  onRead?: PromptRead;
+  overlays?: ReadonlyMap<string, string>;
 }
 
 function promptSize(text: string): void {
@@ -44,7 +57,8 @@ function safeSnippetPath(path: string): boolean {
   );
 }
 
-async function snippet(reference: string, sources: Record<string, string>): Promise<{ text: string; path: string }> {
+async function snippet(reference: string, context: Expansion): Promise<{ text: string; path: string }> {
+  const { sources } = context;
   const match = SOURCE_REFERENCE.exec(reference);
   if (match === null) {
     throw new SettingsError('Use @source/path.md or @source/path.txt in a prompt include.');
@@ -89,7 +103,20 @@ async function snippet(reference: string, sources: Record<string, string>): Prom
       if (text.includes('\0')) {
         throw new SettingsError('Prompt snippets must contain text without NUL bytes.');
       }
-      return { text: text.trim(), path: target };
+      context.onRead?.({
+        path: resolve(root, path),
+        canonicalPath: target,
+        includePaths: [resolve(root, path)],
+        text,
+        mode: current.mode & 0o777,
+        writable: false,
+        directories: [{ path: root, canonicalPath: sourceRoot }],
+      });
+      const candidate = context.overlays?.get(resolve(root, path)) ?? context.overlays?.get(target) ?? text;
+      if (Buffer.byteLength(candidate, 'utf8') > MAX_SNIPPET_BYTES || candidate.includes('\0')) {
+        throw new SettingsError('Prompt snippets must contain text without NUL bytes, no larger than 64 KiB.');
+      }
+      return { text: candidate.trim(), path: target };
     } finally {
       await file.close();
     }
@@ -119,7 +146,7 @@ async function expand(text: string, context: Expansion, stack: string[]): Promis
       if (context.includes > MAX_INCLUDES || stack.length >= MAX_INCLUDE_DEPTH) {
         throw new SettingsError('The prompt include count or nesting limit was exceeded.');
       }
-      const included = await snippet(reference, context.sources);
+      const included = await snippet(reference, context);
       if (stack.includes(included.path)) {
         throw new SettingsError('The prompt includes contain a cycle. Remove the recursive include.');
       }
@@ -137,8 +164,13 @@ function operation(text: string): string {
   return SOURCE_REFERENCE.test(text) ? `{{include:${text}}}` : text;
 }
 
-export async function expandIncludes(text: string, sources: Record<string, string>): Promise<string> {
-  return expand(text, { sources, includes: 0 }, []);
+export async function expandIncludes(
+  text: string,
+  sources: Record<string, string>,
+  onRead?: PromptRead,
+  overlays?: ReadonlyMap<string, string>,
+): Promise<string> {
+  return expand(text, { sources, includes: 0, onRead, overlays }, []);
 }
 
 export async function composePrompts(

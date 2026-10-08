@@ -10,11 +10,11 @@ The npm package name is **`@lunchbox-labs/opencode-config-composer`**.
 
 The canonical composition format is specified in [the schema contract](docs/composition-schema.md).
 `schema.json` describes that format, including components, mixed groups, presets, and named profiles.
-The draft server and model/membership editors consume this format and explicit imports. Profile/component
-authoring screens and native permission compilation/failure handling remain incomplete, so this branch is not release-ready. OpenCode can catch
-a config-hook error and continue with native settings; rejecting a permission profile is not fail-closed
-enforcement. The setup examples below describe the preceding released format, which the canonical
-server rejects with migration guidance. Use the schema contract for canonical configuration.
+The draft server and composition editors consume this format and explicit imports. Native permission
+compilation uses the ordered canonical contributions. Unsupported scopes warn and continue with the
+fallback described below. Scoped apply and the final integration acceptance suite remain incomplete,
+so this branch is not release-ready. The setup examples below describe the preceding released format,
+which the canonical server rejects with migration guidance. Use the schema contract for canonical configuration.
 
 The model editor updates only model/reference/variant fields in canonical `componentGroups` and
 `configurationPresets`, retaining their permissions, parameters, prompt settings, and component membership.
@@ -152,13 +152,105 @@ Includes accept contained `.md` and `.txt` UTF-8 files. Unsafe paths, escaping s
 and excessive depth or size are rejected. Limits are 64 KiB per snippet, 256 KiB per composed prompt,
 32 include levels, and 256 include expansions. Settings files have a 1 MiB limit.
 
+## Bundled reference skills
+
+The installed package registers three native skills: `config-composer-explain`, `config-composer-create`,
+and `config-composer-migrate`. Load the relevant skill through OpenCode's native skill tool when explaining
+settings, creating reusable definitions, or migrating legacy configuration. Each skill includes relative
+reference files or validated examples in the package. No personal skill installation is required.
+
+The bundle uses a module-relative native skill directory, preserves existing skill paths and URLs, and
+does not inject bodies into agent prompts or change skill permissions. Native permissions can deny loading
+these skills. The guidance remains available when Composer source validation fails, so migration and repair
+help can load without applying invalid profile fields. Missing or malformed package resources produce a diagnostic directing reinstallation.
+The creation example is inactive until selected; the migration example shows an explicit selection needed
+to preserve its illustrated legacy behavior. Substitute actual model IDs and retain native files.
+This uses native on-demand loading; automatic Composer directory discovery and a custom lazy loader
+remain outside this feature.
+
 ## Settings editor
 
 Use `/compose` to open the composition hub. It links the model and membership editors and a read-only
 saved preview of active profiles, replay order, resolved fields, source paths, references, and overwritten
 origins. Back and Escape return across sections; `/agent-models` and `/agent-groups` remain available.
 The preview distinguishes saved composition from the running configuration and session model selections.
-Ordered permission contributions are inspectable, with enforcement integration still pending.
+Ordered permission contributions, compiled policies, native origins, and compilation warnings are inspectable.
+
+The prompt screen selects an explicit writable JSONC source and target, then edits ordered multiline
+prepend/append fragments. Fragments can contain include markers or a complete `@source/file.md` shorthand.
+Effective prompt provenance lists the authored base, contributing fragment pointers, reusable prompt
+definitions, inheritance controls, and included files; unavailable native origins stay explicit.
+Agent components and explicit agent overrides also expose `inheritDefaults` and `inheritGroups` controls.
+Removing a local operation or resetting prompt settings preserves earlier contributions and the authored
+base body. Prompts without an authored native body remain native. The confirmation shows affected authored
+prompts and included file paths; reload remains explicit.
+
+Prompt previews use pending file edits when a snippet is also an edited source. Included files, including
+newly activated references, are captured once per canonical path and checked again before writes. A changed
+file or redirected alias requires reopening the editor. Invalid or missing includes are rejected even for
+an inactive prompt target.
+
+The prompt-source screen creates, edits, renames, and deletes reusable `components.prompts` and
+`sourceDirectories` aliases. New definitions require an explicit JSONC destination. Existing definitions
+show their declaring file; relative paths keep that origin, including definitions imported from another
+directory. Prompt bodies can be multiline text or an explicit file. Composer agent components can append,
+reorder, repeat, remove, and reset their `promptRefs` without replacing their base prompt.
+
+Renames review known loaded consumers and update writable JSONC references; referenced deletion is rejected.
+Alias references in retained Markdown/native bodies or nested snippets must first be changed in their
+own declaring source. Reference inspection covers loaded definitions, declared component files, native agent
+bodies, and their nested includes; it does not scan directories for additional consumers. Escaped literal
+include markers are preserved. New files and directory identities are captured through confirmation so
+changed content or redirected aliases abort before writes, including inactive definitions. A corrected alias
+path is validated against the proposed directory. Built-in bodies and native skill files are not rewritten.
+
+`/compose` also provides **Repair invalid memberships** when an active group names an unavailable or disabled
+agent, a missing skill/command/prompt member, or a native agent names an undefined group. The repair screen
+retains the saved diagnostic and source locations without presenting an effective configuration for invalid
+input. Accumulate edits to several group member lists, define a missing group in an explicit writable JSONC
+source, or choose a shared/project/local profile selection. Read-only definitions may instead be deactivated
+through an explicit writable selection scope. Native definitions and bodies are retained.
+
+Review validates the complete candidate before any file is saved; an incomplete repair remains in the draft.
+Saving rechecks source freshness, native baseline, catalogs, project authorization, and newly referenced files.
+Apply still requires an explicit reload. This recovery path covers membership resolution in otherwise valid
+sources. Malformed JSONC/frontmatter, missing imports, invalid profile/preset references, and cycles retain their
+specific validation errors and must be corrected in the named source before this editor can inspect them.
+If native inputs disagree after instance-only disposal, restart or fully reload the server before repair.
+The pinned host can retain globally cached agent fields across instance disposal; the editor rejects that
+ambiguous baseline rather than guessing which saved values were native.
+
+The permission editor selects a writable source and configuration target, then adds, edits, removes,
+and reorders `{tool, pattern, action}` rules. Repeated rules remain ordered. A blank pattern matches all
+inputs; actions are `allow`, `ask`, or `deny`. Removing local rules or saving an empty list leaves earlier
+contributions available. Permission-only presets can be created without a model binding and remain inactive
+until explicitly selected through a profile layer.
+
+Configured match previews can inspect one definition or an active agent's complete contribution sequence.
+They identify the latest matching rule and its source, including earlier matching candidates. A later
+`allow` can replace an earlier `deny`; a later nonmatch leaves the earlier match intact. No Composer match
+defers to native permissions without guessing their action. These previews describe configured contributions;
+native defaults and remembered session approvals can change the effective result. Saves preserve the running
+configuration until explicit Reload. Review includes any compilation warning for the candidate.
+
+Global rules use `defaults.permissions` and `overrides.permissions`. Active profile `overrides.permissions`
+replay in profile order between scoped defaults and scoped overrides. `defaults.agents.permissions` applies
+only to selected agents. Agent contributions compile after the applied global policy and native agent rules.
+An unmatched contribution retains those fallbacks. Compiled provenance retains authored array pointers,
+including for generated wildcard keys; failed scopes retain native origins.
+
+Unsupported native ordering or a rule shape that the pinned host cannot express skips **all Composer
+permission contributions for that scope**. An affected agent retains its native permission object and the
+successfully applied global policy. An affected global scope retains native global permissions; independent
+agent policies still compile. Models, prompts, commands, skills, and other valid policies continue to apply.
+Fallback can be more permissive and omit intended deny rules. Composer does not alter session rules or
+introduce additional tool blocking. Use concrete tool names to resolve unsupported wildcard interleaving.
+
+Warnings name the scope, source paths, JSON pointers, conflict, and fallback. They appear on stderr and as
+native TUI toast events. Startup delivery is nonblocking. Active warnings replay when an affected session is
+used; identical warnings are deduplicated per instance/session, with change and recovery notifications.
+Reload starts a new instance and may repeat an active warning. A failed notification transport does not
+prevent other settings from applying; stderr remains available to headless clients.
 
 The hub's definition editor creates, renames, and deletes component groups, configuration presets, and profiles.
 New definitions require an explicit existing writable JSONC destination and do not activate profiles.
@@ -172,19 +264,108 @@ reuse the existing picker.
 Previews use the server's uncomposed native model and agent baseline, including native config-content inputs.
 Clearing a profile override therefore restores the native fallback, including `opencode:model` references.
 The matching Composer server plugin must be loaded. Different client/server native agent inputs or later
-plugin changes block editing with reload guidance. Runtime baseline metadata is never written to source files;
-reload accepts saved native edits that have not yet reached the running server.
-Project/local source creation and profile activation controls are separate follow-ups.
+plugin changes block editing with restart guidance. Runtime baseline metadata is never written to source files.
+Native configuration edits require restart; Composer apply uses the running native baseline.
 
+The activation screen explicitly selects shared, project, or local scope. An ordered local list replaces
+an earlier selection; an absent key inherits, and an empty list selects no profiles. Later explicit
+selections are shown as masking earlier scopes. Saving never deletes conversations; reload remains explicit.
+Missing fixed scope files can be created as new JSONC destinations, including the first optional source.
+With no optional sources, the server preserves native configuration and publishes the editor baseline;
+explicitly configured missing files and malformed sources still fail validation.
+New files are published without replacing concurrent files, and project writes require their own shared
+filesystem check. Native project agent files and external imports remain read-only.
+
+The parameter screen selects an explicit source and configuration target before editing `temperature`,
+`topP`, `topK`, `maxOutputTokens`, or custom provider options as JSON. Targets include scoped agent defaults,
+groups, presets, component agents, and scoped/profile agent overrides. Blank input removes one local field;
+reset removes the local parameter object so earlier contributions can apply. Saves retain model bindings
+and sibling settings. The review shows effective parameters for changed active consumers; later contributions
+and native pins can mask an edit.
+
+Provider catalog capabilities and output limits reject known unsupported controls before saving. Model
+changes revalidate retained parameters. Custom options are structurally checked; the pinned OpenAI-compatible
+adapter additionally checks the type of `reasoningEffort`, while other options remain provider-unverified.
+Inactive profile references to native model slots defer model-dependent checks until activation supplies
+their effective model context. Reload applies saved parameters; native agent settings and selected variants
+retain their precedence at dispatch.
+
+Define optional profile action shortcuts in a composition document or explicit import:
+
+```jsonc
+{
+  "profileShortcuts": {
+    "coding": { "activeProfiles": ["base", "coding"], "description": "Coding workflow" },
+    "quiet": { "activeProfiles": [], "description": "Select no profiles" }
+  }
+}
+```
+
+Each referenced profile must exist. These are TUI actions: `/coding` opens an explicit shared/project/local
+destination choice, then the ordinary effective preview, save, and separate apply flow. Declarations never
+activate profiles or send a model prompt. The destination view identifies scope masking; `[]` selects none.
+Shortcuts register at TUI startup and refresh after Composer apply. Use **Compose → Refresh profile shortcuts**
+after editing their definitions or switching instances. A changed mapping or instance rejects a stale action.
+Profile renames update shortcut references; deletion of a referenced profile is rejected.
+
+Names use the canonical lowercase name syntax. At most 128 shortcuts may be loaded. Duplicate names,
+Composer's reserved actions (`compose`, `agent-models`, `agent-groups`, `reload-configs`), component/native
+prompt command names, and registered TUI slash names or aliases are rejected. A later TUI command collision
+removes Composer's shortcut registrations and reports the conflict; existing commands retain their behavior.
+Failed refresh leaves the regular Composer entrypoints available so sources can be corrected.
+
+Profiles can control workflow agent availability without removing definitions or memberships:
+
+```jsonc
+{
+  "profiles": {
+    "planning": { "agentAvailability": { "build": false, "plan": true } },
+    "coding": { "agentAvailability": { "build": true, "plan": false } }
+  },
+  "activeProfiles": ["planning"]
+}
+```
+
+Each ordered parent/profile occurrence contributes its named boolean decisions; the last decision for an agent
+wins. An absent decision inherits earlier/native availability. `true` explicitly enables an existing native
+agent or declared component, selecting that component before this profile's own layers. It cannot satisfy an
+earlier profile's requirement that a preset target already be selected. `false` preserves the agent's composed
+definition and group settings while publishing native `disable: true`. Removing a decision restores earlier/native
+availability; component agents still require selection. A native-disabled member with no explicit workflow decision
+still fails active group validation.
+
+Targets must exist. Internal `title`, `summary`, and `compaction` agents cannot be toggled. Hidden and disabled
+remain distinct: enabling a hidden agent does not make it visible. At least one enabled, visible primary agent
+must remain (`mode: all` also qualifies), and an explicit native `default_agent` must remain valid. Composer
+does not silently change that native default. Commands targeting a disabled Composer agent fail validation.
+
+Use **Compose → Definitions → Profiles → Agent availability** to stage enable, disable, or inherit decisions.
+**Saved composition preview → Agent availability** shows the complete available/dormant registry and decision
+origins. Save preserves native files and conversation history; explicit apply waits for idle parent and child
+work. After native refresh, the TUI falls back to its first remaining visible primary if the selected agent was
+disabled; it may return to the remembered selection when re-enabled. Native TUI and headless fallback order can
+differ. An explicit headless request naming a disabled agent fails before model dispatch; continue the same
+conversation with an enabled agent. Restart retains the saved selection. There is no uninterrupted hot-switch
+guarantee; the host does not offer an atomic idle-and-dispose operation.
 
 Use `/agent-models` for global defaults, presets, groups, and individual overrides.
 Use `/agent-groups` for ordered memberships. Model and variant choices come from the provider API.
 Review the proposed scope and retained pins before saving. The editor preserves prompts, comments,
 unrelated settings, and permissions. Stale snapshots, concurrent edits, and symlinked settings are rejected.
 
-Reload is explicit. It invalidates configuration in **all workspaces on the server**.
-Wait for all agents to finish first; the editor can check activity only in the current workspace.
-Saved changes can instead take effect at restart. A current session's selected model may still take precedence.
+Use `/reload-configs` or the hub's reload action to explicitly apply saved Composer changes to the **current instance**.
+The review shows its directory/worktree and saved/applied revision. Saving leaves changes pending; failed saves and
+failed applies remain distinguishable. Other opened instances keep their current configuration and conversations
+remain saved. Before disposal the editor checks all session activity in that instance, including child sessions;
+a busy instance requires an explicit retry. OpenCode has no atomic idle-and-dispose API, so avoid starting another
+request while applying. Confirmation rejects changed sources, instances, and connections. Success requires a fresh
+config publication for the exact reviewed Composer inputs and effective result, plus refreshed provider/agent APIs.
+
+Apply uses the running native baseline. **Native JSON or native-agent edits require restart**; instance disposal does
+not invalidate OpenCode's global config cache. Even a newly opened instance can inherit older native globals after
+a disk edit. An observed native file digest detects changes since observation, but does not prove cache freshness.
+Native JSON saves in the editor show a restart requirement. Composer's applied revision never claims those native
+bytes were loaded. A current session's selected model can still take precedence over newly applied defaults.
 Nested dialogs retain Back/Escape navigation without reopening after lifecycle or route changes.
 
 ## Development and checks
@@ -233,3 +414,10 @@ Published source and runtime files remain inspectable. Export restrictions are a
 ## License
 
 This project is licensed under MIT. See [LICENSE](LICENSE).
+
+## Integration tests
+
+Run `npm run test:integration` for the installed-package native suite on Linux or Windows x64.
+It uses OpenCode 1.18.34 and a deterministic local provider. See the
+[integration guide and coverage matrix](docs/integration-tests.md) for setup, assertions,
+diagnostics, and remaining feature coverage.

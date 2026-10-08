@@ -11,7 +11,8 @@ export async function verifySharedFilesystem(api: TuiPluginApi, root: string, se
     const content = randomBytes(32).toString('hex');
     await writeFile(join(probe, 'proof.txt'), content, { mode: 0o600, flag: 'wx' });
     const response = await client.file.read(
-      { directory: serverRoot, path: join(serverRoot, basename(probe), 'proof.txt') },
+      // The host reads RelativePath within the selected location, including on Windows.
+      { directory: serverRoot, path: `${basename(probe)}/proof.txt` },
       { signal: AbortSignal.any([api.lifecycle.signal, AbortSignal.timeout(5000)]) },
     );
     if (response.error !== undefined || response.data.type !== 'text' || response.data.content !== content) {
