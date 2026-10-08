@@ -1,0 +1,5 @@
+{
+  "$schema": "https://opencode.ai/tui.json",
+  // Use the same installed release as opencode.jsonc for /compose and its editors.
+  "plugin": ["@lunchbox-labs/opencode-config-composer@VERSION"],
+}

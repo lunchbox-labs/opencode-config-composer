@@ -52,16 +52,24 @@ or restrict access. A group's `prompts` list alone does not inject those prompts
 ## Complete review and programming example
 
 Copy the complete [example directory](docs/examples/review-programming) together, keeping relative paths.
-Place its `config-composer.jsonc`, `profiles.jsonc` and `skills/` in your OpenCode configuration directory,
-or put them in the project's `.opencode/` directory. All referenced resources are supplied.
+Place its contents in your OpenCode configuration directory, or in the project's `.opencode/` directory.
+For project use, keep the shared Composer plugin registrations from [Install](#install) for its editors.
+The [directory layout and loading guide](docs/examples/review-programming/README.md) covers native
+`agents/`, `commands/` and `skills/`, shared `prompts/`, and the JSONC configuration files. Replace `VERSION`
+in both plugin lists with your installed release. All referenced resources are supplied.
 
-| Group         | Agents                          | Skills                           | Commands                     |
+| Group         | Agents                          | Skills                           | Native commands              |
 | ------------- | ------------------------------- | -------------------------------- | ---------------------------- |
 | `review`      | `code-reviewer`, `test-auditor` | `code-review`, `test-audit`      | `review-code`, `audit-tests` |
 | `programming` | `implementer`, `test-writer`    | `implementation`, `test-writing` | `implement`, `write-tests`   |
 
-[config-composer.jsonc](docs/examples/review-programming/config-composer.jsonc) defines the four agents,
-four skills, explicit command targets, prompt relationships, groups and reusable presets.
+[opencode.jsonc](docs/examples/review-programming/opencode.jsonc) sets native global model defaults and
+loads Composer; [tui.jsonc](docs/examples/review-programming/tui.jsonc) registers its TUI entrypoint.
+OpenCode discovers the four agent prompts and command templates from Markdown files with YAML frontmatter
+in `agents/` and `commands/`. Command frontmatter targets the native agent names. Composer selects those
+agents by name without duplicate agent or command component definitions.
+[config-composer.jsonc](docs/examples/review-programming/config-composer.jsonc) references skills and shared
+scope prompts, appends those prompts through group configuration, and defines groups and reusable presets.
 [profiles.jsonc](docs/examples/review-programming/profiles.jsonc) is explicitly imported and contains:
 
 - `base-workflow`: selects `review`, then `programming`, and assigns each group's permission preset.
@@ -86,6 +94,8 @@ All four agents receive the 4,096-token output limit. Removing the Claude review
 restores `ask` while retaining its earlier npm denial. Unmatched requests use native permission fallback.
 These rules describe Git and npm requests, not a blanket read-only or full-access policy.
 Switching profiles reuses components and command targets; it does not duplicate or preload skills.
+Native files remain registered when no profile is selected; clearing profiles removes their Composer settings
+and scope prompt appends, leaving the authored Markdown bodies and native global defaults.
 
 ## Built-in and custom agent membership
 
