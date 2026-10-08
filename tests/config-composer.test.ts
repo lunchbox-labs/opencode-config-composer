@@ -2368,3 +2368,15 @@ for (const change of ['route', 'dialog', 'abort'] as const) {
     assert.equal(ui.updates, 0);
   });
 }
+
+test('Escape does not restore a parent after the native route object changes in place', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  Object.assign(ui.api.route.current, { name: 'session', params: { sessionID: 'first' } });
+  await ui.command('config-composer.membership');
+  await ui.select('developers');
+  assert.equal(ui.dialog?.title, 'Group: developers');
+  Object.assign(ui.api.route.current, { name: 'home' });
+  await ui.escape();
+  assert.equal(ui.dialog, undefined);
+});
