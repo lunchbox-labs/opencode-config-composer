@@ -37,6 +37,12 @@ import { parseCompositionDocument } from './composition/document.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveGroupAgentNames } from './composition/membership.ts';
 import { packageName } from './package-name.ts';
+import { type NativeAgentLayer, loadNativeProjectSources } from './composition/native-sources.ts';
+import {
+  type NativeVariables,
+  observedNativeVariables,
+  substituteNativeConfig,
+} from './composition/native-variables.ts';
 
 export interface SourceFile {
   path: string;
@@ -58,6 +64,7 @@ export interface StoredAgent {
   settings: AgentSettings;
   markdown?: AgentFile;
   component?: boolean;
+  project?: boolean;
 }
 export interface Snapshot {
   root: string;
@@ -75,6 +82,10 @@ export interface Snapshot {
   resolved: ResolvedProfileRuntime;
   nativeAgents: Record<string, AgentSettings>;
   nativeModels: NativeModels;
+  nativeLayers: NativeAgentLayer[];
+  nativeVariables: NativeVariables;
+  nativeDirectory: string;
+  nativeWorktree: string;
 }
 export type Change =
   | { kind: 'group'; name: string; choice: GroupChoice }
@@ -138,6 +149,90 @@ function parseAgent(file: SourceFile): AgentFile {
     body: match[3] + file.text.slice(match[0].length),
     eol: match[1].includes('\r') ? '\r\n' : '\n',
   };
+}
+
+function mergeNative(base: AgentSettings, next: AgentSettings): AgentSettings {
+  const result = { ...base };
+  for (const [key, value] of Object.entries(next)) {
+    if (['__proto__', 'constructor', 'prototype'].includes(key)) {
+      throw new SettingsError('Native agent configuration contains an unsafe key.');
+    }
+    result[key] = record(value) && record(result[key]) ? mergeNative(result[key], value) : value;
+  }
+  return result;
+}
+
+async function nativeAgentsFromLayers(
+  layers: NativeAgentLayer[],
+  variables: NativeVariables,
+  overlays: ReadonlyMap<string, string> = new Map(),
+  capture = false,
+): Promise<Map<string, StoredAgent>> {
+  const agents = new Map<string, StoredAgent>();
+  let batch: string | undefined;
+  const pending = new Map<string, { settings: AgentSettings; layer: NativeAgentLayer; markdown?: AgentFile }>();
+  const contribute = (name: string, settings: AgentSettings, layer: NativeAgentLayer, markdown?: AgentFile) => {
+    if (name === '' || ['__proto__', 'constructor', 'prototype'].includes(name)) {
+      throw new SettingsError('Native agent identity is invalid.');
+    }
+    const previous = agents.get(name);
+    agents.set(name, {
+      name,
+      settings: mergeNative(previous?.settings ?? {}, settings),
+      markdown: markdown ?? previous?.markdown,
+      project: previous?.project === true || layer.project,
+    });
+  };
+  const flush = () => {
+    for (const [name, item] of pending) {
+      contribute(name, item.settings, item.layer, item.markdown);
+    }
+    pending.clear();
+  };
+  for (const layer of layers) {
+    if (batch !== layer.batch) {
+      flush();
+      batch = layer.batch;
+    }
+    const file = { ...layer.file, text: overlays.get(layer.file.path) ?? layer.file.text };
+    if (layer.kind === 'config') {
+      const config = parseConfig(await substituteNativeConfig(file, variables, capture, overlays));
+      for (const [name, value] of Object.entries(record(config.agent) ? config.agent : {})) {
+        if (!record(value)) {
+          throw new SettingsError('An agent configuration must be an object.');
+        }
+        contribute(name, value, layer);
+      }
+    } else {
+      const markdown = parseAgent(file);
+      const value: unknown = markdown.document.toJS({ maxAliasCount: 0 });
+      if (!record(value) || layer.name === undefined) {
+        throw new SettingsError('Fix invalid native agent frontmatter before editing settings.');
+      }
+      const name = typeof value.name === 'string' ? value.name : layer.name;
+      if (!layer.project && name !== layer.name) {
+        throw new SettingsError('The editor requires agent names to match their relative Markdown filenames.');
+      }
+      const settings: AgentSettings = {
+        ...value,
+        ...(layer.primary === true ? { mode: 'primary' } : {}),
+        prompt: markdown.body.replace(/^---[^\n]*\n?/, '').trim(),
+      };
+      if (batch === undefined) {
+        contribute(name, settings, layer, markdown);
+      } else {
+        const previous = pending.get(name);
+        if (previous !== undefined) {
+          throw new SettingsError(
+            `Duplicate native agent identity ${name} in ${previous.layer.file.path} and ${layer.file.path}. Keep one definition in this native directory before editing; OpenCode file traversal order can vary.`,
+          );
+        }
+        pending.set(name, { settings, layer, markdown });
+      }
+    }
+  }
+  flush();
+  return agents;
 }
 
 async function sourceFile(root: string, path: string): Promise<SourceFile> {
@@ -219,6 +314,8 @@ export async function loadSnapshot(
   directory: string,
   projectRoot = directory,
   native?: NativeModels,
+  nativeDirectory = projectRoot,
+  nativeWorktree = projectRoot,
 ): Promise<Snapshot> {
   const root = await realpath(directory);
   const entries = await readdir(root);
@@ -285,16 +382,23 @@ export async function loadSnapshot(
   const nativeModels = native ?? config;
   const settings = editorSettings(sources, nativeModels);
   const { groups, modelPresets } = settings;
-  const jsonAgents = record(config.agent) ? config.agent : {};
-  const agents = new Map<string, StoredAgent>(
-    Object.entries(jsonAgents).map(([name, value]) => {
-      if (!record(value)) {
-        throw new SettingsError('An agent configuration must be an object.');
-      }
-      return [name, { name, settings: value }];
-    }),
-  );
-  const files = [configFile, ...compositionFiles];
+  const projectSources =
+    resolve(projectRoot) === root
+      ? { configurations: [], directories: [] }
+      : await loadNativeProjectSources(nativeWorktree, nativeDirectory);
+  const custom = process.env.OPENCODE_CONFIG_DIR !== undefined && resolve(process.env.OPENCODE_CONFIG_DIR) === root;
+  const nativeLayers: NativeAgentLayer[] = custom
+    ? [...projectSources.configurations, ...projectSources.directories]
+    : [{ file: configFile, kind: 'config', project: false }, ...projectSources.configurations];
+  if (custom) {
+    nativeLayers.push({ file: configFile, kind: 'config', project: false });
+  }
+  const files = [
+    configFile,
+    ...compositionFiles,
+    ...[...projectSources.configurations, ...projectSources.directories].map((layer) => layer.file),
+  ];
+
   const markdownNames = new Set<string>();
   async function scan(directory: string, base: string): Promise<void> {
     if ((await lstat(directory)).isSymbolicLink()) {
@@ -318,22 +422,7 @@ export async function loadSnapshot(
       }
       markdownNames.add(name);
       const file = await sourceFile(root, path);
-      const markdown = parseAgent(file);
-      const value: unknown = markdown.document.toJS({ maxAliasCount: 0 });
-      if (!record(value)) {
-        throw new SettingsError('Fix invalid agent frontmatter before editing settings.');
-      }
-      const frontmatter: AgentSettings = value;
-      // OpenCode allows name overrides, but file-based edits must have an unambiguous identity.
-      if (frontmatter.name !== undefined && frontmatter.name !== name) {
-        throw new SettingsError('The editor requires agent names to match their relative Markdown filenames.');
-      }
-      const previous = agents.get(name)?.settings ?? {};
-      agents.set(name, {
-        name,
-        markdown,
-        settings: { ...previous, ...frontmatter, options: { ...previous.options, ...frontmatter.options } },
-      });
+      nativeLayers.push({ file, kind: 'markdown', name, project: false });
       files.push(file);
     }
   }
@@ -342,15 +431,17 @@ export async function loadSnapshot(
       await scan(join(root, dir), join(root, dir));
     }
   }
-  const nativeAgents = Object.fromEntries(
-    [...agents].map(([name, agent]) => [
-      name,
-      {
-        ...agent.settings,
-        ...(agent.markdown !== undefined ? { prompt: agent.markdown.body.replace(/^---[^\n]*\n?/, '').trim() } : {}),
-      },
-    ]),
-  );
+  if (!custom) {
+    nativeLayers.push(...projectSources.directories);
+  }
+  const nativeVariables: NativeVariables = { environment: new Map(), files: new Map(), documents: new Map() };
+  const agents = await nativeAgentsFromLayers(nativeLayers, nativeVariables, undefined, true);
+  for (const dependency of nativeVariables.files.values()) {
+    if (!files.some((file) => file.path === dependency.path)) {
+      files.push(dependency);
+    }
+  }
+  const nativeAgents = Object.fromEntries([...agents].map(([name, agent]) => [name, agent.settings]));
   const available = { ...Object.fromEntries(nativeAgentNames.map((name) => [name, {}])), ...nativeAgents };
   for (const definitions of [
     sources.registry.components?.agents,
@@ -394,6 +485,7 @@ export async function loadSnapshot(
     .sort((a, b) => a.name.localeCompare(b.name));
   enabled.forEach((agent) => agentGroups(agent.settings));
   const resolved = await resolveProfileRuntime(sources, { ...nativeModels, agent: nativeAgents }, overlays);
+  observedNativeVariables(nativeVariables);
   await observedComposition(sources);
   for (const file of files) {
     if ((await observedFile(root, file)).text !== file.text) {
@@ -416,6 +508,10 @@ export async function loadSnapshot(
     resolved,
     nativeAgents,
     nativeModels,
+    nativeLayers,
+    nativeVariables,
+    nativeDirectory,
+    nativeWorktree,
   };
 }
 
@@ -619,6 +715,20 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     if (agent === undefined) {
       throw new SettingsError('That agent is no longer available. Reopen the editor.');
     }
+    if (agent.project === true && change.kind === 'override') {
+      throw new SettingsError(
+        'Edit the native project source directly to change its model pin, or use an explicit canonical profile override.',
+      );
+    }
+    if (
+      agent.project === true &&
+      change.kind === 'membership' &&
+      agentGroups(agent.settings).some((name) => !change.groups.includes(name))
+    ) {
+      throw new SettingsError(
+        'This membership is declared in native frontmatter or native JSON. Edit that native source to remove it.',
+      );
+    }
     if (change.kind === 'membership') {
       const desired = membershipGroups(change);
       for (const name of membershipGroups(change)) {
@@ -638,9 +748,12 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
         }
       }
       // Inline components have no frontmatter. JSONC membership is authoritative for them.
-      if (agent.component === true && agent.markdown === undefined) {
+      if (agent.project === true || (agent.component === true && agent.markdown === undefined)) {
         for (const name of desired) {
           const previous = snapshot.sources.registry.componentGroups?.[name]?.agents ?? [];
+          if (previous.includes(agent.name) || agentGroups(agent.settings).includes(name)) {
+            continue;
+          }
           patchDefinition('componentGroups', name, ['agents'], [...new Set([...previous, agent.name])]);
         }
       }
@@ -656,9 +769,9 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
       values.variant = undefined;
     }
     const componentOverride = agent.component === true && change.kind === 'override';
-    const document = componentOverride ? undefined : agent.markdown?.document.clone();
+    const document = componentOverride || agent.project === true ? undefined : agent.markdown?.document.clone();
     const options: unknown = agent.settings.options;
-    if (change.kind === 'membership') {
+    if (change.kind === 'membership' && agent.project !== true) {
       // A new ordered membership replaces lower-layer membership.
       if (document?.has('options') === true) {
         document.deleteIn(['options', 'groups']);
@@ -672,7 +785,11 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
       if (componentOverride) {
         continue;
       }
-      if (agent.component === true && change.kind === 'membership' && document === undefined) {
+      if (
+        (agent.project === true || agent.component === true) &&
+        change.kind === 'membership' &&
+        document === undefined
+      ) {
         continue;
       }
       if (document !== undefined) {
@@ -747,34 +864,12 @@ export async function plannedChoices(
 ): Promise<ModelChoice[]> {
   const { snapshot, change } = plan;
   const overlays = new Map(plan.edits.map((edit) => [edit.file.path, edit.text]));
-  const config = parseConfig(overlays.get(snapshot.configFile.path) ?? snapshot.configFile.text);
   const sources = await loadCompositionSources(snapshot.sourceContext, overlays);
-  const agents: Record<string, AgentSettings> = {};
-  if (record(config.agent)) {
-    for (const [name, value] of Object.entries(config.agent)) {
-      if (record(value)) {
-        agents[name] = value;
-      }
-    }
-  }
-  for (const stored of snapshot.agents) {
-    if (stored.component === true || stored.markdown === undefined) {
-      continue;
-    }
-    const file = stored.markdown.file;
-    const parsed = parseAgent({ ...file, text: overlays.get(file.path) ?? file.text });
-    const value: unknown = parsed.document.toJS({ maxAliasCount: 0 });
-    if (!record(value)) {
-      throw new SettingsError('Invalid agent frontmatter.');
-    }
-    const previous = agents[stored.name] ?? {};
-    agents[stored.name] = {
-      ...previous,
-      ...value,
-      options: { ...previous.options, ...(record(value.options) ? value.options : {}) },
-      prompt: parsed.body.replace(/^---[^\n]*\n?/, '').trim(),
-    };
-  }
+  const agents = Object.fromEntries(
+    [...(await nativeAgentsFromLayers(snapshot.nativeLayers, snapshot.nativeVariables, overlays))].map(
+      ([name, agent]) => [name, agent.settings],
+    ),
+  );
   const defaults =
     change.kind === 'global'
       ? { ...native, [change.field]: change.model }
@@ -847,6 +942,25 @@ async function atomicWrite(path: string, text: string, mode: number): Promise<vo
   }
 }
 
+async function observedSourceList(snapshot: Snapshot): Promise<void> {
+  observedNativeVariables(snapshot.nativeVariables);
+  const current = await loadSnapshot(
+    snapshot.root,
+    snapshot.sourceContext.root,
+    snapshot.nativeModels,
+    snapshot.nativeDirectory,
+    snapshot.nativeWorktree,
+  );
+  if (
+    current.files.length !== snapshot.files.length ||
+    current.files.some((file) => !snapshot.files.some((old) => old.path === file.path))
+  ) {
+    throw new SettingsError(
+      'The agent list changed: source list changed. Reopen the editor and review affected agents.',
+    );
+  }
+}
+
 export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => void>): Promise<void> {
   if (plan.edits.length === 0) {
     return;
@@ -866,18 +980,9 @@ export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => v
       }
     }
     // Detect newly added agents before approving a group-wide preview.
-    const current = await loadSnapshot(
-      plan.snapshot.root,
-      plan.snapshot.sourceContext.root,
-      plan.snapshot.nativeModels,
-    );
-    if (
-      current.files.length !== plan.snapshot.files.length ||
-      current.files.some((file) => !plan.snapshot.files.some((old) => old.path === file.path))
-    ) {
-      throw new SettingsError('The agent list changed. Reopen the editor and review the affected agents.');
-    }
+    await observedSourceList(plan.snapshot);
     await plannedChoices(plan);
+    observedNativeVariables(plan.snapshot.nativeVariables);
     for (const edit of plan.edits) {
       if (edit.file.writable === false) {
         throw new SettingsError(`Read-only composition source ${edit.file.path}.`);
@@ -924,12 +1029,14 @@ export async function reloadConfiguration(
     throw new SettingsError('Another settings edit is active. Reload after it finishes.');
   });
   try {
+    observedNativeVariables(snapshot.nativeVariables);
     await observedComposition(snapshot.sources);
     for (const file of snapshot.files) {
       if ((await observedFile(snapshot.root, file)).text !== file.text) {
         throw new SettingsError('Settings changed. Reopen the editor before reloading.');
       }
     }
+    await observedSourceList(snapshot);
     const original = await sourceFile(snapshot.root, snapshot.configFile.path);
     if (original.text !== snapshot.configFile.text) {
       throw new SettingsError('Settings changed. Reopen the editor before reloading.');
@@ -957,6 +1064,7 @@ export async function reloadConfiguration(
     }
     const plugins: unknown[] = config.plugin;
     await update(plugins);
+    observedNativeVariables(snapshot.nativeVariables);
     await observedComposition(snapshot.sources);
     for (const file of snapshot.files) {
       if (file.path !== original.path && (await observedFile(snapshot.root, file)).text !== file.text) {
