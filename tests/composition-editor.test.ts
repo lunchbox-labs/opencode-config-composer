@@ -56,7 +56,7 @@ async function fixture(t: TestContext) {
   return root;
 }
 
-test('canonical editor opens selected built-ins and custom agents and preserves mixed preset settings on model edits', async (t) => {
+test('canonical editor opens selected built-ins and custom agents and preserves unrelated preset settings and resets parameters on model edits', async (t) => {
   const root = await fixture(t);
   const snapshot = await loadSnapshot(root);
   assert.ok(snapshot.agents.some((agent) => agent.name === 'build'));
@@ -70,11 +70,11 @@ test('canonical editor opens selected built-ins and custom agents and preserves 
   const value = parseCompositionDocument(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
   assert.equal(value.configurationPresets!.balanced.model, 'fixture/b');
   assert.deepEqual(value.configurationPresets!.balanced.permissions, [{ tool: 'edit', action: 'deny' }]);
-  assert.deepEqual(value.configurationPresets!.balanced.parameters, { maxOutputTokens: 128 });
+  assert.equal(value.configurationPresets!.balanced.parameters, undefined);
   assert.deepEqual(value.activeProfiles, ['work']);
 });
 
-test('canonical group edits preserve membership, parameters, permission contributions and prompt operations', async (t) => {
+test('canonical group edits reset parameters and preserve membership and permission contributions', async (t) => {
   const root = await fixture(t);
   const snapshot = await loadSnapshot(root);
   await savePlan(planChange(snapshot, { kind: 'group', name: 'work', choice: { model: 'fixture/c' } }));
@@ -83,7 +83,7 @@ test('canonical group edits preserve membership, parameters, permission contribu
   assert.equal(value.componentGroups!.work.configuration!.model, 'fixture/c');
   assert.equal(value.componentGroups!.work.configuration!.modelRef, undefined);
   assert.deepEqual(value.componentGroups!.work.configuration!.permissions, [{ tool: 'bash', action: 'ask' }]);
-  assert.deepEqual(value.componentGroups!.work.configuration!.parameters, { temperature: 0.2 });
+  assert.equal(value.componentGroups!.work.configuration!.parameters, undefined);
 });
 
 test('model previews follow active profile order and include preset layers rather than frontmatter order', async (t) => {

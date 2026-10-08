@@ -100,6 +100,23 @@ test(
     await assert.rejects(e.save(stale), /changed/);
     assert.equal(await readFile(definitions, 'utf8'), concurrent);
     assert.match(concurrent, /Preserve fixture comments/);
+    await edit('temperature', '0.4');
+    const binding = f.editor.storage.planChange(await f.editor.snapshot(), {
+      kind: 'preset',
+      name: 'parent',
+      choice: { model: 'fixture/beta' },
+    });
+    const preview = await f.editor.storage.previewFilePlan(binding);
+    assert.equal(preview.sources.registry.configurationPresets?.parent.parameters, undefined);
+    assert.equal(preview.sources.registry.configurationPresets?.active.parameters, undefined);
+    await e.save(binding);
+    assert.match(await readFile(definitions, 'utf8'), /concurrent edit/);
+    await f.editor.reload();
+    const rebound = await f.send();
+    assert.equal(rebound.message.info.modelID, 'beta');
+    assert.notEqual(rebound.captured.temperature, 0.4);
+    assert.notEqual(rebound.captured.temperature, 0.2);
+    assert.notEqual(rebound.captured.top_p, 0.9);
     assert.equal(await readFile(f.paths.shared, 'utf8'), shared);
     // Reload changes the plugin token; all other native fields remain byte-for-byte equivalent.
     const beforeNative = JSON.parse(native) as Record<string, unknown>;

@@ -82,7 +82,11 @@ another model in a session retains native model settings. Within one ordered rep
 model or authored model reference clears inherited Composer variant/parameters, even if the resolved model is
 unchanged. Unchanged bindings and parameter-only layers retain earlier contributions. Omitted values fall back
 to native settings or remain unset. This retention does not carry settings from a previously active profile selection.
-Model editor saves retain authored parameters and validate them for their resulting model binding.
+Model editor saves clear stale authored variant/parameter fields when a model or reference changes, including
+affected active and inactive dependents. Explicit new settings are validated and retained; omitted settings resolve
+from the destination and applicable defaults. Read-only affected sources block the complete save. Parameter-only
+and unchanged-binding edits preserve unrelated controls. This edits declarations; profile switching instead rebuilds
+effective configuration without rewriting reusable definitions.
 
 `parameters` supports `temperature` (0–2), `topP` (0–1), positive safe integer `topK` and `maxOutputTokens`,
 and an `options` object containing JSON values. Structural validity does not imply provider support;

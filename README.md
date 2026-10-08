@@ -178,7 +178,9 @@ explicit per-agent overrides can change pins. Session selections remain native a
 only to their bound dispatched model. Within one ordered replay, changing the resolved model or authored model reference clears inherited
 Composer parameters and variant, even when different references resolve to the same model. Unchanged bindings
 and parameter-only layers retain earlier contributions; omitted values fall back to native settings or remain unset. Switching profiles starts a fresh replay and removes previous-profile-only settings even when the
-model is unchanged. Model edits retain explicitly authored parameters for validation against the chosen binding.
+model is unchanged. Model/reference edits clear stale authored variants and parameters in the edited definition and affected dependents,
+including inactive profiles. Explicit new values and destination/base defaults remain authoritative. A read-only
+affected source blocks the whole save; unrelated settings and reusable definitions are preserved.
 
 Prompt assembly is default prepend, ordered group prepend, agent prepend, authored body, default append,
 ordered group append, agent append. `inheritDefaults: false` and `inheritGroups: false` suppress inherited
