@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 import { installedEditor } from './editor.ts';
 import { nativeHarness } from './harness.ts';
+import { bundledPermissions } from './bundled-permissions.ts';
 import { applyEdits, modify } from 'jsonc-parser';
 import type * as Storage from '../../src/config-composer/storage.ts';
 
@@ -26,6 +28,8 @@ test(
     const host = await nativeHarness(t, 'lifecycle');
     const { configRoot, project, installed, api, requests } = host;
     const { storage, reload } = await installedEditor(host);
+    // Direct global-only editor calls use the same canonical root as the TUI.
+    const globalSnapshot = async () => storage.loadSnapshot(await realpath(configRoot));
     await mkdir(join(configRoot, 'settings', 'prompts'), { recursive: true });
     await mkdir(join(configRoot, 'agents'), { recursive: true });
     await mkdir(join(configRoot, 'skills', 'included-skill'), { recursive: true });
@@ -111,6 +115,7 @@ test(
       '# Fixture project\nA project with its own settings and persistent sessions.\n',
     );
     await host.start();
+    const nativeFiles = new Set(await Promise.all([nativePath, agentPath].map((path) => realpath(path))));
     const agent = async (name = 'worker') => {
       const found = (await api<Agent[]>('/agent')).find((item) => item.name === name);
       assert.ok(found !== undefined);
@@ -134,6 +139,30 @@ test(
       assert.equal(message.info.error, undefined, JSON.stringify(message.info.error));
       return { session, message };
     };
+    const restartAfterNativeEdit = async () => {
+      const running = await api('/config');
+      const before = requests.length;
+      await assert.rejects(reload(), /Native agent inputs differ|Native JSON configuration changed/);
+      assert.deepEqual(await api('/config'), running, 'rejected native edits preserve the running configuration');
+      assert.equal(requests.length, before, 'restart-required inspection sends no provider request');
+      await host.stop();
+      await host.start();
+      // The server URL precedes directory bootstrap. Load its native baseline before the next edit.
+      await api('/config');
+    };
+    const saveAndApply = async (plan: Storage.EditPlan) => {
+      const nativeEdit = (
+        await Promise.all(
+          plan.edits.map(async ({ file, text }) => text !== file.text && nativeFiles.has(await realpath(file.path))),
+        )
+      ).some(Boolean);
+      await storage.savePlan(plan);
+      if (nativeEdit) {
+        await restartAfterNativeEdit();
+      } else {
+        await reload();
+      }
+    };
     await t.test('custom settings and relative includes reach native provider in composition order', async () => {
       const { message } = await send();
       assert.equal(message.info.modelID, 'alpha');
@@ -152,7 +181,7 @@ test(
     });
     await t.test('save waits for explicit reload and reload removes stale content without duplication', async () => {
       await storage.savePlan(
-        storage.planChange(await storage.loadSnapshot(configRoot), {
+        storage.planChange(await globalSnapshot(), {
           kind: 'preset',
           name: 'balanced',
           choice: { model: 'fixture/beta', variant: 'high' },
@@ -183,24 +212,28 @@ test(
       'JSONC built-in membership and custom frontmatter share groups without replacing native behavior',
       async () => {
         const baseline = await api<Record<string, unknown>[]>('/agent');
+        const normalizeBundled = await bundledPermissions(host);
+        const behavior = (agent: Record<string, unknown>) => ({
+          ...agent,
+          permission: normalizeBundled(agent.permission as { permission: string; pattern: string; action: string }[]),
+        });
         for (const name of ['build', 'plan', 'explore']) {
           const original = baseline.find((item) => item.name === name);
           assert.ok(original?.native === true, `${name} must be native in the pinned host`);
-          await storage.savePlan(
-            storage.planChange(await storage.loadSnapshot(configRoot), {
+          await saveAndApply(
+            storage.planChange(await globalSnapshot(), {
               kind: 'membership',
               agent: name,
               groups: ['workers'],
             }),
           );
-          await reload();
           const current = (await api<Record<string, unknown>[]>('/agent')).find((item) => item.name === name);
           assert.ok(current !== undefined);
           const { model: _oldModel, variant: _oldVariant, options: _oldOptions, ...oldBehavior } = original;
           const { model: _model, variant: _variant, options: _options, ...nativeBehavior } = current;
           assert.deepEqual(
-            nativeBehavior,
-            oldBehavior,
+            behavior(nativeBehavior),
+            behavior(oldBehavior),
             `${name}: preserve all unspecified native fields and permission rules`,
           );
           assert.deepEqual((current.options as Record<string, unknown>).groups, ['workers']);
@@ -212,7 +245,7 @@ test(
           ['worker.md'],
           'built-ins have no shadow Markdown definitions',
         );
-        const snapshot = await storage.loadSnapshot(configRoot);
+        const snapshot = await globalSnapshot();
         for (const name of ['build', 'plan', 'explore']) {
           assert.equal(snapshot.agents.find((item) => item.name === name)?.markdown, undefined);
         }
@@ -224,8 +257,7 @@ test(
       'profile layer order governs edited memberships while explicit pins retain native authority',
       async () => {
         const change = async (value: Storage.Change) => {
-          await storage.savePlan(storage.planChange(await storage.loadSnapshot(configRoot), value));
-          await reload();
+          await saveAndApply(storage.planChange(await globalSnapshot(), value));
         };
         await change({
           kind: 'group',
@@ -325,7 +357,7 @@ test(
     await t.test(
       'invalid and concurrent edits preserve all original files and leave no lock or temporary writes',
       async () => {
-        const snapshot = await storage.loadSnapshot(configRoot);
+        const snapshot = await globalSnapshot();
         const bytes = await Promise.all(snapshot.files.map((file) => readFile(file.path, 'utf8')));
         assert.throws(() => storage.planChange(snapshot, { kind: 'deletePreset', name: 'balanced' }), /referenced/);
         assert.throws(
@@ -350,35 +382,33 @@ test(
             .flat()
             .some((file) => file === '.config-composer.lock' || file.endsWith('.tmp')),
         );
+        await restartAfterNativeEdit();
       },
     );
-    await t.test('membership replacement and removal clear group contributions on reload', async () => {
-      await storage.savePlan(
-        storage.planChange(await storage.loadSnapshot(configRoot), { kind: 'membership', agent: 'worker', groups: [] }),
+    await t.test('membership replacement and removal clear group contributions after native restart', async () => {
+      await saveAndApply(
+        storage.planChange(await globalSnapshot(), { kind: 'membership', agent: 'worker', groups: [] }),
       );
-      await reload();
       assert.ok((await agent()).prompt?.includes('GROUP_START') !== true);
       assert.equal((await send()).message.info.modelID, 'alpha');
-      await storage.savePlan(
-        storage.planChange(await storage.loadSnapshot(configRoot), {
+      await saveAndApply(
+        storage.planChange(await globalSnapshot(), {
           kind: 'membership',
           agent: 'worker',
           groups: ['workers'],
         }),
       );
-      await reload();
       assert.equal((await send()).message.info.modelID, 'beta');
     });
     await t.test('multi-file save and restart retain settings and sessions without stale process state', async () => {
-      await storage.savePlan(
-        storage.planChange(await storage.loadSnapshot(configRoot), {
+      await saveAndApply(
+        storage.planChange(await globalSnapshot(), {
           kind: 'all',
           choice: { model: 'fixture/alpha', variant: 'low' },
         }),
       );
-      await reload();
       const saved = await send();
-      const snapshot = await storage.loadSnapshot(configRoot);
+      const snapshot = await globalSnapshot();
       assert.equal(snapshot.config.model, 'fixture/alpha');
       assert.equal(snapshot.config.small_model, 'fixture/alpha');
       assert.equal(snapshot.modelPresets.balanced.model, 'fixture/alpha');
@@ -392,15 +422,42 @@ test(
       assert.ok((await api<Message[]>(`/session/${saved.session.id}/message`)).length >= 4);
     });
     await t.test(
-      'failed prompt composition leaves native settings unmodified and a corrected reload recovers',
-      async () => {
+      'editor rejects an invalid include; native hook failure is atomic and corrected reload recovers',
+      async (t) => {
         const bodyPath = join(configRoot, 'settings', 'prompts', 'body.md');
         const goodBody = await readFile(bodyPath, 'utf8');
+        const snapshot = await globalSnapshot();
+        const nativeReload = async () => {
+          const config = storage.parseConfig(await readFile(nativePath, 'utf8'));
+          const plugins = config.plugin as [string, Record<string, unknown>][];
+          const token = randomUUID();
+          plugins[snapshot.pluginIndex][1].reloadToken = token;
+          // Like a native configuration edit, this invalidates the global cache.
+          // Instance disposal alone retains cached globals from the previous composition.
+          await api('/global/config', { plugin: plugins }, 'PATCH');
+          for (let attempt = 0; attempt < 200; attempt++) {
+            if (JSON.stringify(await api('/config')).includes(token)) {
+              return;
+            }
+            await setTimeout(50);
+          }
+          assert.fail('Native global reload did not expose its new token');
+        };
+        t.after(async () => {
+          await writeFile(bodyPath, goodBody);
+          await nativeReload();
+          await api('/agent');
+        });
         const before = requests.length;
-        const snapshot = await storage.loadSnapshot(configRoot);
+        const activeBefore = await agent();
         await writeFile(bodyPath, '{{include:@shared/../outside.md}}');
-        await assert.rejects(storage.loadSnapshot(configRoot), /include|source|path/i);
-        await reload(snapshot);
+        await assert.rejects(globalSnapshot(), /include|source|path/i);
+        // Included prompt files are captured in the reviewed snapshot. A changed
+        // input is rejected before the reload reaches include validation.
+        await assert.rejects(reload(snapshot), /Settings changed.*Reopen the editor/);
+        assert.deepEqual(await agent(), activeBefore, 'editor rejection preserves the running configuration');
+        // Native reload can still load externally edited files independently of the editor.
+        await nativeReload();
         // OpenCode catches config-hook errors. Verify transactional composition rather
         // than claiming that the host prevents later requests with native settings.
         const rejected = await agent();
@@ -410,6 +467,7 @@ test(
         assert.ok((await agent('pinned')).prompt?.includes('GROUP_START') !== true);
         assert.equal(requests.length, before, 'reading configuration makes no provider request');
         await writeFile(bodyPath, goodBody);
+        await nativeReload();
         await reload();
         assert.equal((await send()).message.info.modelID, 'alpha');
       },

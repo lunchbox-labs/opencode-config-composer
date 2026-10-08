@@ -1,3 +1,4 @@
+import { validateShortcutCommands } from './shortcuts.ts';
 import { createHash } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -16,6 +17,7 @@ export interface ProjectContext {
   root: string;
   baseFile?: string;
   baseExplicit: boolean;
+  allowEmpty?: boolean;
 }
 
 export interface ProfileOccurrence {
@@ -35,7 +37,10 @@ export interface LoadedSources {
 }
 
 type Registry = Required<
-  Pick<CompositionDocument, 'sourceDirectories' | 'componentGroups' | 'configurationPresets' | 'profiles'>
+  Pick<
+    CompositionDocument,
+    'sourceDirectories' | 'componentGroups' | 'configurationPresets' | 'profiles' | 'profileShortcuts'
+  >
 > & { components: Required<Components> };
 
 function pointerPart(key: string): string {
@@ -60,6 +65,7 @@ function relativeFile<T extends { file?: string }>(value: T, path: string): T {
 export async function loadCompositionSources(
   context: ProjectContext,
   overlays: ReadonlyMap<string, string> = new Map(),
+  creations: ReadonlySet<string> = new Set(),
 ): Promise<LoadedSources> {
   const documents = new Map<string, CompositionSourceDocument>();
   const paths = new Map<string, string | undefined>();
@@ -72,6 +78,7 @@ export async function loadCompositionSources(
     componentGroups: {},
     configurationPresets: {},
     profiles: {},
+    profileShortcuts: {},
   };
   let totalBytes = 0;
   async function load(
@@ -80,18 +87,26 @@ export async function loadCompositionSources(
     reference?: Pick<FieldOrigin, 'sourceId' | 'pointer'>,
   ): Promise<CompositionSourceDocument | undefined> {
     const report = (message: string): never => fail(message, reference?.sourceId ?? path, reference?.pointer ?? '');
+    let virtual = false;
     try {
       await lstat(path);
     } catch (error) {
-      if (optional && error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        paths.set(path, undefined);
-        return undefined;
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        if (creations.has(path) && overlays.has(path)) {
+          virtual = true;
+        } else if (optional) {
+          paths.set(path, undefined);
+          return undefined;
+        } else {
+          report(`Could not read composition source ${path}.`);
+        }
+      } else {
+        report(`Could not read composition source ${path}.`);
       }
-      report(`Could not read composition source ${path}.`);
     }
     let canonical: string;
     try {
-      canonical = await realpath(path);
+      canonical = virtual ? resolve(path) : await realpath(path);
     } catch {
       return report(`Could not resolve composition source ${path}.`);
     }
@@ -100,11 +115,13 @@ export async function loadCompositionSources(
     if (cached !== undefined) {
       return cached;
     }
-    const file = await configurationFile(canonical).catch((error: unknown) =>
-      report(
-        `Could not read composition source ${path}: ${error instanceof Error ? error.message : 'unreadable file'}`,
-      ),
-    );
+    const file = virtual
+      ? { text: overlays.get(path) ?? '', mode: 0o600 }
+      : await configurationFile(canonical).catch((error: unknown) =>
+          report(
+            `Could not read composition source ${path}: ${error instanceof Error ? error.message : 'unreadable file'}`,
+          ),
+        );
     file.text = overlays.get(canonical) ?? file.text;
     totalBytes += Buffer.byteLength(file.text, 'utf8');
     if (totalBytes > 8 * 1024 * 1024) {
@@ -219,11 +236,24 @@ export async function loadCompositionSources(
     register(registry.componentGroups, value.componentGroups, '/componentGroups', source);
     register(registry.configurationPresets, value.configurationPresets, '/configurationPresets', source);
     register(registry.profiles, value.profiles, '/profiles', source);
+    register(registry.profileShortcuts, value.profileShortcuts, '/profileShortcuts', source);
   }
   const root = resolve(context.root);
+  let globalDirectory = configurationDirectory();
+  // An implicit global lookup and the editor's canonical base file must attest the same source.
+  // Explicit baseFile values retain their authored lexical path and relative-parent semantics.
+  if (context.baseFile === undefined) {
+    try {
+      globalDirectory = await realpath(globalDirectory);
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        throw error;
+      }
+    }
+  }
   const roots = [
     {
-      path: configurationPath(context.baseFile ?? 'config-composer.jsonc', configurationDirectory()),
+      path: configurationPath(context.baseFile ?? 'config-composer.jsonc', globalDirectory),
       optional: !context.baseExplicit,
     },
     { path: join(root, '.opencode/config-composer.jsonc'), optional: true },
@@ -243,7 +273,7 @@ export async function loadCompositionSources(
     }
     scopes.push(source);
   }
-  if (scopes.length === 0) {
+  if (scopes.length === 0 && context.allowEmpty !== true) {
     fail('No Config Composer configuration source was found.');
   }
   freeze(provenance);
@@ -316,6 +346,18 @@ export async function loadCompositionSources(
   for (const name of Object.keys(registry.profiles)) {
     profileChain(name, new Set());
   }
+  if (Object.keys(registry.profileShortcuts).length > 128) {
+    fail('Use at most 128 profile shortcuts across all sources.', undefined, '/profileShortcuts');
+  }
+  for (const [name, shortcut] of Object.entries(registry.profileShortcuts)) {
+    for (const [index, profile] of shortcut.activeProfiles.entries()) {
+      profileChain(profile, new Set(), {
+        sourceId: provenance[`/profileShortcuts/${name}`].sourceId,
+        pointer: `/profileShortcuts/${name}/activeProfiles/${index}`,
+      });
+    }
+  }
+  validateShortcutCommands({ registry, provenance }, Object.keys(registry.components.commands));
   const orderedProfiles = activeProfiles.flatMap((name, index) =>
     profileChain(name, new Set(), { sourceId: activeSource?.id, pointer: `/activeProfiles/${index}` }),
   );

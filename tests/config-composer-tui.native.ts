@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { installPackage } from './install-package.ts';
 
-for (const scope of ['shared', 'project-only'] as const) {
-  test(`OpenCode renders both Composer menus with ${scope} sources`, { timeout: 140_000 }, async (t) => {
+for (const scope of ['shared', 'project-only', 'empty'] as const) {
+  test(`OpenCode renders both Composer menus with ${scope} sources`, { timeout: 260_000 }, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'composer-tui-native-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const configRoot = join(root, 'config', 'opencode');
@@ -39,7 +39,7 @@ for (const scope of ['shared', 'project-only'] as const) {
         plugin: [installed.directory],
         model: 'fixture/model',
         small_model: 'fixture/model',
-        default_agent: 'worker',
+        default_agent: scope === 'shared' ? undefined : 'worker',
         enabled_providers: ['fixture'],
         provider: {
           fixture: {
@@ -52,14 +52,23 @@ for (const scope of ['shared', 'project-only'] as const) {
         agent: { worker: { mode: 'primary', groups: ['workers'], prompt: 'Reply briefly.' } },
       }),
     );
-    await writeFile(
-      join(scope === 'shared' ? configRoot : join(project, '.opencode'), 'config-composer.jsonc'),
-      JSON.stringify({
-        componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
-        profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
-        activeProfiles: ['work'],
-      }),
-    );
+    if (scope !== 'empty') {
+      await writeFile(
+        join(scope === 'shared' ? configRoot : join(project, '.opencode'), 'config-composer.jsonc'),
+        JSON.stringify({
+          componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
+          profiles: {
+            work: { layers: [{ componentGroup: 'workers' }] },
+            planning: { extends: 'work', agentAvailability: { build: false } },
+          },
+          activeProfiles: ['work'],
+          profileShortcuts: {
+            quiet: { activeProfiles: [], description: 'Select no profiles' },
+            planning: { activeProfiles: ['planning'], description: 'Select planning agents' },
+          },
+        }),
+      );
+    }
     await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [installed.directory] }));
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -86,6 +95,27 @@ for (const scope of ['shared', 'project-only'] as const) {
       { env, timeout: 130_000, maxBuffer: 1_000_000 },
     );
     assert.match(result.stdout, /native TUI rendered both Composer menus/);
+    if (scope === 'shared') {
+      const result = await promisify(execFile)(
+        'python3',
+        [
+          fileURLToPath(new URL('./native-shortcuts.py', import.meta.url)),
+          process.env.OPENCODE_BIN ?? 'opencode',
+          project,
+          'availability',
+        ],
+        { env, timeout: 130_000, maxBuffer: 1_000_000 },
+      );
+      assert.match(result.stdout, /native TUI saved and applied profile shortcut/);
+      assert.deepEqual(JSON.parse(await readFile(join(project, '.opencode/config-composer.local.jsonc'), 'utf8')), {
+        activeProfiles: [],
+      });
+      assert.deepEqual(
+        (JSON.parse(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8')) as { activeProfiles: string[] })
+          .activeProfiles,
+        ['work'],
+      );
+    }
     assert.equal(requests, 0, 'opening Composer menus must not send a model prompt');
   });
 }
