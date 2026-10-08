@@ -1,0 +1,35 @@
+// Adapt names and settings in an explicit writable Composer source.
+{
+  "components": {
+    "prompts": {
+      "review-note": { "text": "REVIEW_GUIDANCE: Report actionable findings with file references." }
+    },
+    "agents": {
+      "reviewer": {
+        "prompt": "Review the requested changes and explain the evidence.",
+        "mode": "subagent",
+        "promptRefs": ["review-note"]
+      }
+    },
+    "commands": {
+      "review": { "template": "Review the current changes.", "agent": "reviewer", "subtask": true }
+    }
+  },
+  "componentGroups": {
+    "reviewers": { "agents": ["plan", "explore", "reviewer"], "commands": ["review"], "prompts": ["review-note"] }
+  },
+  "configurationPresets": {
+    "review-settings": {
+      "modelRef": "opencode:model",
+      "permissions": [{ "tool": "bash", "pattern": "git *", "action": "ask" }]
+    }
+  },
+  "profiles": {
+    "review": {
+      "layers": [
+        { "componentGroup": "reviewers" },
+        { "configurationPreset": "review-settings", "target": { "componentGroups": ["reviewers"] } }
+      ]
+    }
+  }
+}

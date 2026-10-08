@@ -1,7 +1,14 @@
 import { type AgentSettings, SettingsError, record } from '../settings.ts';
-import { expandIncludes } from '../prompts.ts';
+import { type PromptRead, expandIncludes } from '../prompts.ts';
+import { type GlobalPermissionContribution, type PermissionWarning, resolvePermissions } from './permission-runtime.ts';
 import { loadComponents } from './components.ts';
-import { resolveGroupAgentNames } from './membership.ts';
+import {
+  type AgentAvailability,
+  availabilityTargets,
+  inspectAvailability,
+  validateAvailablePrimary,
+} from './agent-availability.ts';
+import { MembershipValidationError, resolveGroupAgentNames } from './membership.ts';
 import type { LoadedSources } from './sources.ts';
 import type {
   AgentConfiguration,
@@ -22,6 +29,10 @@ export interface PermissionContribution {
   rule: PermissionRule;
   origin: FieldOrigin;
 }
+interface PromptContribution {
+  configuration: PromptConfiguration;
+  origin: FieldOrigin;
+}
 export interface ResolvedModelSettings {
   model?: string;
   modelRef?: string;
@@ -30,9 +41,14 @@ export interface ResolvedModelSettings {
   permissions?: PermissionRule[];
 }
 export interface ResolvedProfileRuntime {
+  permission?: unknown;
+  globalPermissions: GlobalPermissionContribution[];
+  permissionWarnings: PermissionWarning[];
   agent: Record<string, AgentSettings>;
   model?: string;
   small_model?: string;
+  default_agent?: string;
+  agentAvailability: Record<string, AgentAvailability>;
   selectedAgents: string[];
   choices: Record<string, ResolvedModelSettings>;
   provenance: Record<string, FieldOrigin>;
@@ -79,7 +95,7 @@ function mergeAuthored(base: AgentSettings, extra: AgentSettings): AgentSettings
       return [
         key,
         Object.hasOwn(extra, key)
-          ? record(value) && record(base[key])
+          ? key !== 'permission' && record(value) && record(base[key])
             ? mergeAuthored(base[key], value)
             : value
           : base[key],
@@ -88,10 +104,87 @@ function mergeAuthored(base: AgentSettings, extra: AgentSettings): AgentSettings
   );
 }
 
+export function resolveConfigurationSettings(
+  value: ConfigurationPreset,
+  at: FieldOrigin,
+  context: {
+    presets: Record<string, ConfigurationPreset>;
+    globals: { model?: string; small_model?: string };
+    provenance: Record<string, FieldOrigin>;
+  },
+  chain: string[] = [],
+): { value: ResolvedModelSettings; fields: Record<string, FieldOrigin> } {
+  const { presets, globals, provenance } = context;
+  let base: ResolvedModelSettings = {};
+  let fields: Record<string, FieldOrigin> = {};
+  let references = at.references;
+  if (value.modelRef?.startsWith('preset:') === true) {
+    const name = value.modelRef.slice(7);
+    if (chain.includes(name) || chain.length >= 32) {
+      throw new SettingsError(`Model preset reference cycle or depth limit at ${name}.`);
+    }
+    if (!Object.hasOwn(presets, name)) {
+      throw new SettingsError(`Model preset ${name} does not exist.`);
+    }
+    const ref = context.provenance[`/configurationPresets/${part(name)}`];
+    const inherited = resolveConfigurationSettings(presets[name], ref, context, [...chain, name]);
+    base = inherited.value;
+    fields = inherited.fields;
+    references = [
+      ...references,
+      `${ref.sourceId ?? ''}#${ref.pointer}`,
+      ...Object.values(fields).flatMap((field) => field.references),
+    ];
+  } else if (value.modelRef !== undefined) {
+    const field = value.modelRef === 'opencode:model' ? 'model' : 'small_model';
+    if (globals[field] === undefined) {
+      throw new SettingsError(`${value.modelRef} has no configured model. Set its default or use native fallback.`);
+    }
+    base = { model: globals[field] };
+    fields.model = { ...provenance[`/${field}`] };
+    references = [...references, `/${field}`];
+  }
+  function mark(item: unknown, key: string) {
+    if (!record(item)) {
+      for (const path of Object.keys(fields).filter((path) => path.startsWith(`${key}/`))) {
+        fields[path] = { ...at, pointer: `${at.pointer}/${key}`, operation: 'unset', overwritten: [fields[path]] };
+      }
+    }
+    const previous = Object.hasOwn(fields, key) ? fields[key] : undefined;
+    fields[key] = { ...at, pointer: `${at.pointer}/${key}`, overwritten: previous === undefined ? [] : [previous] };
+    if (record(item)) {
+      for (const [child, next] of Object.entries(item)) {
+        mark(next, `${key}/${part(child)}`);
+      }
+    }
+  }
+  for (const key of ['model', 'variant', 'parameters'] as const) {
+    if (value[key] !== undefined) {
+      mark(value[key], key);
+    }
+  }
+  for (const field of Object.values(fields)) {
+    field.references = [...new Set([...references, ...field.references])];
+  }
+  return {
+    value: {
+      ...base,
+      ...value,
+      ...(value.model === undefined && base.model !== undefined ? { model: base.model } : {}),
+      ...(base.parameters !== undefined || value.parameters !== undefined
+        ? { parameters: mergeParameters(base.parameters, value.parameters) }
+        : {}),
+      permissions: value.permissions,
+    },
+    fields,
+  };
+}
+
 export async function resolveProfileRuntime(
   sources: LoadedSources,
   native: NativeInput,
   overlays: ReadonlyMap<string, string> = new Map(),
+  onPromptRead?: PromptRead,
 ): Promise<ResolvedProfileRuntime> {
   const { registry } = sources;
   const groups = registry.componentGroups ?? {};
@@ -109,10 +202,17 @@ export async function resolveProfileRuntime(
   const selected = new Set<string>();
   const choices: Record<string, ResolvedModelSettings> = {};
   const provenance: Record<string, FieldOrigin> = {};
+  const toggled = availabilityTargets(sources, available);
+  const availability = new Map<string, boolean>();
+  // Explicit workflow decisions retain membership/configuration even when the final agent is disabled.
+  for (const name of toggled) {
+    available[name].disable = false;
+  }
   const permissions: PermissionContribution[] = [];
+  const globalPermissions: GlobalPermissionContribution[] = [];
   const prompts: Record<
     string,
-    { defaults: PromptConfiguration[]; groups: PromptConfiguration[]; explicit: PromptConfiguration[] }
+    { defaults: PromptContribution[]; groups: PromptContribution[]; explicit: PromptContribution[] }
   > = {};
   const globals: { model?: string; small_model?: string } = {};
   for (const key of ['model', 'small_model'] as const) {
@@ -122,7 +222,7 @@ export async function resolveProfileRuntime(
     }
   }
   for (const [name, value] of Object.entries({ ...native.agent, ...native.composerOwnedAgents })) {
-    for (const key of ['model', 'variant'] as const) {
+    for (const key of ['model', 'variant', 'disable'] as const) {
       if (value[key] !== undefined) {
         const pointer = `/agent/${part(name)}/${key}`;
         provenance[pointer] = { ...origin(undefined, pointer, 'native'), operation: 'native' };
@@ -136,7 +236,13 @@ export async function resolveProfileRuntime(
       overwritten: [...source.overwritten, ...(previous === undefined ? [] : [previous])],
     };
   }
-  function globalSettings(value: { model?: string; small_model?: string } | undefined, at: FieldOrigin) {
+  function globalSettings(
+    value: { model?: string; small_model?: string; permissions?: PermissionRule[] } | undefined,
+    at: FieldOrigin,
+  ) {
+    for (const [index, rule] of (value?.permissions ?? []).entries()) {
+      globalPermissions.push({ rule, origin: { ...at, pointer: `${at.pointer}/permissions/${index}/action` } });
+    }
     for (const key of ['model', 'small_model'] as const) {
       if (value?.[key] !== undefined) {
         globals[key] = value[key];
@@ -158,77 +264,12 @@ export async function resolveProfileRuntime(
     globalSettings(scope.value.overrides, origin(scope.id, '/overrides', 'overrides'));
   }
 
-  function modelSettings(
-    value: ConfigurationPreset,
-    at: FieldOrigin,
-    chain: string[] = [],
-  ): { value: ResolvedModelSettings; fields: Record<string, FieldOrigin> } {
-    let base: ResolvedModelSettings = {};
-    let fields: Record<string, FieldOrigin> = {};
-    let references = at.references;
-    if (value.modelRef?.startsWith('preset:') === true) {
-      const name = value.modelRef.slice(7);
-      if (chain.includes(name) || chain.length >= 32) {
-        throw new SettingsError(`Model preset reference cycle or depth limit at ${name}.`);
-      }
-      if (!Object.hasOwn(presets, name)) {
-        throw new SettingsError(`Model preset ${name} does not exist.`);
-      }
-      const ref = sources.provenance[`/configurationPresets/${part(name)}`];
-      const inherited = modelSettings(presets[name], ref, [...chain, name]);
-      base = inherited.value;
-      fields = inherited.fields;
-      references = [
-        ...references,
-        `${ref.sourceId ?? ''}#${ref.pointer}`,
-        ...Object.values(fields).flatMap((field) => field.references),
-      ];
-    } else if (value.modelRef !== undefined) {
-      const field = value.modelRef === 'opencode:model' ? 'model' : 'small_model';
-      if (globals[field] === undefined) {
-        throw new SettingsError(`${value.modelRef} has no configured model. Set its default or use native fallback.`);
-      }
-      base = { model: globals[field] };
-      fields.model = { ...provenance[`/${field}`] };
-      references = [...references, `/${field}`];
-    }
-    function mark(item: unknown, key: string) {
-      if (!record(item)) {
-        for (const path of Object.keys(fields).filter((path) => path.startsWith(`${key}/`))) {
-          fields[path] = { ...at, pointer: `${at.pointer}/${key}`, operation: 'unset', overwritten: [fields[path]] };
-        }
-      }
-      const previous = Object.hasOwn(fields, key) ? fields[key] : undefined;
-      fields[key] = { ...at, pointer: `${at.pointer}/${key}`, overwritten: previous === undefined ? [] : [previous] };
-      if (record(item)) {
-        for (const [child, next] of Object.entries(item)) {
-          mark(next, `${key}/${part(child)}`);
-        }
-      }
-    }
-    for (const key of ['model', 'variant', 'parameters'] as const) {
-      if (value[key] !== undefined) {
-        mark(value[key], key);
-      }
-    }
-    for (const field of Object.values(fields)) {
-      field.references = [...new Set([...references, ...field.references])];
-    }
-    return {
-      value: {
-        ...base,
-        ...value,
-        ...(value.model === undefined && base.model !== undefined ? { model: base.model } : {}),
-        ...(base.parameters !== undefined || value.parameters !== undefined
-          ? { parameters: mergeParameters(base.parameters, value.parameters) }
-          : {}),
-        permissions: value.permissions,
-      },
-      fields,
-    };
-  }
   function apply(name: string, value: AgentConfiguration, at: FieldOrigin, explicit = false) {
-    const resolved = modelSettings(value, at);
+    const resolved = resolveConfigurationSettings(value, at, {
+      presets,
+      globals,
+      provenance: { ...sources.provenance, ...provenance },
+    });
     const next = resolved.value;
     const current = choices[name] ?? { model: agent[name].model, variant: agent[name].variant };
     if (
@@ -304,7 +345,10 @@ export async function resolveProfileRuntime(
       permissions.push({ agent: name, rule, origin: { ...at, pointer: `${at.pointer}/permissions/${index}/action` } });
     }
     if (value.prompt !== undefined) {
-      prompts[name][explicit ? 'explicit' : at.layer === 'defaults' ? 'defaults' : 'groups'].push(value.prompt);
+      prompts[name][explicit ? 'explicit' : at.layer === 'defaults' ? 'defaults' : 'groups'].push({
+        configuration: value.prompt,
+        origin: { ...at, pointer: `${at.pointer}/prompt` },
+      });
     }
   }
   function select(name: string) {
@@ -340,6 +384,17 @@ export async function resolveProfileRuntime(
     }
   }
   for (const occurrence of sources.orderedProfiles) {
+    for (const [name, enabled] of Object.entries(occurrence.profile.agentAvailability ?? {})) {
+      availability.set(name, enabled);
+      trace(`/agent/${part(name)}/disable`, {
+        ...occurrence.origin,
+        pointer: `${occurrence.origin.pointer}/agentAvailability/${part(name)}`,
+        layer: `profile:${occurrence.name}`,
+      });
+      if (enabled) {
+        select(name);
+      }
+    }
     for (const layer of occurrence.profile.layers ?? []) {
       if (layer.componentGroup !== undefined) {
         const name = layer.componentGroup;
@@ -347,7 +402,12 @@ export async function resolveProfileRuntime(
         for (const key of ['skills', 'commands', 'prompts'] as const) {
           for (const member of group[key] ?? []) {
             if (!Object.hasOwn(components[key], member)) {
-              throw new SettingsError(`Component group ${name} names missing ${key} component ${member}.`);
+              throw new MembershipValidationError(
+                `Component group ${name} names missing ${key} component ${member}.`,
+                name,
+                member,
+                key,
+              );
             }
           }
         }
@@ -402,7 +462,7 @@ export async function resolveProfileRuntime(
     }
     const operations = prompts[name];
     const policy = operations.explicit.reduce<PromptConfiguration>(
-      (previous, value) => ({ ...previous, ...value }),
+      (previous, value) => ({ ...previous, ...value.configuration }),
       {},
     );
     const ordered = [
@@ -411,31 +471,121 @@ export async function resolveProfileRuntime(
       ...operations.explicit,
     ];
     const parts = [
-      ...ordered.flatMap((item) => item.prepend ?? []),
+      ...ordered.flatMap((item) => item.configuration.prepend ?? []),
       value.prompt,
-      ...ordered.flatMap((item) => item.append ?? []),
+      ...ordered.flatMap((item) => item.configuration.append ?? []),
     ];
+    const reference = (at: FieldOrigin) => `${at.sourceId ?? 'native'}#${at.pointer}`;
+    const pointer = `/agent/${part(name)}/prompt`;
+    const definition = Object.hasOwn(registry.components?.agents ?? {}, name)
+      ? registry.components?.agents?.[name]
+      : undefined;
+    const nativeOverride = Object.hasOwn(native.composerOwnedAgents ?? {}, name)
+      ? native.composerOwnedAgents?.[name].prompt
+      : undefined;
+    const base =
+      definition === undefined || nativeOverride !== undefined
+        ? { ...origin(undefined, pointer, 'native'), operation: 'native' as const }
+        : sources.provenance[`/components/agents/${part(name)}/${definition.file === undefined ? 'prompt' : 'file'}`];
+    const references = [reference(base)];
+    if (definition !== undefined && base.operation !== 'native') {
+      if (definition.file !== undefined) {
+        references.push(`file:${definition.file}`);
+      }
+      for (const prompt of definition.promptRefs ?? []) {
+        const component = Object.hasOwn(registry.components?.prompts ?? {}, prompt)
+          ? registry.components?.prompts?.[prompt]
+          : undefined;
+        if (component !== undefined) {
+          references.push(
+            reference(
+              sources.provenance[
+                `/components/prompts/${part(prompt)}/${component.file === undefined ? 'text' : 'file'}`
+              ],
+            ),
+          );
+          if (component.file !== undefined) {
+            references.push(`file:${component.file}`);
+          }
+        }
+      }
+    }
+    for (const contribution of ordered) {
+      for (const field of ['prepend', 'append'] as const) {
+        for (const index of (contribution.configuration[field] ?? []).keys()) {
+          references.push(`${reference(contribution.origin)}/${field}/${index}`);
+        }
+      }
+    }
+    for (const contribution of operations.explicit) {
+      for (const field of ['inheritDefaults', 'inheritGroups'] as const) {
+        if (contribution.configuration[field] !== undefined) {
+          references.push(`${reference(contribution.origin)}/${field}`);
+        }
+      }
+    }
+    const included = new Set<string>();
     value.prompt = await expandIncludes(
       parts.map((text) => (/^@[a-z][a-z0-9-]*\//.test(text) ? `{{include:${text}}}` : text)).join('\n\n'),
       registry.sourceDirectories ?? {},
+      (file) => {
+        included.add(`file:${file.canonicalPath}`);
+        onPromptRead?.(file);
+      },
+      overlays,
     );
+    provenance[pointer] = {
+      ...base,
+      layer: 'prompt composition',
+      operation: 'merge',
+      references: [...new Set([...references, ...included])],
+      overwritten: [],
+    };
   }
+  for (const [name, enabled] of availability) {
+    agent[name] = { ...(Object.hasOwn(agent, name) ? agent[name] : available[name]), disable: !enabled };
+  }
+  for (const name of Object.keys(available)) {
+    const pointer = `/agent/${part(name)}/disable`;
+    if (!Object.hasOwn(provenance, pointer)) {
+      const component = Object.hasOwn(sources.provenance, `/components/agents/${part(name)}`)
+        ? sources.provenance[`/components/agents/${part(name)}`]
+        : undefined;
+      provenance[pointer] =
+        component === undefined
+          ? { ...origin(undefined, pointer, 'native availability'), operation: 'native' }
+          : { ...component, layer: selected.has(name) ? 'component availability' : 'unselected component' };
+    }
+  }
+  const agentAvailability = inspectAvailability(
+    available,
+    agent,
+    new Set(Object.keys(components.agents)),
+    selected,
+    provenance,
+  );
+  validateAvailablePrimary(agentAvailability, native.default_agent);
   for (const [name, command] of Object.entries(commands)) {
     if (
       command.agent !== undefined &&
       (!Object.hasOwn(available, command.agent) ||
-        available[command.agent].disable === true ||
+        (agent[command.agent] ?? available[command.agent]).disable === true ||
         (Object.hasOwn(components.agents, command.agent) && !selected.has(command.agent)))
     ) {
       throw new SettingsError(`Command ${name} names unavailable or unselected agent ${command.agent}.`);
     }
-    command.template = await expandIncludes(command.template, registry.sourceDirectories ?? {});
+    command.template = await expandIncludes(command.template, registry.sourceDirectories ?? {}, onPromptRead, overlays);
   }
+  const compiledPermissions = resolvePermissions(native.permission, agent, globalPermissions, permissions, provenance);
   return {
+    ...compiledPermissions,
+    globalPermissions,
     agent,
     commands,
     skillPaths: [...skillPaths],
     ...globals,
+    ...(native.default_agent === undefined ? {} : { default_agent: native.default_agent }),
+    agentAvailability,
     selectedAgents: [...selected],
     choices,
     provenance,

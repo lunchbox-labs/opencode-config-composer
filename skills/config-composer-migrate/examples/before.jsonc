@@ -1,0 +1,14 @@
+{
+  "agent": {
+    "modelPresets": { "balanced": { "model": "fixture/review" } },
+    "groups": {
+      "reviewers": { "modelRef": "preset:balanced", "prompt": { "append": ["Check your changes."] } }
+    },
+    "prompts": {
+      "defaults": { "append": ["Shared guidance."] },
+      "overrides": { "worker": { "inheritDefaults": false, "prepend": ["Review carefully."] } }
+    }
+  },
+  "command": {},
+  "skill": {}
+}

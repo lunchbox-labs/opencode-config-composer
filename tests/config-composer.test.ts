@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { editorServerConfig } from './editor-server-config.ts';
 import { type TestContext, test } from 'node:test';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import type { Hooks, PluginInput } from '@opencode-ai/plugin';
 import type {
+  TuiDialogAlertProps,
   TuiDialogConfirmProps,
   TuiDialogPromptProps,
   TuiDialogSelectProps,
@@ -556,26 +558,38 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   type PromptDialog = Omit<TuiDialogPromptProps, 'onConfirm'> & {
     onConfirm?: (value: string) => void | Promise<void>;
   };
-  let dialog: SelectDialog | ConfirmDialog | PromptDialog | undefined;
+  let dialog: SelectDialog | ConfirmDialog | PromptDialog | TuiDialogAlertProps | undefined;
   let onClose: (() => void) | undefined;
   const clear = () => {
     onClose?.();
     onClose = undefined;
     dialog = undefined;
   };
+  let frozenConfig: unknown;
   let providerError = false;
+  let projectProofError = false;
   let providerGate: (() => Promise<void>) | undefined;
   let proofGate: (() => Promise<void>) | undefined;
+  let configGate: (() => Promise<void>) | undefined;
   const controller = new AbortController();
   let active = false;
   let updates = 0;
+  let globalUpdates = 0;
   let serverRoot = root;
   let unregistered = false;
   let dispose: (() => void) | undefined;
-  const commands: { name: string; slashName: string; run: () => void | Promise<void> }[] = [];
+  const commands: { name: string; slashName?: string; slashAliases?: string[]; run: () => void | Promise<void> }[] = [];
   const toasts: { message: string }[] = [];
+  const keymapListeners = new Set<() => void>();
+  let nativeCommands: string[] = [];
   const api = {
-    state: { path: { config: serverDirectory } },
+    state: {
+      path: {
+        config: serverDirectory,
+        directory: undefined as string | undefined,
+        worktree: undefined as string | undefined,
+      },
+    },
     route: { current: { name: 'home' } },
     lifecycle: {
       signal: controller.signal,
@@ -584,15 +598,31 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       },
     },
     keymap: {
+      getCommands: () => commands,
+      on: (_event: string, handler: () => void) => {
+        keymapListeners.add(handler);
+        return () => keymapListeners.delete(handler);
+      },
       registerLayer: (layer: { commands: typeof commands }) => {
         commands.push(...layer.commands);
+        keymapListeners.forEach((handler) => handler());
         return () => {
           unregistered = true;
+          for (const command of layer.commands) {
+            const index = commands.indexOf(command);
+            if (index >= 0) {
+              commands.splice(index, 1);
+            }
+          }
+          keymapListeners.forEach((handler) => handler());
         };
       },
     },
     ui: {
       DialogSelect: (props: SelectDialog) => {
+        dialog = props;
+      },
+      DialogAlert: (props: TuiDialogAlertProps) => {
         dialog = props;
       },
       DialogConfirm: (props: ConfirmDialog) => {
@@ -602,6 +632,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
         dialog = props;
       },
       dialog: {
+        setSize: () => {},
         get open() {
           return dialog !== undefined;
         },
@@ -617,16 +648,42 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       },
     },
     client: {
+      command: { list: async () => ({ data: nativeCommands.map((name) => ({ name })) }) },
       file: {
-        read: async (input: { path: string }) => {
+        read: async (input: { path: string; directory: string }) => {
           await proofGate?.();
+          if (projectProofError && input.directory === api.state.path.directory) {
+            throw new Error('Project proof failed');
+          }
           return {
-            data: { type: 'text', content: await readFile(join(serverRoot, relative(root, input.path)), 'utf8') },
+            data: {
+              type: 'text',
+              content: await readFile(join(serverRoot, relative(root, input.directory), input.path), 'utf8'),
+            },
           };
         },
       },
       config: {
-        get: async () => ({ data: { model: 'example/fast' } }),
+        get: async () => {
+          await configGate?.();
+          if (frozenConfig !== undefined) {
+            return { data: frozenConfig };
+          }
+          const path = api.state.path as { worktree?: string; directory?: string };
+          const workspace =
+            typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
+              ? path.worktree
+              : (path.directory ?? root);
+          return {
+            data: await editorServerConfig(
+              root,
+              { model: 'example/fast' },
+              workspace,
+              path.directory ?? workspace,
+              path.worktree ?? workspace,
+            ),
+          };
+        },
         providers: async () => {
           await providerGate?.();
           return providerError
@@ -648,10 +705,20 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
         },
       },
       session: { status: async () => ({ data: active ? { session: { type: 'busy' } } : {} }) },
+      instance: {
+        dispose: async () => {
+          updates++;
+          frozenConfig = undefined;
+          return { data: true };
+        },
+      },
+      app: { agents: async () => ({ data: [] }) },
       global: {
         config: {
           update: async (input: { config: { plugin: unknown[] } }) => {
             updates++;
+            globalUpdates++;
+            frozenConfig = undefined;
             const path = join(serverRoot, 'opencode.jsonc');
             const before = await readFile(path, 'utf8');
             await writeFile(
@@ -669,10 +736,17 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       },
     },
   } as unknown as TuiPluginApi;
-  registerSettings(api, root, globalDirectory);
+  const settings = registerSettings(api, root, globalDirectory);
   return {
     api,
-    commands,
+    refreshShortcuts: settings.refreshShortcuts,
+    commandNames: () => commands.map((command) => command.name),
+    setNativeCommands: (names: string[]) => {
+      nativeCommands = names;
+    },
+    async freezeServer() {
+      frozenConfig = (await api.client.config.get()).data;
+    },
     controller,
     delayProofAfter(skip: number) {
       const requested = Promise.withResolvers<undefined>();
@@ -695,14 +769,35 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       };
       return { requested: requested.promise, resolve: () => response.resolve(undefined) };
     },
+    delayConfig() {
+      const requested = Promise.withResolvers<undefined>();
+      const response = Promise.withResolvers<undefined>();
+      configGate = () => {
+        requested.resolve(undefined);
+        return response.promise;
+      };
+      return { requested: requested.promise, resolve: () => response.resolve(undefined) };
+    },
     get dialog() {
       return dialog;
     },
+    title: () => dialog?.title,
+    message: () => (dialog !== undefined && 'message' in dialog ? dialog.message : ''),
     get toasts() {
       return toasts;
     },
     get updates() {
       return updates;
+    },
+    get globalUpdates() {
+      return globalUpdates;
+    },
+    setProject(value: string) {
+      api.state.path.directory = value;
+      api.state.path.worktree = value;
+    },
+    setProjectProofError(value: boolean) {
+      projectProofError = value;
     },
     setProviderError(value: boolean) {
       providerError = value;
@@ -797,47 +892,21 @@ test('a delayed reference picker does not reopen after Escape', async (t) => {
   assert.equal(ui.dialog, current);
 });
 
-for (const entry of ['slash command', 'menu button'] as const) {
-  test(`TUI reload via ${entry} retains confirmation, cancellation, busy guard, and success feedback`, async (t) => {
-    const root = await fixture(t);
-    const ui = uiHarness(root);
-    if (entry === 'slash command') {
-      const command = ui.commands.find((item) => item.slashName === 'reload-configs');
-      assert.ok(command !== undefined, '/reload-configs must be registered');
-      await command.run();
-    } else {
-      await ui.command();
-      await ui.select('+reload');
-    }
-    assert.equal(ui.dialog?.title, 'Settings saved');
-    assert.equal(ui.updates, 0);
-    await ui.select('reload');
-    assert.equal(ui.dialog.title, 'Reload OpenCode settings?');
-    assert.ok('message' in ui.dialog);
-    assert.match(ui.dialog.message, /ALL workspaces/);
-    assert.equal(ui.updates, 0);
-    await ui.cancel();
-    assert.equal(ui.updates, 0);
-    assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), config);
-    ui.setActive(true);
-    await ui.select('reload');
-    await ui.confirm();
-    assert.equal(ui.updates, 0);
-    assert.match(ui.toasts.at(-1)!.message, /still running/);
-    ui.setActive(false);
-    await ui.select('reload');
-    await ui.confirm();
-    assert.equal(ui.updates, 1);
-    assert.equal(ui.dialog, undefined);
-    assert.match(ui.toasts.at(-1)!.message, /New agent calls use the saved defaults/);
-    assert.match(await readFile(join(root, 'opencode.jsonc'), 'utf8'), /reloadToken/);
-    ui.dispose();
-  });
-}
+test('reload alias opens the same instance-scoped revision apply path', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.reload');
+  assert.equal(ui.title(), 'Settings saved');
+  await ui.select('reload');
+  assert.match(ui.message(), /only this instance/i);
+  assert.ok(ui.message().includes(root));
+  assert.ok(!ui.message().includes('ALL workspaces'));
+});
 
 test('TUI model selection previews, saves, and blocks reload while an agent runs', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);
+  await ui.freezeServer();
   await ui.command();
   await ui.select('developers');
   await ui.select('example/next');
@@ -846,17 +915,63 @@ test('TUI model selection previews, saves, and blocks reload while an agent runs
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), config);
   await ui.confirm();
   assert.deepEqual((await loadSnapshot(root)).groups.developers, { model: 'example/next', variant: 'low' });
+  assert.match(JSON.stringify(ui.dialog), /Saved Composer revision .* pending/);
   ui.setActive(true);
   await ui.select('reload');
   await ui.confirm();
   assert.equal(ui.updates, 0);
   assert.match(ui.toasts.at(-1)!.message, /still running/);
+  assert.match(JSON.stringify(ui.dialog), /Apply failed/);
   ui.setActive(false);
   await ui.select('reload');
   await ui.confirm();
   assert.equal(ui.updates, 1);
+  assert.equal(ui.globalUpdates, 0, 'scoped apply must not call the global configuration update API');
   assert.match(await readFile(join(root, 'opencode.jsonc'), 'utf8'), /Keep this comment and trailing comma/);
   ui.dispose();
+});
+
+for (const scope of ['global', 'all'] as const) {
+  test(`native ${scope} model saves require restart and never report a Composer apply`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    await ui.freezeServer();
+    await ui.command();
+    await ui.select(scope === 'global' ? '+global' : '+all');
+    if (scope === 'global') {
+      await ui.select('model');
+    }
+    await ui.select('example/next');
+    if (scope === 'all') {
+      await ui.select('low');
+    }
+    await ui.confirm();
+    assert.equal(ui.title(), 'Native settings saved');
+    assert.match(JSON.stringify(ui.dialog), /Restart OpenCode to apply native settings/);
+    assert.match(await readFile(join(root, 'opencode.jsonc'), 'utf8'), /example\/next/);
+    assert.equal(ui.updates, 0);
+    assert.equal(ui.globalUpdates, 0);
+    assert.ok(ui.toasts.every((toast) => !toast.message.includes('Applied')));
+  });
+}
+
+test('a failed save remains distinct from pending or applied state and retains disk bytes', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  const source = join(root, 'config-composer.jsonc');
+  const before = await readFile(source, 'utf8');
+  await ui.command();
+  await ui.select('developers');
+  await ui.select('example/next');
+  await ui.select('low');
+  const lock = join(root, '.config-composer.lock');
+  await writeFile(lock, 'Another editor holds this lock');
+  await ui.confirm();
+  assert.equal(await readFile(source, 'utf8'), before);
+  await rm(lock);
+  await ui.command('config-composer.reload');
+  assert.match(JSON.stringify(ui.dialog), /Save failed/);
+  assert.equal(ui.updates, 0);
 });
 
 test('TUI cancellation and provider failures leave files unchanged', async (t) => {
@@ -882,17 +997,39 @@ test('TUI cancellation and provider failures leave files unchanged', async (t) =
   assert.equal(ui.updates, 0);
 });
 
-test('a custom configuration installation cannot write to a different global configuration during reload', async (t) => {
+test('a custom configuration installation applies its instance without writing global configuration', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root, join(root, 'different-global-directory'));
   await ui.command();
   await ui.select('+reload');
   await ui.select('reload');
   await ui.confirm();
-  assert.equal(ui.updates, 0);
-  assert.match(ui.toasts.at(-1)!.message, /custom configuration directory/);
+  assert.equal(ui.updates, 1);
+  assert.equal(ui.globalUpdates, 0);
+  assert.match(ui.toasts.at(-1)!.message, /Applied/);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), config);
 });
+
+for (const change of ['instance', 'sources'] as const) {
+  test(`apply confirmation rejects a changed ${change} instead of applying an unreviewed target`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    await ui.command();
+    await ui.select('+reload');
+    await ui.select('reload');
+    if (change === 'instance') {
+      const other = join(root, 'other');
+      await mkdir(other);
+      ui.setProject(other);
+    } else {
+      const path = join(root, 'config-composer.jsonc');
+      await writeFile(path, (await readFile(path, 'utf8')) + '\n// Saved while confirmation was open');
+    }
+    await ui.confirm();
+    assert.equal(ui.updates, 0);
+    assert.match(ui.toasts.at(-1)!.message, /changed|Reopen/i);
+  });
+}
 
 test('reload preserves an unrelated plugin edited while the final filesystem proof is pending', async (t) => {
   const root = await fixture(t);
@@ -900,7 +1037,7 @@ test('reload preserves an unrelated plugin edited while the final filesystem pro
   await ui.command();
   await ui.select('+reload');
   await ui.select('reload');
-  const proof = ui.delayProofAfter(1); // Allow reload's snapshot load; pause its final authorization.
+  const proof = ui.delayProofAfter(0); // Pause confirmation's final filesystem proof.
   const pending = ui.confirm();
   await proof.requested;
   const path = join(root, 'opencode.jsonc');
@@ -911,7 +1048,7 @@ test('reload preserves an unrelated plugin edited while the final filesystem pro
   await pending;
   assert.equal(await readFile(path, 'utf8'), changed);
   assert.equal(ui.updates, 0);
-  assert.match(ui.toasts.at(-1)!.message, /Settings changed/);
+  assert.match(ui.toasts.at(-1)!.message, /configuration changed|Settings changed/);
 });
 
 for (const boundary of ['open', 'save', 'reload'] as const) {
@@ -970,8 +1107,9 @@ test('TUI opens and saves the selected custom directory when the server reports 
   assert.deepEqual(await readdir(globalDirectory), []);
   await ui.select('reload');
   await ui.confirm();
-  assert.equal(ui.updates, 0);
-  assert.match(ui.toasts.at(-1)!.message, /custom configuration directory/);
+  assert.equal(ui.updates, 1);
+  assert.equal(ui.globalUpdates, 0);
+  assert.deepEqual(await readdir(globalDirectory), []);
 });
 
 test('TUI rejects an installation that is neither the server config nor the selected custom directory', async (t) => {
@@ -1138,3 +1276,1095 @@ test('TUI membership mutations keep Back and Escape on live parent menus without
   assert.equal(await readFile(path, 'utf8'), original);
   assert.equal(ui.toasts.length, 0);
 });
+
+test('compose navigation preserves Back across existing editor sections and their slash aliases', async (t) => {
+  const root = await fixture(t);
+  const before = await readFile(join(root, 'config-composer.jsonc'), 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  assert.equal(ui.title(), 'Compose');
+  await ui.select('groups');
+  assert.equal(ui.title(), 'Agent groups');
+  await ui.select('developers');
+  assert.equal(ui.title(), 'Group: developers');
+  await ui.select('\u0000back');
+  await ui.select('\u0000back');
+  assert.equal(ui.title(), 'Compose');
+  await ui.select('models');
+  assert.equal(ui.title(), 'Agent models: scope');
+  await ui.escape();
+  assert.equal(ui.title(), 'Compose');
+  await ui.escape();
+  assert.equal(Boolean(ui.dialog), false);
+  await ui.command('config-composer.membership');
+  assert.equal(ui.title(), 'Agent groups');
+  await ui.escape();
+  assert.equal(ui.dialog, undefined);
+  assert.equal(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), before);
+});
+
+test('compose inspection shows canonical selection, origins and source editability without writing files', async (t) => {
+  const root = await fixture(t);
+  const before = await readFile(join(root, 'config-composer.jsonc'), 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('effective');
+  assert.equal(ui.title(), 'Saved composition preview');
+  await ui.select('+profiles');
+  assert.match(ui.message(), /work/);
+  assert.match(ui.message(), /project-wide/);
+  await ui.escape();
+  await ui.select('/agent/builtin/model');
+  assert.match(ui.message(), /example\/fast/);
+  assert.match(ui.message(), /componentGroups\/developers\/configuration\/model/);
+  assert.match(ui.message(), /Saved preview/);
+  await ui.escape();
+  await ui.select('+sources');
+  assert.match(ui.message(), /config-composer.jsonc/);
+  assert.match(ui.message(), /Writable/);
+  assert.match(ui.message(), /running configuration may differ/);
+  assert.equal(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), before);
+  assert.equal(ui.updates, 0);
+});
+
+test('running inspection reads the server despite invalid saved composition and never writes', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  ui.setProject(root);
+  await ui.freezeServer();
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(path, '{ invalid saved composition');
+  const before = await readFile(path, 'utf8');
+  const native = await readFile(join(root, 'opencode.jsonc'), 'utf8');
+  await ui.command('config-composer.compose');
+  await ui.select('running');
+  assert.equal(ui.title(), 'Running configuration inspector');
+  await ui.select('model');
+  assert.match(ui.message(), /example\/fast/);
+  await ui.escape();
+  await ui.select('limits');
+  assert.match(ui.message(), /TUI/);
+  assert.match(ui.message(), /unavailable|cannot/i);
+  await ui.escape();
+  await ui.select('refresh');
+  assert.equal(ui.title(), 'Running configuration inspector');
+  await ui.escape();
+  assert.equal(ui.title(), 'Compose');
+  assert.equal(await readFile(path, 'utf8'), before);
+  assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), native);
+  assert.equal(ui.updates, 0);
+  assert.equal(ui.toasts.length, 0);
+});
+
+for (const transition of ['dismiss', 'route', 'client', 'dispose']) {
+  test(`running inspection cannot reopen after ${transition} while a server read is pending`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    ui.setProject(root);
+    await ui.freezeServer();
+    await ui.command('config-composer.compose');
+    const gate = ui.delayConfig();
+    const pending = ui.select('running');
+    await gate.requested;
+    if (transition === 'dismiss') {
+      await ui.escape();
+    } else if (transition === 'route') {
+      Object.assign(ui.api.route, { current: { name: 'session', params: { sessionID: 'another' } } });
+    } else if (transition === 'client') {
+      Object.assign(ui.api, { client: new Proxy(ui.api.client, {}) });
+    } else {
+      ui.controller.abort();
+    }
+    gate.resolve();
+    await pending;
+    assert.notEqual(ui.title(), 'Running configuration inspector');
+    assert.equal(ui.updates, 0);
+  });
+}
+
+for (const section of ['groups', 'models', 'effective']) {
+  test(`closing Compose while ${section} loads does not reopen the cancelled view`, async (t) => {
+    const ui = uiHarness(await fixture(t));
+    await ui.command('config-composer.compose');
+    const gate = ui.delayProofAfter(0);
+    const pending = ui.select(section);
+    await gate.requested;
+    await ui.escape();
+    gate.resolve();
+    await pending;
+    assert.equal(ui.dialog, undefined);
+    assert.equal(ui.updates, 0);
+  });
+}
+
+test('compose permission inspection preserves ordered contributions and states the integration boundary', async (t) => {
+  const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      componentGroups: {
+        developers: {
+          agents: ['build'],
+          configuration: {
+            permissions: [
+              { tool: 'bash', action: 'deny' },
+              { tool: 'bash', pattern: 'git *', action: 'allow' },
+            ],
+          },
+        },
+        reviewers: {},
+        'custom-team': {},
+      },
+      profiles: { work: { layers: [{ componentGroup: 'developers' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('effective');
+  await ui.select('+permissions');
+  assert.ok(ui.message().indexOf('bash * → deny') < ui.message().indexOf('bash git * → allow'));
+  assert.match(ui.message(), /native defaults and session approvals are outside this preview/);
+  assert.equal(ui.updates, 0);
+});
+
+test('compose inspection includes pinned component models even when field origin is unavailable', async (t) => {
+  const root = await fixture(t);
+  await writeFile(join(root, 'component.md'), '---\nmodel: example/pinned\nvariant: high\n---\nPinned prompt');
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      components: { agents: { 'team/worker': { file: './component.md' } } },
+      componentGroups: {
+        developers: {},
+        reviewers: {},
+        'custom-team': {},
+        work: { agents: ['team/worker'], configuration: { model: 'example/fast' } },
+      },
+      profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('effective');
+  await ui.select('/agent/team~1worker/model');
+  assert.match(ui.message(), /example\/pinned/);
+  assert.match(ui.message(), /origin unavailable/);
+  await ui.escape();
+  await ui.select('/agent/team~1worker/variant');
+  assert.match(ui.message(), /high/);
+});
+
+for (const section of ['models', 'groups']) {
+  test(`Compose reload links preserve Back through the ${section} section`, async (t) => {
+    const ui = uiHarness(await fixture(t));
+    await ui.command('config-composer.compose');
+    await ui.select('reload');
+    await ui.select(section);
+    await ui.select('\u0000back');
+    assert.equal(ui.title(), 'Settings saved');
+    await ui.escape();
+    assert.equal(ui.title(), 'Compose');
+  });
+}
+
+test('registry UI creates an inactive profile at an explicit source and retains activation', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('+create');
+  await ui.enter('review');
+  assert.equal(ui.title(), 'Save new definition in…');
+  await ui.select(join(root, 'config-composer.jsonc'));
+  assert.equal(ui.title(), 'Save composition definition?');
+  await ui.confirm();
+  const current = await loadSnapshot(root);
+  assert.deepEqual(current.sources.registry.profiles?.review, { layers: [] });
+  assert.deepEqual(current.sources.activeProfiles, ['work']);
+  assert.equal(ui.updates, 0);
+});
+
+test('profile layer edits retain order, preview impact, and can be cancelled without writes', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const before = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('work');
+  await ui.select('layers');
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('+save');
+  assert.equal(ui.title(), 'Save composition definition?');
+  await ui.cancel();
+  assert.equal(await readFile(path, 'utf8'), before);
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual(
+    (await loadSnapshot(root)).sources.registry.profiles?.work.layers?.map((layer) => layer.componentGroup),
+    ['reviewers', 'developers'],
+  );
+});
+
+test('profile availability editor includes disabled and dormant agents, preserves cancellation and saves without applying', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const document = parseConfig(await readFile(path, 'utf8'));
+  document.components = {
+    agents: { dormant: { prompt: 'Dormant body' }, '+save': { prompt: 'Reserved-looking name' } },
+  };
+  await writeFile(path, JSON.stringify(document));
+  const before = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('work');
+  await ui.select('availability');
+  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
+  assert.ok(ui.dialog.options.some((option) => option.value === 'agent:disabled'));
+  assert.ok(ui.dialog.options.some((option) => option.value === 'agent:dormant'));
+  assert.ok(!ui.dialog.options.some((option) => option.value === 'agent:title'));
+  await ui.select('agent:+save');
+  assert.equal(ui.title(), 'work: +save');
+  await ui.select('inherit');
+  await ui.select('agent:build');
+  await ui.select('disable');
+  await ui.select('+save');
+  await ui.cancel();
+  assert.equal(await readFile(path, 'utf8'), before);
+  await ui.select('+save');
+  await ui.confirm();
+  const saved = await loadSnapshot(root);
+  assert.equal(saved.sources.registry.profiles?.work.agentAvailability?.build, false);
+  assert.equal(saved.resolved.agentAvailability.build.status, 'disabled');
+  assert.equal(saved.resolved.agentAvailability.dormant.status, 'unselected');
+  assert.equal(ui.updates, 0);
+  await ui.command('config-composer.compose');
+  await ui.select('effective');
+  await ui.select('+availability');
+  await ui.select('build');
+  assert.match(ui.message(), /disabled.*primary/);
+  assert.match(ui.message(), /profiles\/work\/agentAvailability\/build/);
+});
+
+test('registry UI renames an active group and its native memberships without changing model outcomes', async (t) => {
+  const root = await fixture(t);
+  const before = await loadSnapshot(root);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('componentGroups');
+  await ui.select('developers');
+  await ui.select('rename');
+  await ui.enter('coding');
+  assert.equal(ui.title(), 'Save composition definition?');
+  await ui.confirm();
+  const after = await loadSnapshot(root);
+  assert.equal(after.sources.registry.componentGroups?.developers, undefined);
+  assert.deepEqual(after.nativeAgents.builtin.groups, ['coding']);
+  assert.equal(after.resolved.agent.builtin.model, before.resolved.agent.builtin.model);
+  assert.equal(after.resolved.agent['nested/pinned'].model, before.resolved.agent['nested/pinned'].model);
+});
+
+test('registry confirmation counts agents returning to native fallback when layers are removed', async (t) => {
+  const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      componentGroups: {
+        developers: {},
+        reviewers: {},
+        'custom-team': {},
+        work: { agents: ['build'], configuration: { model: 'example/fast' } },
+      },
+      profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('work');
+  await ui.select('layers');
+  await ui.select('0');
+  await ui.select('remove');
+  await ui.select('+save');
+  assert.match(ui.message(), /1 agent configuration previews change/);
+  assert.match(ui.message(), /native fallback/);
+});
+
+test('group member picker repairs unavailable members and keeps component names separate from actions', async (t) => {
+  const root = await fixture(t);
+  const native = parseConfig(await readFile(join(root, 'opencode.jsonc'), 'utf8'));
+  Object.assign(native.agent as Record<string, unknown>, { dormant: { disable: true } });
+  await writeFile(join(root, 'opencode.jsonc'), JSON.stringify(native));
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({
+      components: { agents: { '+save': { prompt: 'Body' } } },
+      componentGroups: { developers: {}, reviewers: {}, 'custom-team': {}, work: { agents: ['dormant', 'removed'] } },
+      profiles: {},
+      activeProfiles: [],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('componentGroups');
+  await ui.select('work');
+  await ui.select('agents');
+  await ui.select('member:dormant');
+  await ui.select('member:removed');
+  await ui.select('member:+save');
+  assert.equal(ui.title(), 'work: agents');
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.work.agents, ['+save']);
+});
+
+test('compose accumulates active membership repairs, rejects incomplete drafts, and saves without applying', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  const file = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(file, 'utf8'));
+  const definitions = value.componentGroups as Record<string, { agents?: string[] }>;
+  definitions.developers.agents = ['removed', 'build'];
+  definitions.reviewers.agents = ['also-removed', 'plan'];
+  const before = JSON.stringify(value);
+  await writeFile(file, before);
+  const nativeBefore = await readFile(join(root, 'opencode.jsonc'), 'utf8');
+  await ui.command('config-composer.compose');
+  await ui.select('repair');
+  assert.equal(ui.title(), 'Repair invalid memberships');
+  await ui.select('group:developers');
+  await ui.select('agents');
+  await ui.select('member:removed');
+  await ui.select('+keep');
+  await ui.select('\u0000back');
+  await ui.select('+review');
+  assert.match(ui.toasts.at(-1)!.message, /also-removed/);
+  assert.equal(await readFile(file, 'utf8'), before);
+  await ui.select('group:reviewers');
+  await ui.select('agents');
+  await ui.select('member:also-removed');
+  await ui.select('+keep');
+  await ui.select('\u0000back');
+  await ui.select('+review');
+  assert.equal(ui.title(), 'Save membership repair?');
+  assert.match(ui.message(), /previous saved configuration is invalid/i);
+  assert.match(ui.message(), /config-composer.jsonc/);
+  await ui.cancel();
+  assert.equal(await readFile(file, 'utf8'), before);
+  await ui.select('+review');
+  await ui.confirm();
+  assert.equal(ui.updates, 0);
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.developers.agents, ['build']);
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.reviewers.agents, ['plan']);
+  assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), nativeBefore);
+});
+
+test('membership repair confirmation exposes permission fallback before saving an otherwise valid candidate', async (t) => {
+  const root = await fixture(t);
+  const nativePath = join(root, 'opencode.jsonc');
+  const native = parseConfig(await readFile(nativePath, 'utf8'));
+  (native.agent as Record<string, AgentSettings>).builtin.permission = { skill: 'allow' };
+  const nativeBefore = JSON.stringify(native);
+  await writeFile(nativePath, nativeBefore);
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  const file = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(file, 'utf8'));
+  const definitions = value.componentGroups as Record<string, Record<string, unknown>>;
+  definitions.developers.agents = ['removed'];
+  definitions.developers.configuration = {
+    permissions: [
+      { tool: 'webfetc?', pattern: 'a', action: 'deny' },
+      { tool: 'webfetch', action: 'allow' },
+      { tool: 'webfetc?', pattern: 'b', action: 'deny' },
+      { tool: 'skill', action: 'deny' },
+    ],
+  };
+  const before = JSON.stringify(value);
+  await writeFile(file, before);
+  await ui.command('config-composer.compose');
+  await ui.select('repair');
+  await ui.select('group:developers');
+  await ui.select('agents');
+  await ui.select('member:removed');
+  await ui.select('member:builtin');
+  await ui.select('+keep');
+  await ui.select('\u0000back');
+  await ui.select('+review');
+  assert.equal(ui.title(), 'Save membership repair?');
+  assert.match(ui.message(), /All Composer.*agent.*not applied/);
+  assert.match(ui.message(), /builtin/);
+  assert.match(ui.message(), /more permissive/i);
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf(file));
+  assert.equal(await readFile(file, 'utf8'), before, 'warning is visible before any write');
+  await ui.cancel();
+  assert.equal(await readFile(file, 'utf8'), before);
+  await ui.select('+review');
+  await ui.confirm();
+  const saved = await loadSnapshot(root);
+  assert.ok(saved.resolved.permissionWarnings.some((warning) => warning.scope === 'agent:builtin'));
+  assert.deepEqual(saved.resolved.agent.builtin.permission, { skill: 'allow' });
+  assert.equal(ui.updates, 0, 'saving the warned candidate still does not apply it');
+  assert.equal(await readFile(nativePath, 'utf8'), nativeBefore);
+});
+
+test('new configuration presets choose model settings before saving a valid definition', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('configurationPresets');
+  await ui.select('+create');
+  await ui.enter('quick');
+  await ui.select(join(root, 'config-composer.jsonc'));
+  await ui.select('example/fast');
+  await ui.select('');
+  assert.equal(ui.title(), 'Save composition definition?');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.configurationPresets?.quick, { model: 'example/fast' });
+});
+
+test('inactive preset creation rechecks provider availability before saving', async (t) => {
+  const root = await fixture(t);
+  const before = await readFile(join(root, 'config-composer.jsonc'), 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('configurationPresets');
+  await ui.select('+create');
+  await ui.enter('quick');
+  await ui.select(join(root, 'config-composer.jsonc'));
+  await ui.select('example/fast');
+  await ui.select('');
+  ui.setProviderError(true);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /Could not load provider models/);
+  assert.equal(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), before);
+  assert.equal(ui.updates, 0);
+});
+
+for (const field of ['model', 'small_model'] as const) {
+  test(`profile parent edits revalidate changed ${field} even without agent model changes`, async (t) => {
+    const root = await fixture(t);
+    const path = join(root, 'config-composer.jsonc');
+    const value = parseConfig(await readFile(path, 'utf8'));
+    (value.profiles as Record<string, unknown>).unavailable = { overrides: { [field]: 'missing/unavailable' } };
+    await writeFile(path, JSON.stringify(value));
+    const before = await readFile(path, 'utf8');
+    const ui = uiHarness(root);
+    await ui.command('config-composer.compose');
+    await ui.select('registry');
+    await ui.select('profiles');
+    await ui.select('work');
+    await ui.select('parent');
+    await ui.select('unavailable');
+    assert.match(ui.message(), /missing\/unavailable/);
+    await ui.confirm();
+    assert.match(ui.toasts.at(-1)!.message, /not available|unavailable|provider/i);
+    assert.equal(await readFile(path, 'utf8'), before);
+  });
+}
+
+test('newly selected commands revalidate their authored model before saving membership', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(path, 'utf8'));
+  value.components = { commands: { check: { file: './check.md' } } };
+  await writeFile(join(root, 'check.md'), '---\nmodel: missing/unavailable\n---\nCheck this.');
+  await writeFile(path, JSON.stringify(value));
+  const before = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('componentGroups');
+  await ui.select('developers');
+  await ui.select('commands');
+  await ui.select('member:check');
+  await ui.select('+save');
+  assert.match(ui.message(), /missing\/unavailable/);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /not available|unavailable|provider/i);
+  assert.equal(await readFile(path, 'utf8'), before);
+});
+
+test('removing a profile parent previews native fallback from the server baseline, not the composed response', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(path, 'utf8'));
+  const profiles = value.profiles as Record<string, Record<string, unknown>>;
+  profiles.parent = { overrides: { model: 'example/deep' } };
+  profiles.work.extends = 'parent';
+  await writeFile(path, JSON.stringify(value));
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('work');
+  await ui.select('parent');
+  await ui.select('');
+  assert.match(ui.message(), /Changed global models: model: example\/fast/);
+  await ui.confirm();
+  assert.equal((await loadSnapshot(root)).sources.registry.profiles?.work.extends, undefined);
+  assert.ok(!(await readFile(join(root, 'opencode.jsonc'), 'utf8')).includes('__configComposerRuntime'));
+});
+
+test('instance apply retains saved native JSON edits and requests restart for the global cache', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  const path = join(root, 'opencode.jsonc');
+  const before = await readFile(path, 'utf8');
+  await writeFile(path, applyEdits(before, modify(before, ['agent', 'builtin', 'model'], 'example/next', {})));
+  await ui.command();
+  assert.match(ui.toasts.at(-1)!.message, /Native agent inputs differ/);
+  await ui.command('config-composer.compose');
+  await ui.select('reload');
+  assert.equal(ui.updates, 0);
+  assert.equal(ui.globalUpdates, 0);
+  assert.match(ui.toasts.at(-1)!.message, /Native agent inputs differ/);
+  assert.equal(
+    (parseConfig(await readFile(path, 'utf8')).agent as Record<string, { model: string }>).builtin.model,
+    'example/next',
+  );
+});
+
+test('profile activation UI distinguishes local none from inheritance and preserves cancellation', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('local');
+  await ui.select('none');
+  assert.match(ui.message(), /local profile selection: none/);
+  await ui.cancel();
+  await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+  await ui.select('none');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, []);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('local');
+  await ui.select('inherit');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, ['work']);
+});
+
+test('ordered activation editor reorders unique pending profiles before saving', async (t) => {
+  const root = await fixture(t);
+  const value = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
+  (value.profiles as Record<string, unknown>).review = { layers: [] };
+  await writeFile(join(root, 'config-composer.jsonc'), JSON.stringify(value));
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('local');
+  await ui.select('ordered');
+  await ui.select('+add');
+  assert.ok(
+    ui.dialog !== undefined && 'options' in ui.dialog && !ui.dialog.options.some((option) => option.value === 'work'),
+  );
+  await ui.select('review');
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, ['review', 'work']);
+});
+
+test('project writes require project filesystem proof after the installation proof succeeds', async (t) => {
+  const root = await fixture(t);
+  const project = await mkdtemp(join(tmpdir(), 'composer-ui-project-'));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  const ui = uiHarness(root);
+  ui.setProject(project);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('project');
+  await ui.select('create');
+  ui.setProjectProofError(true);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /shared filesystem/);
+  await assert.rejects(readFile(join(project, '.opencode/config-composer.jsonc')), /ENOENT/);
+});
+
+test('first-source creation makes a project definition destination available without changing conversations', async (t) => {
+  const root = await fixture(t);
+  const project = await mkdtemp(join(tmpdir(), 'composer-ui-first-source-'));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  await rm(join(root, 'config-composer.jsonc'));
+  const ui = uiHarness(root);
+  ui.setProject(project);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('project');
+  await ui.select('create');
+  await ui.confirm();
+  const source = join(project, '.opencode/config-composer.jsonc');
+  assert.deepEqual(parseConfig(await readFile(source, 'utf8')), {});
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('profiles');
+  await ui.select('+create');
+  await ui.enter('review');
+  await ui.select(source);
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root, project)).sources.registry.profiles?.review, { layers: [] });
+  assert.deepEqual((await loadSnapshot(root, project)).sources.activeProfiles, []);
+  assert.equal(ui.updates, 0);
+});
+
+test('changing projects before confirmation rejects the previous project scope write', async (t) => {
+  const root = await fixture(t);
+  const project = await mkdtemp(join(tmpdir(), 'composer-ui-switched-project-'));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  const ui = uiHarness(root);
+  ui.setProject(project);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('local');
+  await ui.select('none');
+  ui.setProject(root);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /project changed/);
+  await assert.rejects(readFile(join(project, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+});
+
+for (const [field, text, expected] of [
+  ['temperature', '0.4', 0.4],
+  ['topP', '0.8', 0.8],
+  ['topK', '16', 16],
+  ['maxOutputTokens', '128', 128],
+  ['options', '{"custom":[true,null,"value"]}', { custom: [true, null, 'value'] }],
+] as const) {
+  test(`parameter UI edits ${field} at its explicit destination and retains cancel/back behavior`, async (t) => {
+    const root = await fixture(t);
+    const path = join(root, 'config-composer.jsonc');
+    const original = await readFile(path, 'utf8');
+    const ui = uiHarness(root);
+    await ui.command('config-composer.compose');
+    await ui.select('parameters');
+    await ui.select(path);
+    await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+    await ui.select(field);
+    await ui.enter(text);
+    assert.match(ui.message(), /parameters|provider-unverified/);
+    await ui.cancel();
+    assert.equal(await readFile(path, 'utf8'), original);
+    await ui.escape();
+    await ui.select(field);
+    await ui.enter(text);
+    await ui.confirm();
+    const parameters = (await loadSnapshot(root)).sources.registry.componentGroups?.developers.configuration
+      ?.parameters;
+    assert.deepEqual(parameters?.[field], expected);
+  });
+}
+
+test('parameter UI rejects a lost provider catalog at confirmation without writing', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('parameters');
+  await ui.select(path);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('temperature');
+  await ui.enter('0.4');
+  ui.setProviderError(true);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /provider models/);
+  assert.equal(await readFile(path, 'utf8'), original);
+});
+
+test('permission UI edits, reorders and previews rules without saving cancelled drafts', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(path);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('+add');
+  await ui.select('0');
+  await ui.select('tool');
+  await ui.enter('bash');
+  await ui.select('pattern');
+  await ui.enter('git *');
+  await ui.select('action');
+  await ui.select('deny');
+  await ui.escape();
+  await ui.select('+add');
+  await ui.select('1');
+  await ui.select('action');
+  await ui.select('allow');
+  await ui.select('earlier');
+  await ui.select('+preview');
+  await ui.select('+local');
+  await ui.enter('bash');
+  await ui.enter('git status');
+  assert.match(ui.message(), /deny: bash git \*/);
+  assert.match(ui.message(), /Earlier matching contributions/);
+  assert.match(ui.message(), /unsupported scope/);
+  await ui.escape();
+  await ui.escape();
+  await ui.escape();
+  await ui.escape();
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('+save');
+  assert.ok(ui.message().indexOf('bash git * → deny') < ui.message().indexOf('* * → allow'));
+  assert.match(ui.message(), /Reload saved settings to apply/);
+  await ui.cancel();
+  assert.equal(await readFile(path, 'utf8'), original);
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.developers.configuration?.permissions, [
+    { tool: 'bash', pattern: 'git *', action: 'deny' },
+    { tool: '*', action: 'allow' },
+  ]);
+  assert.equal(ui.title(), 'Settings saved');
+  assert.equal(ui.updates, 0);
+});
+
+test('permission UI creates an inactive permission-only preset without choosing a model', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(path);
+  await ui.select('+create');
+  await ui.enter('checks');
+  await ui.confirm();
+  const snapshot = await loadSnapshot(root);
+  assert.deepEqual(snapshot.sources.registry.configurationPresets?.checks, { permissions: [] });
+  assert.deepEqual(snapshot.sources.activeProfiles, ['work']);
+  assert.equal(ui.updates, 0);
+});
+
+test('permission save puts candidate fallback before long source paths and ordered rule details', async (t) => {
+  const root = await fixture(t);
+  const file = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(file, 'utf8'));
+  const definitions = value.componentGroups as Record<string, Record<string, unknown>>;
+  definitions.developers.configuration = {
+    permissions: [
+      { tool: 'webfetc?', pattern: 'a', action: 'deny' },
+      { tool: 'webfetch', action: 'allow' },
+      { tool: 'webfetc?', pattern: 'b', action: 'deny' },
+    ],
+  };
+  await writeFile(file, JSON.stringify(value));
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(file);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('+save');
+  assert.match(ui.message(), /^Fallback may be more permissive/);
+  assert.match(ui.message(), /Agent builtin:/);
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf(file));
+  assert.ok(ui.message().indexOf('Fallback may be more') < ui.message().indexOf('webfetc?'));
+  assert.equal(ui.updates, 0);
+});
+
+test('permission agent previews cannot collide with local-definition navigation values', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(
+    join(root, 'opencode.jsonc'),
+    JSON.stringify({ plugin: [packageName], agent: { '+local': { groups: ['developers', 'reviewers'] } } }),
+  );
+  await writeFile(
+    path,
+    JSON.stringify({
+      componentGroups: {
+        developers: { configuration: { permissions: [{ tool: 'bash', action: 'deny' }] } },
+        reviewers: { configuration: { permissions: [{ tool: 'bash', action: 'allow' }] } },
+        'custom-team': {},
+      },
+      profiles: { work: { layers: [{ componentGroup: 'developers' }, { componentGroup: 'reviewers' }] } },
+      activeProfiles: ['work'],
+    }),
+  );
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('permissions');
+  await ui.select(path);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('+preview');
+  await ui.select('agent:+local');
+  await ui.enter('bash');
+  await ui.enter('git status');
+  assert.match(ui.message(), /allow: bash/);
+  assert.match(ui.message(), /componentGroups\/reviewers/);
+});
+
+test('prompt UI preserves multiline fragment order and cancellation before saving', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('prompts');
+  await ui.select(path);
+  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
+  await ui.select('append');
+  await ui.select('+add');
+  await ui.enter('First\nSecond');
+  await ui.select('+add');
+  await ui.enter('Last');
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('1');
+  await ui.select('edit');
+  await ui.enter('First\nRevised second');
+  await ui.select('+save');
+  assert.match(ui.message(), /Last.*First\\nRevised second/s);
+  await ui.cancel();
+  assert.equal(await readFile(path, 'utf8'), original);
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual(
+    (await loadSnapshot(root)).sources.registry.componentGroups?.developers.configuration?.prompt?.append,
+    ['Last', 'First\nRevised second'],
+  );
+  assert.equal(ui.updates, 0);
+});
+
+test('prompt UI validates includes before writing and resets local inheritance controls', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const original = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  const target = JSON.stringify(['overrides', 'agents', 'nested/pinned']);
+  const open = async () => {
+    await ui.command('config-composer.compose');
+    await ui.select('prompts');
+    await ui.select(path);
+    await ui.select(target);
+  };
+  await open();
+  await ui.select('append');
+  await ui.select('+add');
+  await ui.enter('{{include:@missing/file.md}}');
+  await ui.select('+save');
+  assert.match(ui.toasts.at(-1)!.message, /source.*does not exist/);
+  assert.equal(await readFile(path, 'utf8'), original);
+  await open();
+  await ui.select('inheritGroups');
+  await ui.select('false');
+  await ui.confirm();
+  assert.equal(
+    (await loadSnapshot(root)).sources.scopes[0].value.overrides?.agents?.['nested/pinned'].prompt?.inheritGroups,
+    false,
+  );
+  await open();
+  await ui.select('reset');
+  await ui.confirm();
+  assert.equal(
+    (await loadSnapshot(root)).sources.scopes[0].value.overrides?.agents?.['nested/pinned']?.prompt,
+    undefined,
+  );
+});
+
+test('prompt source UI creates aliases and reusable multiline bodies with cancellation and ordered references', async (t) => {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  await mkdir(join(root, 'snippets'));
+  const document = parseConfig(await readFile(path, 'utf8'));
+  document.components = { agents: { authored: { prompt: 'Authored base' } } };
+  const groups = document.componentGroups as Record<string, { agents?: string[] }>;
+  groups.developers.agents = ['authored'];
+  await writeFile(path, JSON.stringify(document));
+  const ui = uiHarness(root);
+  const open = async (registry: string) => {
+    await ui.command('config-composer.compose');
+    await ui.select('prompt-sources');
+    await ui.select(registry);
+  };
+  await open('sourceDirectories');
+  await ui.select('+create');
+  await ui.enter('snippets');
+  await ui.select(path);
+  await ui.enter('./snippets');
+  await ui.confirm();
+  assert.equal((await loadSnapshot(root)).sources.registry.sourceDirectories?.snippets, join(root, 'snippets'));
+  await open('prompts');
+  await ui.select('+create');
+  await ui.enter('notes');
+  await ui.select(path);
+  await ui.select('text');
+  await ui.enter('First\nSecond');
+  await ui.cancel();
+  assert.equal((await loadSnapshot(root)).sources.registry.components?.prompts?.notes, undefined);
+  await ui.enter('First\nSecond');
+  await ui.confirm();
+  await open('references');
+  await ui.select('agent:authored');
+  await ui.select('+add');
+  await ui.select('prompt:notes');
+  await ui.select('+add');
+  await ui.select('prompt:notes');
+  await ui.select('1');
+  await ui.select('earlier');
+  await ui.select('+save');
+  assert.match(ui.message(), /Authored base/);
+  await ui.confirm();
+  assert.equal(
+    (await loadSnapshot(root)).resolved.agent.authored.prompt,
+    'Authored base\n\nFirst\nSecond\n\nFirst\nSecond',
+  );
+  await open('prompts');
+  await ui.select('asset:notes');
+  await ui.select('rename');
+  await ui.enter('review/notes');
+  assert.match(ui.message(), /authored\/promptRefs/);
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.components?.agents?.authored.promptRefs, [
+    'review/notes',
+    'review/notes',
+  ]);
+  await open('references');
+  await ui.select('agent:authored');
+  await ui.select('+reset');
+  await ui.confirm();
+  await open('prompts');
+  await ui.select('asset:review/notes');
+  await ui.select('delete');
+  await ui.confirm();
+  assert.equal((await loadSnapshot(root)).sources.registry.components?.prompts?.['review/notes'], undefined);
+  assert.equal(ui.updates, 0);
+});
+
+async function shortcutFixture(t: TestContext) {
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const source = parseConfig(await readFile(path, 'utf8'));
+  source.profileShortcuts = { quiet: { activeProfiles: [], description: 'Select no profiles' } };
+  await writeFile(path, JSON.stringify(source));
+  const ui = uiHarness(root);
+  await ui.freezeServer();
+  await ui.refreshShortcuts();
+  return { root, path, source, ui };
+}
+
+test('profile shortcuts choose an explicit destination and reuse cancellation, preview, save and pending apply', async (t) => {
+  const { root, ui } = await shortcutFixture(t);
+  assert.ok(ui.commandNames().includes('config-composer.shortcut.quiet'));
+  await ui.command('config-composer.shortcut.quiet');
+  assert.equal(ui.title(), '/quiet: save profile selection in…');
+  assert.match(JSON.stringify(ui.dialog), /profiles: none/);
+  await ui.select('local');
+  assert.match(ui.message(), /Shortcut \/quiet: none/);
+  assert.match(ui.message(), /Destination: local/);
+  await ui.cancel();
+  await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+  await ui.select('local');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, []);
+  assert.match(JSON.stringify(ui.dialog), /Saved Composer revision .* pending/);
+  assert.equal(ui.updates, 0, 'shortcut save never silently applies');
+  await ui.select('reload');
+  await ui.confirm();
+  assert.equal(ui.updates, 1);
+});
+
+test('shortcut registration rejects native commands and later TUI aliases without overriding existing actions', async (t) => {
+  const { ui } = await shortcutFixture(t);
+  ui.setNativeCommands(['quiet']);
+  await ui.refreshShortcuts();
+  assert.ok(!ui.commandNames().includes('config-composer.shortcut.quiet'));
+  assert.match(ui.toasts.at(-1)!.message, /conflicts.*command or alias/);
+  assert.ok(ui.commandNames().includes('config-composer.compose'));
+  ui.setNativeCommands([]);
+  await ui.refreshShortcuts();
+  ui.api.keymap.registerLayer({
+    commands: [{ name: 'other.action', slashName: 'other', slashAliases: ['quiet'], run: () => {} }],
+  });
+  assert.ok(!ui.commandNames().includes('config-composer.shortcut.quiet'));
+  assert.ok(ui.commandNames().includes('other.action'));
+  assert.equal(ui.updates, 0);
+});
+
+test('shortcut activation rejects disabled targets before saving its selected destination', async (t) => {
+  const { root, path, source, ui } = await shortcutFixture(t);
+  source.componentGroups = { unavailable: { agents: ['disabled'] } };
+  source.profiles = { blocked: { layers: [{ componentGroup: 'unavailable' }] } };
+  source.activeProfiles = [];
+  source.profileShortcuts = { quiet: { activeProfiles: ['blocked'] } };
+  await writeFile(path, JSON.stringify(source));
+  await ui.refreshShortcuts();
+  await ui.command('config-composer.shortcut.quiet');
+  await ui.select('local');
+  assert.match(ui.toasts.at(-1)!.message, /disabled/);
+  await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+  assert.equal(ui.updates, 0);
+});
+
+test('native prompt command collisions reject the server hook before publishing Composer changes', async (t) => {
+  const root = await fixture(t);
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({ profileShortcuts: { quiet: { activeProfiles: [] } }, defaults: { model: 'example/new' } }),
+  );
+  const hooks = await server.server({} as PluginInput, { configFile: join(root, 'config-composer.jsonc') });
+  const native = { model: 'example/original', command: { quiet: { template: 'Preserve this prompt' } } };
+  const before = structuredClone(native);
+  await assert.rejects(hooks.config!(native), /Shortcut \/quiet conflicts/);
+  assert.deepEqual({ model: native.model, command: native.command }, before);
+});
+
+test('changed shortcut definitions reject stale command callbacks and instance changes reject confirmation', async (t) => {
+  const { root, path, source, ui } = await shortcutFixture(t);
+  source.profileShortcuts = { quiet: { activeProfiles: ['work'] } };
+  await writeFile(path, JSON.stringify(source));
+  await ui.command('config-composer.shortcut.quiet');
+  assert.match(ui.toasts.at(-1)!.message, /Shortcut \/quiet changed/);
+  await ui.refreshShortcuts();
+  await ui.command('config-composer.shortcut.quiet');
+  await ui.select('shared');
+  const before = await readFile(path, 'utf8');
+  const other = join(root, 'other');
+  await mkdir(other);
+  ui.setProject(other);
+  await ui.confirm();
+  assert.equal(await readFile(path, 'utf8'), before);
+  assert.match(ui.toasts.at(-1)!.message, /instance|connection|workspace/);
+  assert.equal(ui.updates, 0);
+});
+
+for (const change of ['route', 'dialog', 'abort'] as const) {
+  test(`a delayed shortcut cannot reopen its destination after ${change}`, async (t) => {
+    const { ui } = await shortcutFixture(t);
+    const proof = ui.delayProofAfter(0);
+    const pending = ui.command('config-composer.shortcut.quiet');
+    await proof.requested;
+    if (change === 'route') {
+      Object.assign(ui.api.route, { current: { name: 'session', params: { sessionID: 'other' } } });
+    } else if (change === 'dialog') {
+      ui.api.ui.dialog.replace(() => ui.api.ui.DialogSelect({ title: 'Other dialog', options: [] }));
+    } else {
+      ui.controller.abort();
+    }
+    const previous = ui.dialog;
+    proof.resolve();
+    await pending;
+    assert.equal(ui.dialog, previous);
+    assert.equal(ui.updates, 0);
+  });
+}

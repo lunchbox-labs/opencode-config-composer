@@ -73,6 +73,17 @@
       "maxItems": 64,
       "uniqueItems": true,
       "description": "Ordered named profiles. Local list replaces shared selection; absence inherits; [] selects none. Each profile replays its complete parent chain."
+    },
+    "profileShortcuts": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/profileShortcut"
+      },
+      "maxProperties": 128,
+      "description": "Named TUI profile actions. Each invocation chooses its save destination; declaration never activates profiles."
     }
   },
   "$defs": {
@@ -572,6 +583,13 @@
         },
         "agents": {
           "$ref": "#/$defs/agentConfiguration"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/permissionRule"
+          },
+          "maxItems": 1024
         }
       },
       "description": "Native runtime model defaults plus settings applied to all selected agents before profile contributions."
@@ -595,6 +613,13 @@
             "$ref": "#/$defs/agentConfiguration"
           },
           "maxProperties": 1024
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/permissionRule"
+          },
+          "maxItems": 1024
         }
       },
       "description": "Runtime model defaults and settings keyed by selected agent. Applied after profile layers; document project overrides precede local overrides."
@@ -603,6 +628,13 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "agentAvailability": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/componentName" },
+          "additionalProperties": { "type": "boolean" },
+          "maxProperties": 256,
+          "description": "Enable or disable named workflow agents without deleting definitions. Later profile occurrences win; internal title, summary and compaction agents cannot be toggled."
+        },
         "extends": {
           "$ref": "#/$defs/name"
         },
@@ -618,6 +650,25 @@
         }
       },
       "description": "Single named parent. Replay the full parent chain, then child layers and overrides, for each active profile in order."
+    },
+    "profileShortcut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activeProfiles"],
+      "properties": {
+        "activeProfiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
     }
   }
 }

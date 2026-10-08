@@ -79,6 +79,7 @@ for (const options of [undefined, {}, { reloadToken: 'fresh' }]) {
 const commands = [];
 let dispose;
 await tui.tui({
+  ui: { toast: () => {} },
   lifecycle: {
     signal: new AbortController().signal,
     onDispose: (callback) => {
@@ -94,7 +95,7 @@ await tui.tui({
 });
 assert.deepEqual(
   commands.map((command) => command.slashName),
-  ['agent-models', 'agent-groups', 'reload-configs'],
+  ['compose', 'agent-models', 'reload-configs', 'agent-groups'],
 );
 assert.equal(typeof dispose, 'function');
 console.log('installed package verified');

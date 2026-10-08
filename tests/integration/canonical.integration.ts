@@ -6,10 +6,12 @@ import { setTimeout } from 'node:timers/promises';
 import { applyEdits, modify, parse } from 'jsonc-parser';
 import { nativeHarness } from './harness.ts';
 import { installedEditor } from './editor.ts';
+import { bundledPermissions } from './bundled-permissions.ts';
 import type { CompositionDocument } from '../../src/config-composer/composition/document-types.ts';
 
 interface Agent {
   name: string;
+  permission: { permission: string; pattern: string; action: string }[];
   model?: { modelID: string };
   variant?: string | null;
   prompt?: string;
@@ -228,6 +230,9 @@ test(
       return { session, message, captured: requests.at(-1)! };
     };
     const baseline = await agents();
+    const normalizeBundled = await bundledPermissions(host);
+    const comparable = (values: Agent[]) =>
+      values.map((agent) => ({ ...agent, permission: normalizeBundled(agent.permission) }));
 
     await t.test('definitions stay inactive until inherited profile selection enables relative imports', async () => {
       assert.equal(await findAgent('reviewer'), undefined);
@@ -563,7 +568,7 @@ test(
         assert.ok((await api<Message[]>(`/session/${previous.session.id}/message`)).length >= 4);
         await activate({ activeProfiles: [] });
         await reload();
-        assert.deepEqual(await agents(), baseline);
+        assert.deepEqual(comparable(await agents()), comparable(baseline));
         assert.equal(
           (await api<{ name: string }[]>('/command')).some((item) => item.name === 'fixture-review'),
           false,

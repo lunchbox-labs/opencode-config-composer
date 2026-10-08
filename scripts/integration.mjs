@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -27,7 +27,32 @@ const suites = {
     'tests/integration/lifecycle.integration.ts',
   ],
   canonical: ['tests/integration/canonical.integration.ts', 'tests/integration/canonical-regressions.integration.ts'],
+  terminal: ['tests/integration/terminal.integration.ts'],
+  editor: ['tests/integration/activation.integration.ts', 'tests/integration/authoring.integration.ts'],
   cleanup: ['tests/integration/cleanup.integration.mjs'],
+  'content-terminal': ['tests/integration/content-terminal.integration.ts'],
+  content: [
+    'tests/integration/parameters.integration.ts',
+    'tests/integration/permission-editor.integration.ts',
+    'tests/integration/prompt-editor.integration.ts',
+  ],
+  permissions: [
+    'tests/canonical-permissions.native.ts',
+    'tests/integration/permission-runtime.integration.ts',
+    'tests/integration/permission-notifications.integration.ts',
+  ],
+  'runtime-terminal': ['tests/integration/runtime-terminal.integration.ts'],
+  'running-inspector': ['tests/integration/running-inspector.integration.ts'],
+  'scoped-apply': ['tests/integration/scoped-apply.integration.ts', 'tests/integration/alias-native.integration.ts'],
+  shortcuts: ['tests/integration/shortcuts.integration.ts'],
+  availability: [
+    'tests/integration/availability.integration.ts',
+    'tests/integration/availability-terminal.integration.ts',
+  ],
+  'profile-switching': [
+    'tests/integration/profile-recomposition.integration.ts',
+    'tests/integration/profile-session-terminal.integration.ts',
+  ],
 };
 
 export function integrationFiles(suite = 'all') {
@@ -118,7 +143,7 @@ async function runCommand(command, args, options = {}, capture = (data) => proce
 
 export async function runNativeTests({ files, env = process.env, signal, timeout = 480_000, capture } = {}) {
   const cancellation = cancellationSignals(signal);
-  const root = await mkdtemp(join(env.INTEGRATION_FIXTURE_ROOT ?? tmpdir(), 'composer test runner '));
+  const root = await realpath(await mkdtemp(join(env.INTEGRATION_FIXTURE_ROOT ?? tmpdir(), 'composer test runner ')));
   const registry = env.INTEGRATION_PROCESS_REGISTRY ?? join(root, 'processes');
   await mkdir(registry, { recursive: true });
   const childEnv = { ...env, INTEGRATION_FIXTURE_ROOT: root, INTEGRATION_PROCESS_REGISTRY: registry };
@@ -154,7 +179,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|core|canonical|cleanup]',
+    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup|content|content-terminal|permissions|runtime-terminal|running-inspector|scoped-apply|shortcuts|availability|profile-switching]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);
@@ -162,7 +187,7 @@ async function main() {
   const artifacts = join(repository, 'integration-results');
   await rm(artifacts, { recursive: true, force: true });
   await mkdir(artifacts);
-  const root = await mkdtemp(join(tmpdir(), 'composer runner '));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'composer runner ')));
   const cancellation = cancellationSignals();
   let transcript = '';
   const capture = (data) => {
