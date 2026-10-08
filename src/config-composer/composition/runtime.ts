@@ -201,6 +201,8 @@ export async function resolveProfileRuntime(
   const agent = structuredClone({ ...native.agent, ...native.composerOwnedAgents });
   const selected = new Set<string>();
   const choices: Record<string, ResolvedModelSettings> = {};
+  const authoredBindings = new Map<string, string>();
+  const variantOrigins = new Map<string, FieldOrigin>();
   const provenance: Record<string, FieldOrigin> = {};
   const toggled = availabilityTargets(sources, available);
   const availability = new Map<string, boolean>();
@@ -285,7 +287,16 @@ export async function resolveProfileRuntime(
     const pinnedVariant = !explicit && available[name].variant !== undefined;
     const pinned = typeof available[name].model === 'string' && available[name].model !== '';
     if (!pinned || explicit) {
-      if (next.model !== undefined && next.model !== current.model) {
+      const binding =
+        value.modelRef !== undefined
+          ? `reference:${value.modelRef}`
+          : value.model !== undefined
+            ? `model:${value.model}`
+            : undefined;
+      const changedModel = next.model !== undefined && next.model !== current.model;
+      const changedBinding =
+        binding !== undefined && authoredBindings.has(name) && authoredBindings.get(name) !== binding;
+      if (changedModel || changedBinding) {
         if (!pinnedVariant) {
           delete current.variant;
         }
@@ -301,6 +312,24 @@ export async function resolveProfileRuntime(
           trace(path, { ...at, operation: 'unset' });
         }
         trace(prefix, { ...at, operation: 'unset' });
+        // A new same-model binding removes Composer-only values, revealing the
+        // original native variant rather than carrying the preceding binding.
+        const baseModel =
+          available[name].model ?? (name === 'title' ? (native.small_model ?? native.model) : native.model);
+        if (
+          !changedModel &&
+          !pinnedVariant &&
+          available[name].variant !== undefined &&
+          (baseModel === undefined || baseModel === current.model)
+        ) {
+          current.variant = available[name].variant;
+          agent[name].variant = available[name].variant;
+          const path = `/agent/${part(name)}/variant`;
+          trace(path, variantOrigins.get(name) ?? { ...origin(undefined, path, 'native'), operation: 'native' });
+        }
+      }
+      if (binding !== undefined) {
+        authoredBindings.set(name, binding);
       }
       if (next.model !== undefined) {
         current.model = next.model;
@@ -369,6 +398,7 @@ export async function resolveProfileRuntime(
       apply(name, setting, at, true);
       if (setting.variant !== undefined) {
         available[name].variant = setting.variant;
+        variantOrigins.set(name, provenance[`/agent/${part(name)}/variant`]);
       }
       if ((setting.model !== undefined || setting.modelRef !== undefined) && agent[name].model !== undefined) {
         available[name].model = agent[name].model;

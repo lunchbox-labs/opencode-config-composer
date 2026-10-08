@@ -407,12 +407,11 @@ test('nested preset origins point to authored fields and preserve native overwri
     },
     profiles: { work: { layers: [{ componentGroup: 'work' }] } },
     activeProfiles: ['work'],
-    overrides: { agents: { build: { model: 'fixture/alpha' } } },
   });
   const sources = await loadCompositionSources({ root: f.root, baseFile: f.file, baseExplicit: true });
   const result = await resolveProfileRuntime(sources, { agent: { build: { variant: 'native-pin' } } });
   assert.equal(result.agent.build.variant, 'native-pin');
-  assert.equal(result.choices.build.modelRef, undefined);
+  assert.equal(result.choices.build.modelRef, 'preset:first');
   const parameters = result.provenance['/agent/build/parameters/temperature'];
   assert.equal(parameters.pointer, '/configurationPresets/second/parameters/temperature');
   assert.equal(parameters.sourceId, f.file);
@@ -420,7 +419,7 @@ test('nested preset origins point to authored fields and preserve native overwri
   assert.ok(parameters.references.some((value) => value.endsWith('#/configurationPresets/second')));
   assert.equal(result.provenance['/agent/build/variant'].operation, 'native');
   const other = await resolveProfileRuntime(sources, { agent: { build: { model: 'fixture/native', variant: 'low' } } });
-  assert.equal(other.provenance['/agent/build/model'].overwritten[0].operation, 'native');
+  assert.equal(other.provenance['/agent/build/model'].operation, 'native');
 });
 
 test('permission contributions retain authored order and canonical origins through compilation', async (t) => {
@@ -686,4 +685,116 @@ test('an installation without optional sources publishes a native baseline for f
   await assert.rejects(missing.config!({}), /Cannot|missing|read|exist/i);
   await writeFile(join(root, 'config-composer.jsonc'), '{broken');
   await assert.rejects(hooks.config!(config), /JSONC|syntax|invalid/i);
+});
+
+for (const [label, first, second, reset] of [
+  ['direct to reference', { model: 'fixture/a' }, { modelRef: 'preset:other' }, true],
+  ['reference to direct', { modelRef: 'preset:first' }, { model: 'fixture/a' }, true],
+  ['changed reference', { modelRef: 'preset:first' }, { modelRef: 'preset:other' }, true],
+  ['parameter preset reference', { modelRef: 'preset:first' }, { modelRef: 'preset:partial' }, true],
+  ['native slot reference', { modelRef: 'opencode:model' }, { modelRef: 'opencode:small_model' }, true],
+  ['unchanged reference', { modelRef: 'preset:first' }, { modelRef: 'preset:first' }, false],
+  ['unchanged direct model', { model: 'fixture/a' }, { model: 'fixture/a' }, false],
+  ['parameter-only layer', { modelRef: 'preset:first' }, { parameters: { topP: 0.7 } }, false],
+] as const) {
+  for (const baseVariant of [undefined, 'native-low']) {
+    test(`authored binding ${label} preserves base fallback ${baseVariant ?? 'unset'}`, async (t) => {
+      const f = await fixture(t, {
+        configurationPresets: {
+          first: { model: 'fixture/a' },
+          other: { model: 'fixture/a' },
+          partial: { parameters: { topP: 0.7 } },
+        },
+        componentGroups: { work: { agents: ['build'] } },
+        profiles: {
+          first: {
+            layers: [{ componentGroup: 'work' }],
+            overrides: {
+              agents: {
+                build: {
+                  ...first,
+                  variant: 'composer-high',
+                  parameters: { temperature: 0.2, options: { nested: { old: true } } },
+                },
+              },
+            },
+          },
+          middle: { overrides: { agents: { build: { parameters: { topK: 3 } } } } },
+          second: { overrides: { agents: { build: second } } },
+        },
+        activeProfiles: ['first', 'middle', 'second'],
+      });
+      const native = {
+        model: 'fixture/a',
+        small_model: 'fixture/a',
+        agent: {
+          build: {
+            model: 'fixture/a',
+            ...(baseVariant === undefined ? {} : { variant: baseVariant }),
+            temperature: 0.8,
+          },
+        },
+      };
+      const original = structuredClone(native);
+      const sources = await loadCompositionSources({ root: f.root, baseFile: f.file, baseExplicit: true });
+      const result = await resolveProfileRuntime(sources, native);
+      assert.equal(result.choices.build.variant, reset ? baseVariant : 'composer-high');
+      assert.equal(result.agent.build.variant, reset ? baseVariant : 'composer-high');
+      assert.equal(result.choices.build.parameters?.temperature, reset ? undefined : 0.2);
+      assert.equal(result.agent.build.temperature, 0.8);
+      assert.equal(result.choices.build.parameters?.topK, reset ? undefined : 3);
+      if (reset) {
+        assert.equal(result.provenance['/agent/build/parameters/options/nested/old'].operation, 'unset');
+      }
+      if (label === 'parameter-only layer') {
+        assert.equal(result.choices.build.modelRef, 'preset:first');
+        assert.equal(result.choices.build.parameters?.topP, 0.7);
+      }
+      assert.deepEqual(native, original);
+    });
+  }
+}
+
+test('same-model binding reset does not revive a native variant bound to another model', async (t) => {
+  const f = await fixture(t, {
+    configurationPresets: { other: { model: 'fixture/b' } },
+    componentGroups: { work: { agents: ['build'] } },
+    profiles: {
+      first: {
+        layers: [{ componentGroup: 'work' }],
+        overrides: { agents: { build: { model: 'fixture/b', variant: 'b-high' } } },
+      },
+      second: { overrides: { agents: { build: { modelRef: 'preset:other' } } } },
+    },
+    activeProfiles: ['first', 'second'],
+  });
+  const sources = await loadCompositionSources({ root: f.root, baseFile: f.file, baseExplicit: true });
+  const result = await resolveProfileRuntime(sources, { agent: { build: { model: 'fixture/a', variant: 'a-only' } } });
+  assert.equal(result.agent.build.model, 'fixture/b');
+  assert.equal(result.agent.build.variant, undefined);
+  assert.equal(result.choices.build.variant, undefined);
+});
+
+test('binding reset restores the original component variant provenance', async (t) => {
+  const f = await fixture(t, {
+    components: {
+      agents: { worker: { prompt: 'Worker', configuration: { model: 'fixture/a', variant: 'component-low' } } },
+    },
+    configurationPresets: { other: { model: 'fixture/a' } },
+    componentGroups: { work: { agents: ['worker'] } },
+    profiles: {
+      first: {
+        layers: [{ componentGroup: 'work' }],
+        overrides: { agents: { worker: { model: 'fixture/a', variant: 'profile-high' } } },
+      },
+      second: { overrides: { agents: { worker: { modelRef: 'preset:other' } } } },
+    },
+    activeProfiles: ['first', 'second'],
+  });
+  const sources = await loadCompositionSources({ root: f.root, baseFile: f.file, baseExplicit: true });
+  const result = await resolveProfileRuntime(sources, {});
+  assert.equal(result.agent.worker.variant, 'component-low');
+  assert.equal(result.provenance['/agent/worker/variant'].sourceId, f.file);
+  assert.equal(result.provenance['/agent/worker/variant'].pointer, '/components/agents/worker/configuration/variant');
+  assert.notEqual(result.provenance['/agent/worker/variant'].operation, 'native');
 });
