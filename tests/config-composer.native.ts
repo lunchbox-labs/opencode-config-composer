@@ -146,18 +146,25 @@ test(
     };
     const composer = {
       sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
-      agent: {
-        modelPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
-        prompts: { defaults: { append: ['{{include:@shared/default.md}}'] } },
-        groups: {
-          base: { model: 'fixture/beta', variant: 'high' },
-          developers: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } },
-          primary: { modelRef: 'opencode:model', variant: 'low' },
-          small: { modelRef: 'opencode:small_model', variant: 'low' },
+      configurationPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
+      defaults: { agents: { prompt: { append: ['{{include:@shared/default.md}}'] } } },
+      componentGroups: {
+        base: { configuration: { model: 'fixture/beta', variant: 'high' } },
+        developers: { configuration: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } } },
+        primary: { configuration: { modelRef: 'opencode:model', variant: 'low' } },
+        small: { configuration: { modelRef: 'opencode:small_model', variant: 'low' } },
+      },
+      profiles: {
+        work: {
+          layers: [
+            { componentGroup: 'base' },
+            { componentGroup: 'developers' },
+            { componentGroup: 'primary' },
+            { componentGroup: 'small' },
+          ],
         },
       },
-      command: {},
-      skill: {},
+      activeProfiles: ['work'],
     };
     await writeFile(
       join(configRoot, 'config-composer.jsonc'),
@@ -351,7 +358,7 @@ test(
         settingsBefore,
         modify(
           settingsBefore,
-          ['agent', 'modelPresets', 'balanced'],
+          ['configurationPresets', 'balanced'],
           {
             model: 'fixture/beta',
             variant: 'high',
@@ -361,7 +368,7 @@ test(
       ),
     );
     const savedSettings = parse(await readFile(settingsPath, 'utf8')) as typeof composer;
-    assert.deepEqual(savedSettings.agent.groups.developers, composer.agent.groups.developers);
+    assert.deepEqual(savedSettings.componentGroups.developers, composer.componentGroups.developers);
     await writeFile(join(configRoot, 'shared-prompts/worker.md'), 'RELOADED_WORKER_GUIDANCE');
     const reload = () =>
       api(
@@ -403,7 +410,7 @@ test(
       assert.equal((await request(name)).info.modelID, 'alpha');
     }
     assert.equal(refreshed.find((agent) => agent.name === 'worker')?.model.modelID, 'beta');
-    // Overlay only Composer settings; native JSONC, project config and Markdown stay byte-identical.
+    // Overlay only Composer settings; native files stay unchanged after each explicit native token reload.
     const nativePaths = [
       join(configRoot, 'opencode.jsonc'),
       join(project, 'opencode.json'),
@@ -412,7 +419,10 @@ test(
     const readNative = () => Promise.all(nativePaths.map((path) => readFile(path, 'utf8')));
     let nativeBytes: string[];
     const overlaySettings = await readFile(settingsPath, 'utf8');
-    await writeFile(settingsPath, applyEdits(overlaySettings, modify(overlaySettings, ['model'], 'fixture/beta', {})));
+    await writeFile(
+      settingsPath,
+      applyEdits(overlaySettings, modify(overlaySettings, ['defaults', 'model'], 'fixture/beta', {})),
+    );
     // Use the existing token reload to invalidate the host's cached global configuration.
     await reload();
     nativeBytes = await readNative();
@@ -424,7 +434,10 @@ test(
     assert.equal((await request('small-follower')).info.modelID, 'alpha');
     assert.deepEqual(await readNative(), nativeBytes);
     const mainOnly = await readFile(settingsPath, 'utf8');
-    await writeFile(settingsPath, applyEdits(mainOnly, modify(mainOnly, ['small_model'], 'fixture/beta', {})));
+    await writeFile(
+      settingsPath,
+      applyEdits(mainOnly, modify(mainOnly, ['defaults', 'small_model'], 'fixture/beta', {})),
+    );
     // Use the existing token reload to invalidate the host's cached global configuration.
     await reload();
     nativeBytes = await readNative();

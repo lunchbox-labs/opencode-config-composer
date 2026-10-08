@@ -110,11 +110,11 @@ test('server stages every model and prompt before mutation and recomposes withou
     file,
     JSON.stringify({
       sourceDirectories: { shared: './shared' },
-      agent: {
-        prompts: { defaults: { append: ['Default after'] } },
-        groups: { developers: { modelRef: 'preset:balanced' } },
-        modelPresets: { balanced: { model: 'fixture/fast', variant: 'high' } },
-      },
+      defaults: { agents: { prompt: { append: ['Default after'] } } },
+      componentGroups: { developers: { configuration: { modelRef: 'preset:balanced' } } },
+      configurationPresets: { balanced: { model: 'fixture/fast', variant: 'high' } },
+      profiles: { work: { layers: [{ componentGroup: 'developers' }] } },
+      activeProfiles: ['work'],
     }),
   );
   const hooks = await server.server({} as PluginInput, { configFile: file });
@@ -147,7 +147,7 @@ test('skill output expands nested includes, preserves native context, and reread
     file,
     JSON.stringify({
       sourceDirectories: { shared: './shared' },
-      agent: { prompts: { defaults: { append: ['Agent guidance only'] } } },
+      defaults: { agents: { prompt: { append: ['Agent guidance only'] } } },
     }),
   );
   const hooks = await server.server({} as PluginInput, { configFile: file });
@@ -222,7 +222,9 @@ test('recomposition reloads fragments, removes prior inherited fields, and retai
     file,
     JSON.stringify({
       sourceDirectories: { shared: './shared' },
-      agent: { groups: { base: { modelRef: 'opencode:model' } } },
+      componentGroups: { base: { configuration: { modelRef: 'opencode:model' } } },
+      profiles: { work: { layers: [{ componentGroup: 'base' }] } },
+      activeProfiles: ['work'],
     }),
   );
   const hooks = await server.server({} as PluginInput, { configFile: file });
@@ -246,7 +248,11 @@ test('recomposition reloads fragments, removes prior inherited fields, and retai
   const variantFile = join(root, 'variant.jsonc');
   await writeFile(
     variantFile,
-    JSON.stringify({ agent: { groups: { base: { model: 'fixture/first', variant: 'low' } } } }),
+    JSON.stringify({
+      componentGroups: { base: { configuration: { model: 'fixture/first', variant: 'low' } } },
+      profiles: { work: { layers: [{ componentGroup: 'base' }] } },
+      activeProfiles: ['work'],
+    }),
   );
   const variantHooks = await server.server({} as PluginInput, { configFile: variantFile });
   const inherited: AgentSettings = { groups: ['base'], prompt: 'Authored' };
@@ -258,18 +264,18 @@ test('recomposition reloads fragments, removes prior inherited fields, and retai
   assert.equal(inherited.variant, undefined);
 });
 
-test('dispatch validates variants retained across ordered direct group model overrides', async (t) => {
+test('dispatch clears prior variants across ordered model identity changes', async (t) => {
   const root = await directory(t);
   const configFile = join(root, 'config-composer.jsonc');
   await writeFile(
     configFile,
     JSON.stringify({
-      agent: {
-        groups: {
-          base: { model: 'fixture/fast', variant: 'high' },
-          later: { model: 'fixture/small' },
-        },
+      componentGroups: {
+        base: { configuration: { model: 'fixture/fast', variant: 'high' } },
+        later: { configuration: { model: 'fixture/small' } },
       },
+      profiles: { work: { layers: [{ componentGroup: 'base' }, { componentGroup: 'later' }] } },
+      activeProfiles: ['work'],
     }),
   );
   const hooks = await server.server({} as PluginInput, { configFile });
@@ -283,7 +289,8 @@ test('dispatch validates variants retained across ordered direct group model ove
   const output = {
     options: { groups: ['base', 'later'], unrelated: true },
   } as unknown as Params[1];
-  await assert.rejects(hooks['chat.params']!(input, output), /does not support/);
+  assert.equal(worker.variant, undefined);
+  await hooks['chat.params']!(input, output);
   assert.deepEqual(output.options, { unrelated: true });
   await hooks['chat.params']!(
     {

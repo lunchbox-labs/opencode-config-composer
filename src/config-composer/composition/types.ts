@@ -62,6 +62,8 @@ export interface NativeInput {
   default_agent?: string;
   permission?: unknown;
   agent?: Record<string, AgentSettings>;
+  /** External edits to agents whose identity is still owned by Composer. */
+  composerOwnedAgents?: Record<string, AgentSettings>;
 }
 
 export interface ResolvedComposition {
