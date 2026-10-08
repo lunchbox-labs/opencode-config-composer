@@ -48,6 +48,10 @@ const suites = {
     'tests/integration/availability.integration.ts',
     'tests/integration/availability-terminal.integration.ts',
   ],
+  'profile-switching': [
+    'tests/integration/profile-recomposition.integration.ts',
+    'tests/integration/profile-session-terminal.integration.ts',
+  ],
 };
 
 export function integrationFiles(suite = 'all') {
@@ -174,7 +178,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup|content|content-terminal|permissions|runtime-terminal|scoped-apply|shortcuts|availability]',
+    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup|content|content-terminal|permissions|runtime-terminal|scoped-apply|shortcuts|availability|profile-switching]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);

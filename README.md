@@ -365,8 +365,20 @@ Apply uses the running native baseline. **Native JSON or native-agent edits requ
 not invalidate OpenCode's global config cache. Even a newly opened instance can inherit older native globals after
 a disk edit. An observed native file digest detects changes since observation, but does not prove cache freshness.
 Native JSON saves in the editor show a restart requirement. Composer's applied revision never claims those native
-bytes were loaded. A current session's selected model can still take precedence over newly applied defaults.
+bytes were loaded.
 Nested dialogs retain Back/Escape navigation without reopening after lifecycle or route changes.
+
+Profile switching rebuilds effective settings from the original native/base configuration plus the newly selected
+profiles in their declared order. Contributions from deselected profiles are removed, restoring base values when
+present. Reusable definitions, base files and conversation history are preserved.
+
+**Native selection limitation (OpenCode 1.18.34):** Existing conversations can retain the previous TUI model/variant;
+clearing profiles can also retain a recorded session model. In the existing TUI conversation, use `/models` to select
+the destination model, then `/variants` to select its destination/base variant, or **Default** when none is configured.
+These native selections preserve conversation history.
+
+Automatic selection requires OpenCode to follow refreshed effective settings for profile-owned choices while preserving
+deliberate manual choices. An API-only host fix would also require Composer integration and native verification.
 
 ## Development and checks
 

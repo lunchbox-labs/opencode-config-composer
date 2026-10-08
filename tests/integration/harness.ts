@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
@@ -220,40 +220,78 @@ export async function nativeHarness(t: TestContext, name: string) {
         throw error;
       }
     });
-    // The real host installs this package in each config directory and waits for it
-    // before loading plugins. Cold Windows installs can exceed a request deadline.
-    // Install the genuine pinned dependency up front; retain native loading/validation.
-    await promisify(execFile)(
-      process.execPath,
-      [
-        npm,
-        'install',
-        '--prefix',
-        directory,
-        '--ignore-scripts',
-        '--no-audit',
-        '--no-fund',
-        '--save-exact',
-        `@opencode-ai/plugin@${manifest.engines.opencode}`,
-      ],
-      { cwd: directory, timeout: 120_000 },
-    ).catch((error: unknown) => {
-      const failure = error as NodeJS.ErrnoException & {
-        signal?: string;
-        killed?: boolean;
-        stdout?: string;
-        stderr?: string;
+    const installDependencies = async () => {
+      await promisify(execFile)(
+        process.execPath,
+        [
+          npm,
+          'install',
+          '--prefix',
+          directory,
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund',
+          '--save-exact',
+          `@opencode-ai/plugin@${manifest.engines.opencode}`,
+        ],
+        { cwd: directory, timeout: 120_000 },
+      ).catch((error: unknown) => {
+        const failure = error as NodeJS.ErrnoException & {
+          signal?: string;
+          killed?: boolean;
+          stdout?: string;
+          stderr?: string;
+        };
+        throw new Error(
+          `Native SDK preparation failed in ${directory}: ${JSON.stringify({
+            code: failure.code,
+            signal: failure.signal,
+            killed: failure.killed,
+            stdout: failure.stdout?.slice(-4000),
+            stderr: failure.stderr?.slice(-4000),
+          })}`,
+        );
+      });
+    };
+    if (directory === configRoot) {
+      // Install the genuine pinned SDK once per fixture. Native loading still
+      // validates each isolated directory, without repeating cold npm installs.
+      await installDependencies();
+    } else {
+      const dependencyFields = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
+      type Dependencies = Partial<Record<(typeof dependencyFields)[number], Record<string, string>>>;
+      const target = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>;
       };
-      throw new Error(
-        `Native SDK preparation failed in ${directory}: ${JSON.stringify({
-          code: failure.code,
-          signal: failure.signal,
-          killed: failure.killed,
-          stdout: failure.stdout?.slice(-4000),
-          stderr: failure.stderr?.slice(-4000),
-        })}`,
-      );
-    });
+      const lockBytes = await readFile(join(configRoot, 'package-lock.json'));
+      const seed = JSON.parse(lockBytes.toString()) as { packages: Partial<Record<string, Dependencies>> };
+      const declared = dependencyFields.flatMap((field) => Object.entries((target as Dependencies)[field] ?? {}));
+      const locked = new Map(dependencyFields.flatMap((field) => Object.entries(seed.packages['']?.[field] ?? {})));
+      if (
+        !locked.has('@opencode-ai/plugin') ||
+        !declared.every(([name, specification]) => name === '@opencode-ai/plugin' || locked.get(name) === specification)
+      ) {
+        // Additional or differently specified dependencies need a genuine install.
+        await installDependencies();
+      } else {
+        // Preserve relative .bin links on POSIX; Windows npm shims are regular
+        // files. Every directory receives its own copy of the real installed tree.
+        await cp(join(configRoot, 'node_modules'), join(directory, 'node_modules'), {
+          recursive: true,
+          verbatimSymlinks: true,
+        });
+        await writeFile(
+          join(directory, 'package.json'),
+          JSON.stringify({
+            ...target,
+            dependencies: { ...target.dependencies, '@opencode-ai/plugin': manifest.engines.opencode },
+          }),
+        );
+        // Native OpenCode checks this root lock's dependency names before loading;
+        // node_modules/.package-lock.json alone still triggers a native reinstall.
+        await writeFile(join(directory, 'package-lock.json'), lockBytes);
+      }
+    }
     const metadata = JSON.parse(
       await readFile(join(directory, 'node_modules/@opencode-ai/plugin/package.json'), 'utf8'),
     ) as { version: string };
@@ -278,8 +316,7 @@ export async function nativeHarness(t: TestContext, name: string) {
       );
       additionalDirectories.push(configuration);
     }
-    // npm installations share a cache even when their target config directories
-    // are isolated. Avoid overlapping cold SDK preparations in one fixture.
+    // Prepare the genuine SDK seed first, then copy it into isolated config dirs.
     for (const directory of [
       configRoot,
       join(root, '.opencode'),

@@ -13,20 +13,37 @@ export async function reloadFromTerminal(
     'Reload now',
     'Apply saved revision?',
     'only this instance',
-    'Existing',
-    'session model selections remain',
+    'cannot reset',
+    '/models',
+    '/variants',
+    'Default',
   );
   await terminal.press('\r', 'Composer revision applied');
   // A previous toast can remain visible during another reload. Observe this
   // reload's new native registration before sending any request or more keys.
+  let pendingRegistration: Error | undefined;
   for (let attempt = 0; attempt < 200; attempt++) {
-    const current = await fixture.editor.runtime();
-    if (current.applied.id !== previous.applied.id) {
+    const current = await fixture.editor.runtime().catch((error: unknown) => {
+      // An unpublished sample is not yet a usable registration after disposal.
+      // Retry only this baseline diagnostic, within the existing readiness bound.
+      // Persistent missing/ambiguous metadata still fails with its original cause;
+      // transport failures and changed/invalid configuration fail immediately.
+      if (
+        !(error instanceof Error) ||
+        error.message !==
+          'The runtime baseline version is missing or ambiguous. Exact native baseline is unavailable. Reload the matching Config Composer server plugin and reopen the editor.'
+      ) {
+        throw error;
+      }
+      pendingRegistration = error;
+      return undefined;
+    });
+    if (current !== undefined && current.applied.id !== previous.applied.id) {
       await fixture.host.api('/agent');
       assert.deepEqual(current.baseline, previous.baseline, 'scoped apply retains the native baseline');
       return;
     }
     await setTimeout(50);
   }
-  assert.fail('The terminal reload did not publish a new native registration');
+  throw new Error('The terminal reload did not publish a new native registration', { cause: pendingRegistration });
 }

@@ -77,6 +77,11 @@ const label = (choice: ModelChoice) =>
   typeof choice.model === 'string' && choice.model !== ''
     ? `${choice.model}${typeof choice.variant === 'string' && choice.variant !== '' ? ` (${choice.variant})` : ''}`
     : 'OpenCode fallback';
+const nativeSelectionNotice =
+  'Clearing profiles can retain a previous model in native session fallback.\n' +
+  'The public plugin API cannot reset native TUI session model or variant selections or identify profile-owned picks.\n' +
+  'Use /models to select the destination model.\n' +
+  'Use /variants to select its variant; Default clears an old variant. Conversations remain saved.';
 
 // The directory argument also lets tests exercise the real file editor in an isolated installation.
 export function registerSettings(
@@ -439,9 +444,9 @@ export function registerSettings(
       lastFailure = undefined;
       navigation.close();
       api.ui.toast({
-        variant: 'success',
+        variant: 'warning',
         title: 'Composer revision applied',
-        message: `Applied ${revision.sources.slice(0, 12)} to ${location.directory}. Uses the running native baseline; native JSON edits require restart. Conversations and session model selections remain.`,
+        message: `Applied ${revision.sources.slice(0, 12)} to ${location.directory}. Uses the running native baseline; native JSON edits require restart. ${nativeSelectionNotice}`,
         duration: 8000,
       });
     } catch (error) {
@@ -503,7 +508,7 @@ export function registerSettings(
               'Apply saved revision?',
               `This reloads only this instance: ${location.directory}\nWorktree: ${location.root}\n\n` +
                 'Wait for its agents to finish. Saved changes remain pending if applying fails. Other opened instances retain their current revision.\n\n' +
-                'This applies Composer inputs against the running native baseline. Native JSON edits require restart. Existing session model selections remain.',
+                `This applies Composer inputs against the running native baseline. Native JSON edits require restart. ${nativeSelectionNotice}`,
               () => reload(prepared),
             ),
         },
