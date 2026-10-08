@@ -4,21 +4,21 @@ Use the installed package's `schema.json` to validate JSONC. Legacy keys are rej
 OpenCode's native configuration stays in its own files. Composer's default shared source is
 `config-composer.jsonc` beside the native global configuration; an explicit plugin `configFile` is supported.
 
-| Key | Role |
-| --- | --- |
-| `components.agents` | Reusable inline `prompt` or Markdown `file`; optional `promptRefs`, `skills`, and `configuration` |
-| `components.skills` | Explicit native `SKILL.md` file definitions |
-| `components.commands` | Native command `file` or inline `template` |
-| `components.prompts` | Reusable `text` or `file` fragments |
-| `componentGroups` | Any mix of agent/skill/command/prompt names plus optional agent configuration |
-| `configurationPresets` | Reusable model, variant, parameters, and ordered permission settings |
-| `profiles` | Optional named `extends`, ordered `layers`, and explicit `overrides` |
-| `defaults` / `overrides` | Scoped model defaults, global permissions, and selected-agent settings |
-| `activeProfiles` | Ordered profile names; absence inherits, `[]` selects none |
-| `imports` | Explicit JSONC paths; no automatic directory scan |
-| `sourceDirectories` | Explicit named roots for prompt include references |
+| Key                      | Role                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------- |
+| `components.agents`      | Reusable inline `prompt` or Markdown `file`; optional `promptRefs`, `skills`, and `configuration` |
+| `components.skills`      | Explicit native `SKILL.md` file definitions                                                       |
+| `components.commands`    | Native command `file` or inline `template`                                                        |
+| `components.prompts`     | Reusable `text` or `file` fragments                                                               |
+| `componentGroups`        | Any mix of agent/skill/command/prompt names plus optional agent configuration                     |
+| `configurationPresets`   | Reusable model, variant, parameters, and ordered permission settings                              |
+| `profiles`               | Optional named `extends`, ordered `layers`, `agentAvailability`, and explicit `overrides`         |
+| `defaults` / `overrides` | Scoped model defaults, global permissions, and selected-agent settings                            |
+| `activeProfiles`         | Ordered profile names; absence inherits, `[]` selects none                                        |
+| `imports`                | Explicit JSONC paths; no automatic directory scan                                                 |
+| `sourceDirectories`      | Explicit named roots for prompt include references                                                |
 
-A group layer selects components. A preset layer configures agents already selected by earlier group layers;
+A group layer selects components. A preset layer configures agents already selected by earlier layers or an availability decision;
 it must specify `target.agents` and/or `target.componentGroups`. Parent layers replay before child layers.
 Active profiles replay in list order. Reusable imported files must contain definitions and imports only: top-level `activeProfiles`, `defaults`,
 and `overrides` are rejected rather than silently ignored. An `activeProfiles: []` selection does not disable
@@ -29,23 +29,31 @@ Native group frontmatter can add agents to an existing selected group without du
 {
   "componentGroups": { "reviewers": { "agents": ["plan", "explore"] } },
   "configurationPresets": {
-    "review-access": { "permissions": [{ "tool": "bash", "pattern": "git *", "action": "ask" }] }
+    "review-access": {
+      "permissions": [{ "tool": "bash", "pattern": "git *", "action": "ask" }],
+    },
   },
   "profiles": {
     "review": {
       "layers": [
         { "componentGroup": "reviewers" },
-        { "configurationPreset": "review-access", "target": { "componentGroups": ["reviewers"] } }
-      ]
-    }
+        {
+          "configurationPreset": "review-access",
+          "target": { "componentGroups": ["reviewers"] },
+        },
+      ],
+    },
   },
-  "activeProfiles": ["review"]
+  "activeProfiles": ["review"],
 }
 ```
 
 Agent settings use `model` OR `modelRef` (`preset:<name>`, `opencode:model`, or `opencode:small_model`).
 A reference supplies model-bound settings; a targeted preset layer also contributes its permission rules.
-A different model clears inherited Composer variant/parameter values. Native explicit pins remain unless
+Within one ordered replay, a different model clears inherited Composer variant/parameter values; a same-model
+reference retains earlier contributions from that replay. Switching profiles reconstructs from the original
+native/base configuration and removes old-profile-only settings, including when the destination resolves to
+the same model. Base values remain unless overridden. Native explicit pins remain unless
 an explicit component or agent override changes them. Parameters support `temperature`, `topP`, `topK`,
 `maxOutputTokens`, and JSON provider `options`; capability validation depends on the selected model.
 
@@ -57,6 +65,15 @@ back; `ask` is a real match. Repeated ordered rules are retained, including late
 Unsupported wildcard ordering or host shapes warn and skip every Composer permission rule in that scope.
 An affected agent keeps native permissions plus applied globals; a global failure keeps native globals and
 lets independent agents compile. Other settings continue. That fallback may omit intended deny rules.
+
+**Compose → Running configuration inspector** reads current server defaults and running agent settings.
+**Applied Composer parameters** shows validated applied model-bound contributions, not saved edits awaiting apply.
+**Recorded conversation** separately labels stored session fallback, latest recorded request/response, and an earlier
+completed response when applicable. Missing, stale or foreign applied metadata is unavailable; observable native
+defaults remain usable even when saved composition is invalid. **Refresh** rereads the server.
+The current unsent native TUI model/variant selection and complete final provider request parameters are unavailable.
+Configured settings and recorded history do not predict the next request. Inspection changes no settings or history
+and sends no prompt; values under credential-like option keys are redacted and conversation bodies are omitted.
 
 Prompt operations support ordered `prepend`/`append` strings and `inheritDefaults`/`inheritGroups` controls.
 Use `{{include:@source/path.md}}` or an entire `@source/path.md` fragment with a declared source directory.

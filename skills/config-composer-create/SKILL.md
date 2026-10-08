@@ -24,7 +24,9 @@ compiler warning and its potentially more permissive native fallback.
 Prepare a reviewable JSONC edit and inspect it with `/compose`. The packaged example contains definitions only and is safe to import without activating a profile.
 Definitions stay inactive until explicitly selected. If activation was requested, establish its scope and complete ordered list; otherwise preserve every
 `activeProfiles` field. Local lists replace rather than append, and `[]` selects none. Save preserves conversations. Apply through explicit reload or restart;
-apply affects the current instance using its running native baseline. Native JSON edits require restart. An existing session model selection can still override defaults.
+apply affects the current instance using its running native baseline. Native JSON or native-agent edits require restart. Current
+TUI sessions may retain a previous model and variant after apply. Select the destination/base model through
+`/models`, then its configured variant or `Default` through `/variants`; conversation history is preserved.
 
 Common mistakes: placing native configuration under Composer's `components`, assigning a preset before
 selecting its target, moving native built-ins into custom files, or silently overwriting an imported source.
