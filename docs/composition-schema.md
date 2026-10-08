@@ -2,8 +2,9 @@
 
 `config-composer.jsonc` uses the exported `schema.json`. JSONC comments and trailing commas are accepted;
 duplicate keys, unsafe keys, unknown fields, and legacy shapes are rejected. This contract defines input
-validation. The server and TUI do not yet consume these documents; source assembly, reference resolution,
-native compilation, and editing integrate separately. There is no canonical-validator legacy mode.
+validation. The explicit source loader assembles definitions and ordered profile chains. The server and
+TUI do not yet consume the assembled result; component reference resolution, native compilation, and
+editing integrate separately. There is no canonical-validator legacy mode.
 
 ## Definitions and scopes
 
@@ -94,6 +95,12 @@ Selecting none does not disable independent document defaults/overrides. The sel
 a fresh array and never mutates the source. Imported profile definitions do not activate profiles.
 
 ## Imports and validation boundary
+
+The source loader reads the shared configured file, project `.opencode/config-composer.jsonc`, and local
+`.opencode/config-composer.local.jsonc`, in that order. Missing optional scope files are allowed; malformed,
+unreadable, or explicitly requested missing files fail. A scope discovered at the same canonical identity
+as another scope contributes once. Canonical identity also detects import aliases, cycles, and repeated
+imports; imported aliases are read-only. Snapshots retain the original text, fingerprint, and frozen value.
 
 Import and component file paths resolve from the file that declares them. Load imports explicitly in
 authored order; do not scan profile directories. Imported files contribute named definitions. Importing

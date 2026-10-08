@@ -60,7 +60,7 @@ export function parseConfiguration(text: string): Record<string, unknown> {
   return value;
 }
 
-async function configurationFile(path: string): Promise<ConfigurationFile> {
+export async function configurationFile(path: string): Promise<ConfigurationFile> {
   try {
     const before = await lstat(path);
     if (!before.isFile() || before.size > MAX_CONFIGURATION_BYTES) {
