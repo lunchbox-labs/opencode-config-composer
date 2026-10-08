@@ -1,4 +1,27 @@
 import type { AgentSettings, GroupOptions } from '../settings.ts';
+import type { CompositionDocument, PermissionRule } from './document-types.ts';
+
+export type {
+  AgentComponent,
+  AgentConfiguration,
+  CommandComponent,
+  ComponentGroup,
+  Components,
+  CompositionDefaults,
+  CompositionDocument,
+  CompositionOverrides,
+  CompositionProfile,
+  ConfigurationParameters,
+  ConfigurationPreset,
+  JsonValue,
+  ModelIdentity,
+  PermissionRule,
+  PresetTarget,
+  ProfileLayer,
+  PromptComponent,
+  PromptConfiguration,
+  SkillComponent,
+} from './document-types.ts';
 
 export interface SourceDocument {
   id: string;
@@ -9,6 +32,11 @@ export interface SourceDocument {
   value: Record<string, unknown>;
 }
 
+/** A structurally validated document; cross-document references remain unresolved. */
+export interface CompositionSourceDocument extends Omit<SourceDocument, 'value'> {
+  value: CompositionDocument;
+}
+
 export interface FieldOrigin {
   sourceId?: string;
   pointer: string;
@@ -17,6 +45,16 @@ export interface FieldOrigin {
   references: string[];
   overwritten: FieldOrigin[];
 }
+
+/** Configured Composer matches only; a nonmatch defers without inventing an action or origin. */
+export type ConfiguredPermissionPreview =
+  | {
+      action: PermissionRule['action'];
+      matched: { permission: string; pattern: string };
+      origin?: FieldOrigin;
+      fallback?: never;
+    }
+  | { fallback: 'native'; action?: never; matched?: never; origin?: never };
 
 export interface NativeInput {
   model?: string;

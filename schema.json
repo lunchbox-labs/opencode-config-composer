@@ -1,252 +1,623 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "OpenCode Config Composer settings",
-  "description": "Shared source directories, agent groups, model presets, and prompt composition settings. Save as config-composer.jsonc in the OpenCode configuration directory, or select a custom file with the server plugin's configFile option.",
+  "title": "OpenCode Config Composer composition document",
+  "description": "Canonical config-composer.jsonc definitions and explicit JSON/JSONC imports. No legacy compatibility mode. Relative paths belong to the declaring document. Structural validation only: source assembly, reference validation, and native compilation are separate phases.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "$schema": {
-      "description": "Schema path or URL that editors use to validate this settings file and show configuration hints.",
       "type": "string"
     },
+    "imports": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/import"
+      },
+      "maxItems": 64,
+      "uniqueItems": true,
+      "description": "Explicit local JSON/JSONC files, relative to the declaring document; no automatic directory discovery. Imported documents contribute definitions, never activation."
+    },
     "sourceDirectories": {
-      "description": "Composer aliases. Paths resolve from the settings file. Independent of OpenCode references.",
       "type": "object",
       "propertyNames": {
-        "description": "Source alias used in @source/path references and include directives.",
         "$ref": "#/$defs/name"
       },
       "additionalProperties": {
-        "description": "Source directory path. Relative paths resolve from the settings file. A leading ~/ expands to home.",
-        "type": "string",
-        "minLength": 1,
-        "pattern": "\\S",
-        "not": {
-          "description": "Source directory paths must not contain NUL characters.",
-          "pattern": "\\u0000"
-        }
+        "$ref": "#/$defs/path"
       }
     },
-    "agent": {
-      "description": "Agent group defaults, reusable model choices, and prompt composition policies.",
+    "components": {
+      "$ref": "#/$defs/components"
+    },
+    "componentGroups": {
       "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "groups": {
-          "description": "Named groups selected by agent memberships. Later groups override earlier model and variant fields.",
-          "type": "object",
-          "propertyNames": {
-            "description": "Group name used in an agent's ordered groups array.",
-            "$ref": "#/$defs/name"
-          },
-          "additionalProperties": {
-            "description": "Model defaults and prompt layers for agents that belong to this group.",
-            "$ref": "#/$defs/group"
-          }
-        },
-        "modelPresets": {
-          "description": "Named model choices that groups can select with preset:<name> model references.",
-          "type": "object",
-          "propertyNames": {
-            "description": "Preset name used after preset: in a model reference.",
-            "$ref": "#/$defs/name"
-          },
-          "additionalProperties": {
-            "description": "Concrete model and optional variant shared by groups that reference this preset.",
-            "$ref": "#/$defs/preset"
-          }
-        },
-        "prompts": {
-          "description": "Prompt layers for enabled agents with authored prompts. Layer order is defaults, groups, then overrides.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "defaults": {
-              "description": "Shared prompt layers applied unless an agent sets inheritDefaults to false.",
-              "$ref": "#/$defs/prompt"
-            },
-            "overrides": {
-              "description": "Prompt layers and inheritance controls keyed by the exact configured agent name.",
-              "type": "object",
-              "propertyNames": {
-                "description": "Exact agent name whose prompt composition settings this entry controls.",
-                "$ref": "#/$defs/agentName"
-              },
-              "additionalProperties": {
-                "description": "Additional prompt layers and inheritance controls for this agent.",
-                "$ref": "#/$defs/agentPrompt"
-              }
-            }
-          }
-        }
-      }
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/componentGroup"
+      },
+      "maxProperties": 1024
     },
-    "command": {
-      "description": "Reserved for command settings. Leave empty.",
+    "configurationPresets": {
       "type": "object",
-      "maxProperties": 0
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/configurationPreset"
+      },
+      "maxProperties": 1024
     },
-    "skill": {
-      "description": "Reserved; leave empty. Native skill body includes use sourceDirectories.",
+    "profiles": {
       "type": "object",
-      "maxProperties": 0
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/profile"
+      },
+      "maxProperties": 1024
     },
-    "model": {
-      "description": "Runtime model default. Overrides the corresponding native default without changing native files or explicit model selections. Omit to inherit OpenCode configuration.",
-      "type": "string",
-      "pattern": "^[^\\s/]+\\/\\S+$"
+    "defaults": {
+      "$ref": "#/$defs/defaults"
     },
-    "small_model": {
-      "description": "Runtime small_model default. Overrides the corresponding native default without changing native files or explicit model selections. Omit to inherit OpenCode configuration.",
-      "type": "string",
-      "pattern": "^[^\\s/]+\\/\\S+$"
+    "overrides": {
+      "$ref": "#/$defs/overrides"
+    },
+    "activeProfiles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "maxItems": 64,
+      "uniqueItems": true,
+      "description": "Ordered named profiles. Local list replaces shared selection; absence inherits; [] selects none. Each profile replays its complete parent chain."
     }
   },
   "$defs": {
-    "name": {
-      "description": "Alias, group, or preset name. Use lowercase letters, digits, and single hyphens. Start with a letter.",
-      "type": "string",
-      "maxLength": 64,
-      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+    "safeKey": {
       "not": {
-        "description": "Names must not equal constructor or prototype.",
-        "enum": ["constructor", "prototype"]
+        "enum": ["__proto__", "prototype", "constructor"]
       }
     },
-    "model": {
-      "description": "Concrete model ID in provider/model format, without whitespace.",
+    "name": {
       "type": "string",
-      "pattern": "^[^\\s/]+/\\S+$"
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "$ref": "#/$defs/safeKey"
     },
-    "agentName": {
-      "description": "Configured agent name, including slash-separated names. Whitespace and backslashes are not allowed.",
+    "componentName": {
       "type": "string",
       "minLength": 1,
       "maxLength": 256,
       "pattern": "^[^\\s\\\\/]+(?:/[^\\s\\\\/]+)*$",
       "not": {
-        "description": "Agent name segments must not equal ., .., __proto__, constructor, or prototype.",
-        "pattern": "(?:^|/)(?:\\.{1,2}|__proto__|constructor|prototype)(?:/|$)"
+        "pattern": "(^|/)(\\.|\\.\\.|__proto__|constructor|prototype)(/|$)"
       }
     },
-    "variant": {
-      "description": "Variant supported by the model. Use 1 to 64 letters, digits, underscores, periods, or hyphens.",
+    "path": {
       "type": "string",
-      "pattern": "^[\\w.-]{1,64}$"
+      "minLength": 1,
+      "pattern": "\\S",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "\\u0000"
+          }
+        },
+        {
+          "anyOf": [
+            {
+              "not": {
+                "pattern": "^[a-zA-Z][a-zA-Z0-9+.-]*:"
+              }
+            },
+            {
+              "pattern": "^[a-zA-Z]:[\\\\/](?![\\\\/])"
+            }
+          ]
+        }
+      ]
+    },
+    "import": {
+      "$ref": "#/$defs/path",
+      "pattern": "\\.jsonc?$",
+      "type": "string"
+    },
+    "model": {
+      "type": "string",
+      "pattern": "^[^\\s/]+/\\S+$"
     },
     "modelRef": {
-      "description": "Reference to opencode:model, opencode:small_model, or a configured preset through preset:<name>.",
       "type": "string",
       "anyOf": [
         {
-          "description": "Reference to OpenCode's configured default model or small model.",
           "enum": ["opencode:model", "opencode:small_model"]
         },
         {
-          "description": "Reference to an existing entry in agent.modelPresets, using preset:<name>.",
-          "maxLength": 71,
           "pattern": "^preset:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "maxLength": 71,
           "not": {
-            "description": "Preset references must not use constructor or prototype as the preset name.",
             "enum": ["preset:constructor", "preset:prototype"]
           }
         }
       ]
     },
-    "promptParts": {
-      "description": "Ordered prompt fragments. Each layer supports up to 256 strings and expands Composer includes.",
-      "type": "array",
-      "maxItems": 256,
-      "items": {
-        "description": "Literal text, an @source/path.md or .txt reference, or text containing {{include:@source/path.md}}.",
-        "type": "string"
-      }
+    "json": {
+      "anyOf": [
+        {
+          "type": ["null", "boolean", "string", "number"]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/safeKey"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/json"
+          }
+        }
+      ]
     },
-    "prompt": {
-      "description": "Prompt fragments inserted before and after an agent's authored prompt.",
+    "parameters": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "prepend": {
-          "description": "Fragments inserted before the authored prompt, preserving array order.",
-          "$ref": "#/$defs/promptParts"
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
         },
-        "append": {
-          "description": "Fragments inserted after the authored prompt, preserving array order.",
-          "$ref": "#/$defs/promptParts"
+        "topP": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "topK": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "options": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/safeKey"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/json"
+          }
         }
       }
     },
-    "agentPrompt": {
-      "description": "Per-agent prompt layers and controls for inheriting default and group prompt layers.",
+    "permissionRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^\\S+$"
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "enum": ["allow", "ask", "deny"]
+        }
+      },
+      "required": ["tool", "action"],
+      "description": "Ordered rule. Omitted pattern means *. Last matching Composer contribution wins, including a looser action. Only no Composer match falls back to native globals, then native defaults."
+    },
+    "prompt": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "prepend": {
-          "description": "Agent-specific fragments placed after inherited prepends and before the authored prompt.",
-          "$ref": "#/$defs/promptParts"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256
         },
         "append": {
-          "description": "Agent-specific fragments placed after the authored prompt and inherited appends.",
-          "$ref": "#/$defs/promptParts"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256
         },
         "inheritDefaults": {
-          "description": "Include default prompt layers unless false. Omission enables prompt inheritance. Models are unaffected.",
           "type": "boolean"
         },
         "inheritGroups": {
-          "description": "Include group prompt layers unless false, in membership order. Omission enables prompt inheritance.",
           "type": "boolean"
         }
       }
     },
-    "preset": {
-      "description": "Reusable concrete model choice with an optional model variant.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["model"],
-      "properties": {
-        "model": { "description": "Required concrete model selected by this preset.", "$ref": "#/$defs/model" },
-        "variant": {
-          "description": "Optional model variant inherited unless a group or agent specifies its own variant.",
-          "$ref": "#/$defs/variant"
-        }
-      }
-    },
-    "group": {
-      "description": "Model defaults and prompt layers for a named group. Agents with explicit models retain those models.",
+    "configurationPreset": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "model": {
-          "description": "Concrete default model for this group. Specify either model or modelRef.",
           "$ref": "#/$defs/model"
         },
         "modelRef": {
-          "description": "Model reference for this group. Specify either modelRef or model.",
           "$ref": "#/$defs/modelRef"
         },
         "variant": {
-          "description": "Model variant that overrides a referenced preset's variant. Requires model or modelRef.",
-          "$ref": "#/$defs/variant"
+          "type": "string",
+          "pattern": "^[\\w.-]{1,64}$"
+        },
+        "parameters": {
+          "$ref": "#/$defs/parameters"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/permissionRule"
+          },
+          "maxItems": 256
+        }
+      },
+      "not": {
+        "required": ["model", "modelRef"]
+      },
+      "minProperties": 1,
+      "description": "Reusable model and/or permission settings, independent of component membership. Partial variant/parameter contributions bind to the resolved model; catalog validation is separate."
+    },
+    "agentConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "modelRef": {
+          "$ref": "#/$defs/modelRef"
+        },
+        "variant": {
+          "type": "string",
+          "pattern": "^[\\w.-]{1,64}$"
+        },
+        "parameters": {
+          "$ref": "#/$defs/parameters"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/permissionRule"
+          },
+          "maxItems": 256
         },
         "prompt": {
-          "description": "Group prompt layers applied in membership order unless an agent sets inheritGroups to false.",
           "$ref": "#/$defs/prompt"
         }
       },
       "not": {
-        "description": "A group must not specify both a concrete model and a model reference.",
         "required": ["model", "modelRef"]
-      },
-      "if": { "description": "Detect whether the group specifies a model variant.", "required": ["variant"] },
-      "then": {
-        "description": "A group variant requires either a concrete model or a model reference.",
-        "anyOf": [
-          { "description": "A concrete model supplies the group variant's model.", "required": ["model"] },
-          { "description": "A model reference supplies the group variant's model.", "required": ["modelRef"] }
-        ]
       }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/path"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": ["primary", "subagent", "all"]
+        },
+        "disable": {
+          "type": "boolean"
+        },
+        "promptRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/componentName"
+          },
+          "maxItems": 256
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/componentName"
+          },
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "configuration": {
+          "$ref": "#/$defs/agentConfiguration"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["file"]
+        },
+        {
+          "required": ["prompt"]
+        }
+      ],
+      "description": "Exactly one file or inline prompt. promptRefs append named prompt bodies in order. skills records intended on-demand relationships, without injecting bodies or granting exclusive access."
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/path"
+        }
+      },
+      "required": ["file"]
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/path"
+        },
+        "template": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/componentName"
+        },
+        "description": {
+          "type": "string"
+        },
+        "subtask": {
+          "type": "boolean"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["file"]
+        },
+        {
+          "required": ["template"]
+        }
+      ]
+    },
+    "promptComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/path"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["file"]
+        },
+        {
+          "required": ["text"]
+        }
+      ]
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/componentName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxProperties": 1024
+        },
+        "skills": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/componentName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/skill"
+          },
+          "maxProperties": 1024
+        },
+        "commands": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/componentName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/command"
+          },
+          "maxProperties": 1024
+        },
+        "prompts": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/componentName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/promptComponent"
+          },
+          "maxProperties": 1024
+        }
+      }
+    },
+    "componentGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/componentName"
+          },
+          "maxItems": 256,
+          "uniqueItems": true,
+          "description": "Available native or custom agent names. Built-in agents need no components.agents declaration. Union with custom frontmatter groups; preserve native fields unless explicitly overridden."
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/componentName"
+          },
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/componentName"
+          },
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "prompts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/componentName"
+          },
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "configuration": {
+          "$ref": "#/$defs/agentConfiguration"
+        }
+      },
+      "description": "Any subset of component kinds. Configuration contributes to member agents only."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/componentName"
+          },
+          "maxItems": 256,
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "componentGroups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "maxItems": 256,
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      },
+      "minProperties": 1,
+      "description": "Explicit selected agents or selected groups, resolved against available native and custom agents. Group targets expand to their agent members at this layer. Targets never select or synthesize components implicitly."
+    },
+    "layer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "componentGroup": {
+              "$ref": "#/$defs/name"
+            }
+          },
+          "required": ["componentGroup"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configurationPreset": {
+              "$ref": "#/$defs/name"
+            },
+            "target": {
+              "$ref": "#/$defs/target"
+            }
+          },
+          "required": ["configurationPreset", "target"]
+        }
+      ]
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "small_model": {
+          "$ref": "#/$defs/model"
+        },
+        "agents": {
+          "$ref": "#/$defs/agentConfiguration"
+        }
+      },
+      "description": "Native runtime model defaults plus settings applied to all selected agents before profile contributions."
+    },
+    "overrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "small_model": {
+          "$ref": "#/$defs/model"
+        },
+        "agents": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/componentName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/agentConfiguration"
+          },
+          "maxProperties": 1024
+        }
+      },
+      "description": "Runtime model defaults and settings keyed by selected agent. Applied after profile layers; document project overrides precede local overrides."
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extends": {
+          "$ref": "#/$defs/name"
+        },
+        "layers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/layer"
+          },
+          "maxItems": 256
+        },
+        "overrides": {
+          "$ref": "#/$defs/overrides"
+        }
+      },
+      "description": "Single named parent. Replay the full parent chain, then child layers and overrides, for each active profile in order."
     }
   }
 }

@@ -1,0 +1,65 @@
+{
+  // All model identities are synthetic. Imports do not activate profiles.
+  "imports": ["./profiles/workflows.jsonc"],
+  "components": {
+    "agents": {
+      "agent1": { "file": "./agents/agent1.md", "promptRefs": ["review-scope"], "skills": ["skill1"] },
+      "agent2": { "file": "./agents/agent2.md", "promptRefs": ["review-scope"], "skills": ["skill2"] },
+      "agent3": { "file": "./agents/agent3.md", "promptRefs": ["implementation-scope"], "skills": ["skill3"] },
+      "agent4": { "file": "./agents/agent4.md", "promptRefs": ["implementation-scope"], "skills": ["skill4"] },
+    },
+    "skills": {
+      "skill1": { "file": "./skills/skill1/SKILL.md" },
+      "skill2": { "file": "./skills/skill2/SKILL.md" },
+      "skill3": { "file": "./skills/skill3/SKILL.md" },
+      "skill4": { "file": "./skills/skill4/SKILL.md" },
+    },
+    "commands": {
+      "review-code": { "agent": "agent1", "template": "Review the current diff." },
+      "review-tests": { "agent": "agent2", "template": "Review the test coverage." },
+      "implement": { "agent": "agent3", "template": "Implement the requested change." },
+      "write-tests": { "agent": "agent4", "template": "Add tests for the requested change." },
+    },
+    "prompts": {
+      "review-scope": { "file": "./prompts/review.md" },
+      "implementation-scope": { "file": "./prompts/implementation.md" },
+    },
+  },
+  "componentGroups": {
+    "review": {
+      "agents": ["agent1", "agent2"],
+      "skills": ["skill1", "skill2"],
+      "commands": ["review-code", "review-tests"],
+      "prompts": ["review-scope"],
+    },
+    "programming": {
+      "agents": ["agent3", "agent4"],
+      "skills": ["skill3", "skill4"],
+      "commands": ["implement", "write-tests"],
+      "prompts": ["implementation-scope"],
+    },
+  },
+  "configurationPresets": {
+    "claude-code": {
+      "model": "fixture/alpha",
+      "parameters": { "maxOutputTokens": 4096 },
+    },
+    "openai-code": {
+      "model": "fixture/beta",
+      "parameters": { "maxOutputTokens": 4096 },
+    },
+    "review-checks": {
+      "permissions": [
+        { "tool": "bash", "pattern": "git *", "action": "ask" },
+        { "tool": "bash", "pattern": "npm *", "action": "deny" },
+      ],
+    },
+    "programming-checks": {
+      "permissions": [
+        { "tool": "bash", "pattern": "git *", "action": "allow" },
+        { "tool": "bash", "pattern": "npm *", "action": "ask" },
+      ],
+    },
+  },
+  "activeProfiles": ["claude-coding"],
+}
