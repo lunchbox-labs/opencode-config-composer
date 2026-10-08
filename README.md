@@ -160,7 +160,8 @@ the raw GitHub schema URL tracks its named branch. `$schema` may point to a loca
 `imports` lists explicit local `.json` or `.jsonc` definition files. Imports, component files and
 `sourceDirectories` aliases resolve from their declaring document. Imported definitions do not activate
 profiles and cannot contain root `activeProfiles`, `defaults` or `overrides`. Duplicate named definitions,
-import cycles and repeated canonical identities are rejected. Automatic directory discovery remains deferred.
+import cycles and repeated canonical identities are rejected.
+Automatic discovery of Composer definition files remains deferred; OpenCode still discovers its native agent, command and skill directories.
 
 `activeProfiles` contains ordered names, not filenames. The highest scope supplying the key replaces the
 earlier selection. Omit the key to inherit; `[]` selects none. A local selection can replace the example's
