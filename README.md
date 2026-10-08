@@ -175,9 +175,9 @@ Model settings support `model` or `modelRef`, plus `variant` and typed `paramete
 `opencode:model`, `opencode:small_model` and `preset:NAME`. Native references use final effective workspace
 defaults. Native authored agent model/variant pins take precedence over defaults and group/preset layers;
 explicit per-agent overrides can change pins. Session selections remain native authority. Parameters apply
-only to their bound dispatched model. Within one ordered replay, changing the resolved model clears inherited
-Composer parameters and variant; a reference resolving to the same model retains earlier contributions from
-that replay. Switching profiles starts a fresh replay and removes previous-profile-only settings even when the
+only to their bound dispatched model. Within one ordered replay, changing the resolved model or authored model reference clears inherited
+Composer parameters and variant, even when different references resolve to the same model. Unchanged bindings
+and parameter-only layers retain earlier contributions; omitted values fall back to native settings or remain unset. Switching profiles starts a fresh replay and removes previous-profile-only settings even when the
 model is unchanged. Model edits retain explicitly authored parameters for validation against the chosen binding.
 
 Prompt assembly is default prepend, ordered group prepend, agent prepend, authored body, default append,

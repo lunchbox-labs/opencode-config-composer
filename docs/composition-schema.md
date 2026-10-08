@@ -79,8 +79,9 @@ Native authored agent model/variant pins take precedence over defaults and group
 configuration pins its model only when it supplies `model` or `modelRef`. Explicit per-agent overrides can
 replace pins. Partial parameters bind to the effective model and dispatch only for that model; selecting
 another model in a session retains native model settings. Within one ordered replay, changing the resolved
-model clears inherited Composer variant/parameters; a reference resolving to the same model retains earlier
-contributions from that replay. This retention does not carry settings from a previously active profile selection.
+model or authored model reference clears inherited Composer variant/parameters, even if the resolved model is
+unchanged. Unchanged bindings and parameter-only layers retain earlier contributions. Omitted values fall back
+to native settings or remain unset. This retention does not carry settings from a previously active profile selection.
 Model editor saves retain authored parameters and validate them for their resulting model binding.
 
 `parameters` supports `temperature` (0–2), `topP` (0–1), positive safe integer `topK` and `maxOutputTokens`,
