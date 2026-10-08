@@ -41,10 +41,8 @@ const suites = {
     'tests/integration/permission-runtime.integration.ts',
     'tests/integration/permission-notifications.integration.ts',
   ],
-  'runtime-terminal': [
-    'tests/integration/runtime-terminal.integration.ts',
-    'tests/integration/running-inspector.integration.ts',
-  ],
+  'runtime-terminal': ['tests/integration/runtime-terminal.integration.ts'],
+  'running-inspector': ['tests/integration/running-inspector.integration.ts'],
   'scoped-apply': ['tests/integration/scoped-apply.integration.ts', 'tests/integration/alias-native.integration.ts'],
   shortcuts: ['tests/integration/shortcuts.integration.ts'],
   availability: [
@@ -181,7 +179,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup|content|content-terminal|permissions|runtime-terminal|scoped-apply|shortcuts|availability|profile-switching]',
+    'Usage: npm run test:integration -- [--suite all|core|canonical|editor|terminal|cleanup|content|content-terminal|permissions|runtime-terminal|running-inspector|scoped-apply|shortcuts|availability|profile-switching]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);
