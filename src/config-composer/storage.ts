@@ -1,3 +1,4 @@
+import { modelEditKey, resetModelBindingEdits } from './composition/model-binding-edits.ts';
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -732,6 +733,7 @@ function membershipGroups(change: Extract<Change, { kind: 'membership' }>): stri
 }
 
 export function planChange(snapshot: Snapshot, change: Change): EditPlan {
+  const explicitModelFields = new Set<string>();
   let configText = snapshot.configFile.text;
   const edits: FileEdit[] = [];
   const patch = (path: (string | number)[], value: unknown) => {
@@ -772,7 +774,11 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
     choice: GroupChoice,
   ) => {
     const suffix = kind === 'configurationPresets' ? [] : ['configuration'];
-    // Update only the model fields: mixed bundles and presets retain their other settings.
+    if (choice.variant !== undefined) {
+      const { file, path } = definition(kind, name);
+      explicitModelFields.add(modelEditKey(file.path, [...path, ...suffix, 'variant']));
+    }
+    // Keep unrelated fields; reset stale model-bound controls after planning all edits.
     for (const field of ['model', 'modelRef', 'variant'] as const) {
       patchDefinition(kind, name, [...suffix, field], choice[field]);
     }
@@ -986,7 +992,7 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
               : change.kind === 'membership'
                 ? `Set ${change.agent} groups to ${membershipGroups(change).length > 0 ? membershipGroups(change).join(' → ') : 'Ungrouped'}; retain model overrides`
                 : `${change.choice.model !== undefined && change.choice.model !== '' ? 'Set an override for' : 'Use inherited defaults for'} ${change.agent}`;
-  return { snapshot, change, edits, description };
+  return { snapshot, change, edits: resetModelBindingEdits(snapshot, edits, explicitModelFields), description };
 }
 
 async function previewNativeAgents(snapshot: SourceSnapshot, overlays: ReadonlyMap<string, string>) {

@@ -216,7 +216,7 @@ test('inactive profile references defer model support until activation resolves 
   assert.equal(await readFile(path, 'utf8'), original);
 });
 
-test('model edits revalidate preserved parameters on inactive presets', async (t) => {
+test('model edits clear stale parameters on inactive presets', async (t) => {
   const { validateParameterChoice } = await import('../src/config-composer/composition/parameter-review.ts');
   const { catalogModels } = await import('../src/config-composer/settings.ts');
   const root = await mkdtemp(join(tmpdir(), 'composer-parameter-rebind-'));
@@ -230,21 +230,20 @@ test('model edits revalidate preserved parameters on inactive presets', async (t
   const snapshot = await loadSnapshot(root);
   const plan = planChange(snapshot, { kind: 'preset', name: 'inactive', choice: { model: 'fixture/next' } });
   const choices = await plannedChoices(plan);
-  assert.ok(choices.some((choice) => choice.model === 'fixture/next' && choice.parameters?.temperature === 0.5));
+  assert.ok(choices.some((choice) => choice.model === 'fixture/next'));
+  assert.ok(choices.every((choice) => choice.parameters?.temperature === undefined));
   const catalog = catalogModels([
     { id: 'fixture', models: { current: {}, next: { capabilities: { temperature: false } } } },
   ]);
-  await assert.rejects(
-    saveFilePlan(plan, async () => {
-      (await plannedChoices(plan)).forEach((choice) => validateParameterChoice(choice, catalog));
-    }),
-    /fixture\/next does not support temperature/,
-  );
   assert.equal(await readFile(path, 'utf8'), original);
+  await saveFilePlan(plan, async () => {
+    (await plannedChoices(plan)).forEach((choice) => validateParameterChoice(choice, catalog));
+  });
+  assert.equal((await loadSnapshot(root)).sources.registry.configurationPresets!.inactive.parameters, undefined);
 });
 
 for (const target of ['preset', 'group', 'component', 'defaults', 'profile'] as const) {
-  test(`model edits revalidate inactive transitive ${target} parameters`, async (t) => {
+  test(`model edits clear inactive transitive ${target} parameters`, async (t) => {
     const { validateParameterChoice } = await import('../src/config-composer/composition/parameter-review.ts');
     const { catalogModels } = await import('../src/config-composer/settings.ts');
     const root = await mkdtemp(join(tmpdir(), 'composer-parameter-transitive-'));
@@ -279,10 +278,10 @@ for (const target of ['preset', 'group', 'component', 'defaults', 'profile'] as 
       { id: 'fixture', models: { current: {}, next: { capabilities: { temperature: false } } } },
     ]);
     const choices = await plannedChoices(plan);
-    assert.throws(
-      () => choices.forEach((choice) => validateParameterChoice(choice, catalog)),
-      /fixture\/next does not support temperature/,
-    );
+    assert.ok(choices.every((choice) => choice.parameters?.temperature === undefined));
+    choices.forEach((choice) => validateParameterChoice(choice, catalog));
+    assert.ok(plan.edits.length > 0);
+    assert.ok(plan.edits.every((edit) => !edit.text.includes('temperature')));
   });
 }
 

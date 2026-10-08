@@ -1,3 +1,4 @@
+import { explicitModelFields, modelBindingPatch, resetModelBindingEdits } from './model-binding-edits.ts';
 import { findNodeAtLocation, parseTree } from 'jsonc-parser';
 import { SettingsError, groupName, record } from '../settings.ts';
 import {
@@ -153,6 +154,7 @@ function references(snapshot: SourceSnapshot, registry: DefinitionRegistry, name
 
 export function planDefinition<S extends SourceSnapshot>(snapshot: S, change: DefinitionChange): FilePlan<S> {
   groupName(change.name);
+  const explicit = new Set<string>();
   const definitions = snapshot.sources.registry[change.registry] ?? {};
   const pending = new Map<string, { file: SourceFile; text: string }>();
   const editable = (file: SourceFile) => {
@@ -200,7 +202,15 @@ export function planDefinition<S extends SourceSnapshot>(snapshot: S, change: De
       ) {
         throw new SettingsError('Select a valid definition field.');
       }
-      entry.text = editJson(entry.text, [change.registry, change.name, ...change.path], change.value);
+      const path = [change.registry, change.name, ...change.path];
+      const binding = modelBindingPatch(path);
+      if (binding !== undefined && change.value !== undefined) {
+        entry.text = editJson(entry.text, [...binding.target, binding.opposite], undefined);
+      }
+      for (const field of explicitModelFields(file.path, path, change.value)) {
+        explicit.add(field);
+      }
+      entry.text = editJson(entry.text, path, change.value);
     } else {
       const refs = references(snapshot, change.registry, change.name);
       if (change.operation === 'delete') {
@@ -250,7 +260,8 @@ export function planDefinition<S extends SourceSnapshot>(snapshot: S, change: De
       }
     }
   }
-  const edits = [...pending.values()].filter((edit) => edit.text !== edit.file.text);
+  const proposed = [...pending.values()].filter((edit) => edit.text !== edit.file.text);
+  const edits = change.operation === 'patch' ? resetModelBindingEdits(snapshot, proposed, explicit) : proposed;
   for (const edit of edits) {
     if (snapshot.sources.documents.some((source) => source.id === edit.file.path)) {
       parseCompositionDocument(edit.text, edit.file.path);

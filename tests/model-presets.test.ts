@@ -255,7 +255,7 @@ test('preset and native edits retain references, comments, prompts, permissions,
   assert.equal(await readFile(snapshot.configFile.path, 'utf8'), snapshot.configFile.text);
   await savePlan(plan);
   let current = await loadSnapshot(root);
-  assert.deepEqual(current.groups, options.groups);
+  assert.deepEqual(current.groups, { ...options.groups, reviewers: { modelRef: 'preset:balanced' } });
   assert.equal(current.modelPresets.balanced.model, 'fixture/next');
   assert.equal(
     resolveChoice(current.agents.find((agent) => agent.name === 'extra')!.settings, current.groups, {
@@ -270,7 +270,7 @@ test('preset and native edits retain references, comments, prompts, permissions,
   assert.equal(await readFile(join(root, 'agents/extra.md'), 'utf8'), prompt);
   await savePlan(planChange(current, { kind: 'global', field: 'model', model: 'fixture/next' }));
   current = await loadSnapshot(root);
-  assert.deepEqual(current.groups.workflow, options.groups.workflow);
+  assert.deepEqual(current.groups.workflow, { modelRef: 'opencode:model' });
   assert.equal(resolveGroup(current.groups.workflow, { native: current.config }).model, 'fixture/next');
   const groupPlan = planChange(current, {
     kind: 'group',

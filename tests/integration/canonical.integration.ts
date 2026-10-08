@@ -414,9 +414,8 @@ test(
       assert.equal(compaction.top_p, 0.45);
     });
 
-    await t.test('imported preset edits preserve mixed data and stay unapplied until a real reload', async () => {
+    await t.test('imported preset edits reset stale parameters and stay unapplied until a real reload', async () => {
       const rootBefore = await readFile(settings, 'utf8');
-      const sourceBefore = await document(models);
       const plan = storage.planChange(await snapshot(), {
         kind: 'preset',
         name: 'fast',
@@ -428,17 +427,15 @@ test(
       );
       await storage.savePlan(plan);
       assert.equal(await readFile(settings, 'utf8'), rootBefore);
-      assert.deepEqual(
-        (await document(models)).configurationPresets!.fast.parameters,
-        sourceBefore.configurationPresets!.fast.parameters,
-      );
+      assert.equal((await document(models)).configurationPresets!.fast.parameters, undefined);
+      assert.equal((await document(models)).configurationPresets!.tuned.parameters, undefined);
       assert.equal((await send()).captured.model, 'alpha');
       await reload();
       const { captured } = await send();
       assert.equal(captured.model, 'beta');
-      assert.equal(captured.temperature, 0.2);
-      assert.equal(captured.top_p, 0.7);
-      assert.equal(captured.max_tokens, 96);
+      assert.notEqual(captured.temperature, 0.2);
+      assert.notEqual(captured.top_p, 0.7);
+      assert.notEqual(captured.max_tokens, 96);
       assert.equal(captured.reasoning_effort, 'high');
       await reload();
       assert.equal((await findAgent('reviewer'))!.prompt!.split('NAMED_PROMPT_REFERENCE').length - 1, 1);
