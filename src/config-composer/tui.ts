@@ -48,6 +48,7 @@ import {
 import { editorSettings } from './composition/editor.ts';
 import { resolveProfileRuntime } from './composition/runtime.ts';
 import { openEffective } from './tui/compose.ts';
+import { openRunning, readRunningInspection } from './tui/running.ts';
 import { openAuthoring } from './tui/authoring.ts';
 import { type DefinitionChange, planDefinition } from './composition/authoring.ts';
 import { profileShortcutRegistration } from './tui/shortcuts.ts';
@@ -1263,6 +1264,19 @@ export function registerSettings(
     run,
     () => navigation.checkpoint(),
   );
+  const runningInspector = async (refresh = false): Promise<void> => {
+    const isCurrent = navigation.checkpoint();
+    const inspection = await readRunningInspection(api, directory);
+    if (!isCurrent()) {
+      return;
+    }
+    if (refresh) {
+      navigation.back();
+    }
+    openRunning(inspection, navigation, () => {
+      return run(() => runningInspector(true));
+    });
+  };
   const composeMenu = () =>
     menu(
       'Compose',
@@ -1539,6 +1553,12 @@ export function registerSettings(
                 ),
             });
           },
+        },
+        {
+          title: 'Running configuration inspector',
+          value: 'running',
+          description: 'Read running defaults, applied parameters and recorded conversation selections',
+          run: () => runningInspector(),
         },
         {
           title: 'Effective configuration and sources',

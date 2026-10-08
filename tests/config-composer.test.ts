@@ -570,6 +570,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   let projectProofError = false;
   let providerGate: (() => Promise<void>) | undefined;
   let proofGate: (() => Promise<void>) | undefined;
+  let configGate: (() => Promise<void>) | undefined;
   const controller = new AbortController();
   let active = false;
   let updates = 0;
@@ -664,6 +665,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       },
       config: {
         get: async () => {
+          await configGate?.();
           if (frozenConfig !== undefined) {
             return { data: frozenConfig };
           }
@@ -762,6 +764,15 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       const requested = Promise.withResolvers<undefined>();
       const response = Promise.withResolvers<undefined>();
       providerGate = () => {
+        requested.resolve(undefined);
+        return response.promise;
+      };
+      return { requested: requested.promise, resolve: () => response.resolve(undefined) };
+    },
+    delayConfig() {
+      const requested = Promise.withResolvers<undefined>();
+      const response = Promise.withResolvers<undefined>();
+      configGate = () => {
         requested.resolve(undefined);
         return response.promise;
       };
@@ -1315,6 +1326,61 @@ test('compose inspection shows canonical selection, origins and source editabili
   assert.equal(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), before);
   assert.equal(ui.updates, 0);
 });
+
+test('running inspection reads the server despite invalid saved composition and never writes', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  ui.setProject(root);
+  await ui.freezeServer();
+  const path = join(root, 'config-composer.jsonc');
+  await writeFile(path, '{ invalid saved composition');
+  const before = await readFile(path, 'utf8');
+  const native = await readFile(join(root, 'opencode.jsonc'), 'utf8');
+  await ui.command('config-composer.compose');
+  await ui.select('running');
+  assert.equal(ui.title(), 'Running configuration inspector');
+  await ui.select('model');
+  assert.match(ui.message(), /example\/fast/);
+  await ui.escape();
+  await ui.select('limits');
+  assert.match(ui.message(), /TUI/);
+  assert.match(ui.message(), /unavailable|cannot/i);
+  await ui.escape();
+  await ui.select('refresh');
+  assert.equal(ui.title(), 'Running configuration inspector');
+  await ui.escape();
+  assert.equal(ui.title(), 'Compose');
+  assert.equal(await readFile(path, 'utf8'), before);
+  assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), native);
+  assert.equal(ui.updates, 0);
+  assert.equal(ui.toasts.length, 0);
+});
+
+for (const transition of ['dismiss', 'route', 'client', 'dispose']) {
+  test(`running inspection cannot reopen after ${transition} while a server read is pending`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    ui.setProject(root);
+    await ui.freezeServer();
+    await ui.command('config-composer.compose');
+    const gate = ui.delayConfig();
+    const pending = ui.select('running');
+    await gate.requested;
+    if (transition === 'dismiss') {
+      await ui.escape();
+    } else if (transition === 'route') {
+      Object.assign(ui.api.route, { current: { name: 'session', params: { sessionID: 'another' } } });
+    } else if (transition === 'client') {
+      Object.assign(ui.api, { client: new Proxy(ui.api.client, {}) });
+    } else {
+      ui.controller.abort();
+    }
+    gate.resolve();
+    await pending;
+    assert.notEqual(ui.title(), 'Running configuration inspector');
+    assert.equal(ui.updates, 0);
+  });
+}
 
 for (const section of ['groups', 'models', 'effective']) {
   test(`closing Compose while ${section} loads does not reopen the cancelled view`, async (t) => {

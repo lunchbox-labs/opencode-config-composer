@@ -368,6 +368,17 @@ Native JSON saves in the editor show a restart requirement. Composer's applied r
 bytes were loaded.
 Nested dialogs retain Back/Escape navigation without reopening after lifecycle or route changes.
 
+**Compose → Running configuration inspector** reads the current server defaults, running agent settings and
+applied Composer model parameters without applying settings or changing the conversation. **Refresh** reads the
+server again. This view remains available when saved composition is invalid; the **Saved composition preview**
+continues to show saved definitions and their sources, including changes awaiting apply.
+
+Recorded session fallback, the latest submitted model/variant and the latest recorded response are shown separately.
+OpenCode's public APIs do not expose the TUI's current unsent model/variant selection or the complete parameters of
+a past provider request. Configured parameters are therefore labeled as settings, not verified request values;
+native agent pins, selected variants, provider defaults and other plugins can affect dispatch. Sensitive option keys
+are redacted. Inspection sends no model request and does not modify source files or conversation history.
+
 Profile switching rebuilds effective settings from the original native/base configuration plus the newly selected
 profiles in their declared order. Contributions from deselected profiles are removed, restoring base values when
 present. Reusable definitions, base files and conversation history are preserved.

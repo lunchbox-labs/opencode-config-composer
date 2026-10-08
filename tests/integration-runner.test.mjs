@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout } from 'node:timers/promises';
 import { readFile, readdir } from 'node:fs/promises';
+import { parse } from 'yaml';
 import { stopProcess } from './integration/process.ts';
 
 test('integration runner selects native Linux and Windows binaries and rejects untested platforms', () => {
@@ -25,25 +26,19 @@ test('CI suites partition every portable integration file exactly once', async (
       .filter((name) => /\.integration\.(?:ts|mjs)$/.test(name))
       .map((name) => `tests/integration/${name}`),
   ].sort();
-  const files = [
-    'core',
-    'canonical',
-    'editor',
-    'terminal',
-    'cleanup',
-    'content',
-    'content-terminal',
-    'permissions',
-    'runtime-terminal',
-    'scoped-apply',
-    'shortcuts',
-    'availability',
-    'profile-switching',
-  ].flatMap(integrationFiles);
+  const workflow = parse(await readFile(new URL('../.github/workflows/integration.yml', import.meta.url), 'utf8'));
+  const suites = workflow.jobs.native.strategy.matrix.suite;
+  assert.ok(Array.isArray(suites) && suites.every((suite) => typeof suite === 'string'));
+  const files = suites.flatMap(integrationFiles);
   assert.equal(new Set(files).size, files.length, 'a portable case belongs to exactly one CI suite');
   assert.deepEqual(files.sort(), expected);
   assert.deepEqual(integrationFiles().sort(), expected);
   assert.throws(() => integrationFiles('missing'), /Unknown integration suite/);
+});
+
+test('running inspector and runtime terminal acceptance have separate bounded CI partitions', () => {
+  assert.deepEqual(integrationFiles('running-inspector'), ['tests/integration/running-inspector.integration.ts']);
+  assert.deepEqual(integrationFiles('runtime-terminal'), ['tests/integration/runtime-terminal.integration.ts']);
 });
 
 test('native ripgrep prerequisites use pinned platform binaries and release checksums', () => {
