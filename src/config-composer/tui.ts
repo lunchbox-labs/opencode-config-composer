@@ -1,3 +1,5 @@
+import { verifyNativeAgents } from './composition/native-baseline.ts';
+import { isDeepStrictEqual } from 'node:util';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -29,13 +31,17 @@ import {
   planChange,
   plannedChoices,
   reloadConfiguration,
+  saveFilePlan,
   savePlan,
 } from './storage.ts';
 import { configurationDirectory } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
+import { type EditorNativeBaseline, readRuntimeBaseline } from './composition/runtime-baseline.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveProfileRuntime } from './composition/runtime.ts';
 import { openEffective } from './tui/compose.ts';
+import { openAuthoring } from './tui/authoring.ts';
+import { type DefinitionChange, planDefinition, previewDefinition } from './composition/authoring.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 const label = (choice: ModelChoice) =>
@@ -63,17 +69,31 @@ export function registerSettings(
     modelPresets: snapshot.modelPresets,
     native: native.get(snapshot) ?? { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model },
   });
-  const readNative = async (): Promise<NativeModels> => {
+  const readNative = async (): Promise<EditorNativeBaseline> => {
     const response: { error?: unknown; data?: Config | null } = await api.client.config.get();
     if (Boolean(response.error) || response.data === undefined || response.data === null) {
       throw new SettingsError(
         'Could not read effective workspace defaults. Reopen the editor after checking the server.',
       );
     }
-    return { model: response.data.model, small_model: response.data.small_model };
+    const path = api.state.path as { worktree?: string; directory?: string };
+    const root =
+      typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
+        ? path.worktree
+        : (path.directory ?? directory);
+    return readRuntimeBaseline(response.data, { root, directory: path.directory ?? root }, directory);
   };
   const refreshNative = async (snapshot: Snapshot) => {
     const models = await readNative();
+    if (!isDeepStrictEqual(snapshot.nativeModels.agent, models.agent)) {
+      throw new SettingsError(
+        'Native agent settings changed on the server. Reopen the editor and review the new preview.',
+      );
+    }
+    if (models.agent !== undefined) {
+      verifyNativeAgents(snapshot.nativeSourceAgents, models.agent);
+      snapshot.nativeAgents = models.agent;
+    }
     snapshot.nativeModels = models;
     snapshot.settings = editorSettings(snapshot.sources, models);
     snapshot.modelPresets = snapshot.settings.modelPresets;
@@ -167,17 +187,18 @@ export function registerSettings(
     assertCurrent();
     return { root, client, assertCurrent };
   };
-  const load = async () => {
+  const load = async (reloading = false) => {
     const { root } = await connection();
     const path = api.state.path as { worktree?: string; directory?: string };
     const project =
       typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
         ? path.worktree
         : (path.directory ?? root);
+    const baseline = await readNative();
     const snapshot = await loadSnapshot(
       root,
       project,
-      await readNative(),
+      reloading ? { model: baseline.model, small_model: baseline.small_model } : baseline,
       path.directory ?? project,
       typeof path.worktree === 'string' && path.worktree !== '' ? path.worktree : project,
     );
@@ -292,7 +313,8 @@ export function registerSettings(
         'Agents are still running in this workspace. Settings are saved; reload when they finish.',
       );
     }
-    const snapshot = await load();
+    // Saved native edits legitimately differ from the still-running server until this reload.
+    const snapshot = await load(true);
     if ((await realpath(globalDirectory).catch(() => undefined)) !== snapshot.root) {
       throw new SettingsError(
         'Settings are saved. Restart OpenCode to apply edits in a custom configuration directory.',
@@ -826,12 +848,133 @@ export function registerSettings(
       root,
     );
   };
+  const proposeDefinition = async (snapshot: Snapshot, change: DefinitionChange) => {
+    const isCurrent = navigation.checkpoint();
+    const plan = planDefinition(snapshot, change);
+    const preview = await previewDefinition(plan);
+    if (!isCurrent()) {
+      return;
+    }
+    const projection = (value: typeof preview) =>
+      JSON.stringify({
+        model: value.resolved.model,
+        small_model: value.resolved.small_model,
+        choices: value.resolved.choices,
+        agent: value.resolved.agent,
+        permissions: value.resolved.permissions,
+        skillPaths: value.resolved.skillPaths,
+        commands: value.resolved.commands,
+        profiles: value.sources.activeProfiles,
+      });
+    const changed = Object.entries(preview.resolved.choices).filter(
+      ([name, choice]) => JSON.stringify(choice) !== JSON.stringify(snapshot.resolved.choices[name]),
+    );
+    const globals = (['model', 'small_model'] as const).flatMap((field) =>
+      preview.resolved[field] === snapshot.resolved[field] || preview.resolved[field] === undefined
+        ? []
+        : [{ field, model: preview.resolved[field] }],
+    );
+    const commands = Object.entries(preview.resolved.commands).flatMap(([name, command]) =>
+      command.model === undefined ||
+      (Object.hasOwn(snapshot.resolved.commands, name) && command.model === snapshot.resolved.commands[name].model)
+        ? []
+        : [{ name, model: command.model }],
+    );
+    const affected = [
+      ...new Set([...Object.keys(snapshot.resolved.agent), ...Object.keys(preview.resolved.agent)]),
+    ].filter((name) => JSON.stringify(snapshot.resolved.agent[name]) !== JSON.stringify(preview.resolved.agent[name]));
+    confirm(
+      'Save composition definition?',
+      `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+        `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
+        `Changed global models: ${globals.length === 0 ? 'none' : globals.map(({ field, model }) => `${field}: ${model}`).join(', ')}.\n` +
+        `Changed command models: ${commands.length === 0 ? 'none' : commands.map(({ name, model }) => `${name}: ${model}`).join(', ')}.\n` +
+        `Commands: ${Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
+        `Active profiles: ${preview.sources.activeProfiles.join(' → ')}.\n` +
+        'Save preserves conversations. Reload saved settings to apply changes.',
+      async () => {
+        await refreshNative(snapshot);
+        const latest = await previewDefinition(plan);
+        if (projection(latest) !== projection(preview)) {
+          throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
+        }
+        const choices: ModelChoice[] = [...changed.map(([, choice]) => choice), ...globals, ...commands];
+        if (
+          change.registry === 'configurationPresets' &&
+          (change.operation === 'create' || change.operation === 'patch')
+        ) {
+          // Inactive presets have no affected agents, but their chosen model must still be available at save time.
+          choices.push(editorSettings(latest.sources, snapshot.nativeModels).modelPresets[change.name]);
+        }
+        if (choices.some((choice) => choice.model !== undefined)) {
+          const catalog = await models();
+          choices.forEach((choice) => validateChoice(choice, catalog));
+        }
+        if (api.lifecycle.signal.aborted) {
+          return;
+        }
+        await saveFilePlan(
+          plan,
+          async () => {
+            await refreshNative(snapshot);
+            if (projection(await previewDefinition(plan)) !== projection(preview)) {
+              throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
+            }
+          },
+          async () => {
+            const { assertCurrent } = await connection(snapshot.root);
+            return assertCurrent;
+          },
+        );
+        offerReload(true);
+      },
+    );
+  };
   const composeMenu = () =>
     menu(
       'Compose',
       [
         { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
         { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
+        {
+          title: 'Author groups, presets and profiles',
+          value: 'registry',
+          run: async () => {
+            const isCurrent = navigation.checkpoint();
+            const snapshot = await load();
+            if (!isCurrent()) {
+              return;
+            }
+            openAuthoring(snapshot, {
+              menu,
+              back: navigation.back,
+              refresh: navigation.refresh,
+              prompt: (title, value, confirmed) =>
+                navigation.prompt({
+                  title,
+                  value,
+                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+                  onConfirm: (value) => run(() => confirmed(value)),
+                }),
+              propose: proposeDefinition,
+              groupModel: selectGroup,
+              createPreset: (selected) =>
+                selectModel('New configuration preset', {}, (choice) => {
+                  if (choice.model === undefined || choice.model === '') {
+                    throw new SettingsError('Choose a concrete model for the new preset.');
+                  }
+                  return selected({
+                    model: choice.model,
+                    ...(choice.variant === undefined ? {} : { variant: choice.variant }),
+                  });
+                }),
+              presetModel: (snapshot, name) =>
+                selectModel(name, snapshot.modelPresets[name], (choice) =>
+                  propose(snapshot, { kind: 'preset', name, choice }),
+                ),
+            });
+          },
+        },
         {
           title: 'Effective configuration and sources',
           value: 'effective',

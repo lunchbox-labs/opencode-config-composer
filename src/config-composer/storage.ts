@@ -1,6 +1,5 @@
 import { lstat, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import {
   type Node as JsonNode,
@@ -36,7 +35,9 @@ import { type ResolvedProfileRuntime, nativeAgentNames, resolveProfileRuntime } 
 import { parseCompositionDocument } from './composition/document.ts';
 import { editorSettings } from './composition/editor.ts';
 import { resolveGroupAgentNames } from './composition/membership.ts';
-import { packageName } from './package-name.ts';
+import type { EditorNativeBaseline } from './composition/runtime-baseline.ts';
+import { editNativeBaseline, verifyNativeAgents } from './composition/native-baseline.ts';
+import { serverEntry } from './registration.ts';
 import { type NativeAgentLayer, loadNativeProjectSources } from './composition/native-sources.ts';
 import {
   type NativeVariables,
@@ -81,7 +82,8 @@ export interface Snapshot {
   sourceContext: ProjectContext;
   resolved: ResolvedProfileRuntime;
   nativeAgents: Record<string, AgentSettings>;
-  nativeModels: NativeModels;
+  nativeModels: EditorNativeBaseline;
+  nativeSourceAgents: Record<string, AgentSettings>;
   nativeLayers: NativeAgentLayer[];
   nativeVariables: NativeVariables;
   nativeDirectory: string;
@@ -99,11 +101,13 @@ export interface FileEdit {
   file: SourceFile;
   text: string;
 }
-export interface EditPlan {
+export interface FilePlan {
   snapshot: Snapshot;
-  change: Change;
   edits: FileEdit[];
   description: string;
+}
+export interface EditPlan extends FilePlan {
+  change: Change;
 }
 
 function checkObjectKeys(node: JsonNode | undefined): void {
@@ -129,7 +133,7 @@ export function parseConfig(text: string): Record<string, unknown> {
   return value;
 }
 
-function parseAgent(file: SourceFile): AgentFile {
+export function parseAgent(file: SourceFile): AgentFile {
   const match = /^(---\r?\n)([\s\S]*?)(^---\s*\n|^---\s*$)/m.exec(file.text);
   if (match?.index !== 0) {
     throw new SettingsError('An agent file has missing or invalid frontmatter.');
@@ -274,29 +278,6 @@ async function observedFile(root: string, original: SourceFile): Promise<SourceF
   return configurationFile(canonical);
 }
 
-function serverEntry(spec: unknown, root: string): boolean {
-  if (typeof spec !== 'string') {
-    return false;
-  }
-  if (spec === packageName) {
-    return true;
-  }
-  if (spec.startsWith(`${packageName}@`)) {
-    const version = spec.slice(packageName.length + 1);
-    return version !== '' && /^[a-z0-9.*+~^<>=| -]+$/i.test(version);
-  }
-  try {
-    const path = resolve(spec.startsWith('file:') ? fileURLToPath(spec) : resolve(root, spec));
-    return [
-      fileURLToPath(new URL('../server.ts', import.meta.url)),
-      fileURLToPath(new URL('../server.js', import.meta.url)),
-      resolve(fileURLToPath(new URL('../../', import.meta.url))),
-    ].includes(path);
-  } catch {
-    return false;
-  }
-}
-
 function pluginOptions(config: Record<string, unknown>, index: number): unknown {
   if (!Array.isArray(config.plugin)) {
     throw new SettingsError('Configure the Config Composer server plugin first.');
@@ -313,7 +294,7 @@ function pluginOptions(config: Record<string, unknown>, index: number): unknown 
 export async function loadSnapshot(
   directory: string,
   projectRoot = directory,
-  native?: NativeModels,
+  native?: EditorNativeBaseline,
   nativeDirectory = projectRoot,
   nativeWorktree = projectRoot,
 ): Promise<Snapshot> {
@@ -379,7 +360,10 @@ export async function loadSnapshot(
   if (settingsFile === undefined) {
     throw new SettingsError('No composition source is available for the editor.');
   }
-  const nativeModels = native ?? config;
+  const nativeModels: EditorNativeBaseline = native ?? {
+    model: typeof config.model === 'string' ? config.model : undefined,
+    small_model: typeof config.small_model === 'string' ? config.small_model : undefined,
+  };
   const settings = editorSettings(sources, nativeModels);
   const { groups, modelPresets } = settings;
   const projectSources =
@@ -441,7 +425,17 @@ export async function loadSnapshot(
       files.push(dependency);
     }
   }
-  const nativeAgents = Object.fromEntries([...agents].map(([name, agent]) => [name, agent.settings]));
+  const nativeSourceAgents = Object.fromEntries([...agents].map(([name, agent]) => [name, agent.settings]));
+  if (nativeModels.agent !== undefined) {
+    verifyNativeAgents(nativeSourceAgents, nativeModels.agent);
+  }
+  const nativeAgents = nativeModels.agent ?? nativeSourceAgents;
+  for (const [name, settings] of Object.entries(nativeAgents)) {
+    const agent = agents.get(name);
+    if (agent !== undefined) {
+      agent.settings = structuredClone(settings);
+    }
+  }
   const available = { ...Object.fromEntries(nativeAgentNames.map((name) => [name, {}])), ...nativeAgents };
   for (const definitions of [
     sources.registry.components?.agents,
@@ -508,6 +502,7 @@ export async function loadSnapshot(
     resolved,
     nativeAgents,
     nativeModels,
+    nativeSourceAgents,
     nativeLayers,
     nativeVariables,
     nativeDirectory,
@@ -550,7 +545,7 @@ export function affectedGroups(snapshot: Snapshot, change: Change): string[] {
     : [];
 }
 
-function editJson(text: string, path: (string | number)[], value: unknown): string {
+export function editJson(text: string, path: (string | number)[], value: unknown): string {
   const tree = parseTree(text);
   if (value === undefined && (tree === undefined || findNodeAtLocation(tree, path) === undefined)) {
     return text;
@@ -858,6 +853,15 @@ export function planChange(snapshot: Snapshot, change: Change): EditPlan {
   return { snapshot, change, edits, description };
 }
 
+async function previewNativeAgents(snapshot: Snapshot, overlays: ReadonlyMap<string, string>) {
+  const edited = Object.fromEntries(
+    [...(await nativeAgentsFromLayers(snapshot.nativeLayers, snapshot.nativeVariables, overlays))].map(
+      ([name, agent]) => [name, agent.settings],
+    ),
+  );
+  return editNativeBaseline(snapshot.nativeAgents, snapshot.nativeSourceAgents, edited);
+}
+
 export async function plannedChoices(
   plan: EditPlan,
   native: NativeModels = plan.snapshot.nativeModels,
@@ -865,11 +869,7 @@ export async function plannedChoices(
   const { snapshot, change } = plan;
   const overlays = new Map(plan.edits.map((edit) => [edit.file.path, edit.text]));
   const sources = await loadCompositionSources(snapshot.sourceContext, overlays);
-  const agents = Object.fromEntries(
-    [...(await nativeAgentsFromLayers(snapshot.nativeLayers, snapshot.nativeVariables, overlays))].map(
-      ([name, agent]) => [name, agent.settings],
-    ),
-  );
+  const agents = await previewNativeAgents(snapshot, overlays);
   const defaults =
     change.kind === 'global'
       ? { ...native, [change.field]: change.model }
@@ -961,7 +961,29 @@ async function observedSourceList(snapshot: Snapshot): Promise<void> {
   }
 }
 
-export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => void>): Promise<void> {
+export async function previewFilePlan(
+  plan: FilePlan,
+): Promise<{ sources: LoadedSources; resolved: ResolvedProfileRuntime }> {
+  const overlays = new Map<string, string>();
+  for (const file of plan.snapshot.files) {
+    overlays.set(file.path, file.text);
+    overlays.set(file.canonicalPath ?? file.path, file.text);
+  }
+  for (const edit of plan.edits) {
+    overlays.set(edit.file.path, edit.text);
+    overlays.set(edit.file.canonicalPath ?? edit.file.path, edit.text);
+  }
+  const sources = await loadCompositionSources(plan.snapshot.sourceContext, overlays);
+  const agent = await previewNativeAgents(plan.snapshot, overlays);
+  const resolved = await resolveProfileRuntime(sources, { ...plan.snapshot.nativeModels, agent }, overlays);
+  return { sources, resolved };
+}
+
+export async function saveFilePlan(
+  plan: FilePlan,
+  validate: () => Promise<void>,
+  authorize?: () => Promise<() => void>,
+): Promise<void> {
   if (plan.edits.length === 0) {
     return;
   }
@@ -981,7 +1003,7 @@ export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => v
     }
     // Detect newly added agents before approving a group-wide preview.
     await observedSourceList(plan.snapshot);
-    await plannedChoices(plan);
+    await validate();
     observedNativeVariables(plan.snapshot.nativeVariables);
     for (const edit of plan.edits) {
       if (edit.file.writable === false) {
@@ -1018,6 +1040,16 @@ export async function savePlan(plan: EditPlan, authorize?: () => Promise<() => v
     await lock.close();
     await unlink(lockPath);
   }
+}
+
+export function savePlan(plan: EditPlan, authorize?: () => Promise<() => void>): Promise<void> {
+  return saveFilePlan(
+    plan,
+    async () => {
+      await plannedChoices(plan);
+    },
+    authorize,
+  );
 }
 
 export async function reloadConfiguration(

@@ -9,6 +9,8 @@ import { setTimeout } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { installPackage } from './install-package.ts';
 import type * as Storage from '../src/config-composer/storage.ts';
+import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
+import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import { nativeAgentNames } from '../src/config-composer/composition/runtime.ts';
 
 // The native registry is the oracle: neither config debug output nor a copied built-in prompt is used.
@@ -23,9 +25,15 @@ test(
     await mkdir(join(project, '.opencode'), { recursive: true });
     await mkdir(join(root, 'library/checks'), { recursive: true });
     const installed = await installPackage(configRoot);
-    const { loadSnapshot, planChange, savePlan } = (await import(
+    const { loadSnapshot, planChange, savePlan, saveFilePlan } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/storage.js')).href
     )) as typeof Storage;
+    const { planDefinition, previewDefinition } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/authoring.js')).href
+    )) as typeof Authoring;
+    const { readRuntimeBaseline } = (await import(
+      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
+    )) as typeof Baseline;
     const previousModel = process.env.COMPOSER_NATIVE_AGENT_MODEL;
     process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/project-pin';
     t.after(() => {
@@ -73,7 +81,9 @@ test(
           skills: { checks: { file: './checks/SKILL.md' } },
           commands: { review: { template: 'Review $ARGUMENTS', agent: 'reviewer' } },
         },
+        configurationPresets: { 'native-model': { modelRef: 'opencode:model' } },
         componentGroups: {
+          'native-preview': { agents: ['build'] },
           work: {
             agents: [...nativeAgentNames, 'project-json', 'project-md', 'ancestor'],
             commands: ['review'],
@@ -85,12 +95,25 @@ test(
         profiles: {
           base: { layers: [{ componentGroup: 'work' }] },
           work: { extends: 'base', layers: [{ componentGroup: 'later' }] },
+          'global-parent': { overrides: { model: 'fixture/composer' } },
         },
       }),
     );
     await writeFile(
       join(configRoot, 'config-composer.jsonc'),
-      JSON.stringify({ imports: [join(root, 'library/definitions.jsonc')], activeProfiles: [] }),
+      JSON.stringify({
+        imports: [join(root, 'library/definitions.jsonc')],
+        profiles: {
+          'global-child': {
+            extends: 'global-parent',
+            layers: [
+              { componentGroup: 'native-preview' },
+              { configurationPreset: 'native-model', target: { agents: ['build'] } },
+            ],
+          },
+        },
+        activeProfiles: [],
+      }),
     );
     await writeFile(
       join(configRoot, 'opencode.json'),
@@ -115,7 +138,7 @@ test(
       OPENCODE_DISABLE_MODELS_FETCH: '1',
       OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true',
       OPENCODE_CONFIG: '',
-      OPENCODE_CONFIG_CONTENT: '',
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'fixture/native' }),
       OPENCODE_SERVER_PASSWORD: '',
     };
     delete env.OPENCODE_CONFIG_DIR;
@@ -178,7 +201,51 @@ test(
     const conversation = await api<{ id: string; title: string }>('/session', 'POST', {
       title: 'Existing project conversation',
     });
-    const snapshot = await loadSnapshot(configRoot, project, undefined, project, '/');
+    const runtimeLocation = { root: project, directory: project };
+    const localBaseline = join(project, '.opencode/config-composer.local.jsonc');
+    await writeFile(localBaseline, '{"activeProfiles":["global-child"]}');
+    await api('/instance/dispose', 'POST');
+    const composed = await api<Record<string, unknown>>('/config');
+    assert.equal(composed.model, 'fixture/composer', logs.slice(-5000));
+    const native = readRuntimeBaseline(composed, runtimeLocation, configRoot);
+    assert.equal(native.model, 'fixture/native', 'native config-content input supersedes disk model');
+    process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/different-client-environment';
+    await assert.rejects(loadSnapshot(configRoot, project, native, project, '/'), /same environment.*reload/s);
+    process.env.COMPOSER_NATIVE_AGENT_MODEL = 'fixture/project-pin';
+    const parentSnapshot = await loadSnapshot(configRoot, project, native, project, '/');
+    const clearParent = planDefinition(parentSnapshot, {
+      operation: 'patch',
+      registry: 'profiles',
+      name: 'global-child',
+      path: ['extends'],
+      value: undefined,
+    });
+    const clearedParent = await previewDefinition(clearParent);
+    assert.equal(clearedParent.resolved.model, 'fixture/native');
+    assert.equal(
+      clearedParent.resolved.agent.build.model,
+      'fixture/native',
+      'native model reference uses restored fallback',
+    );
+    await saveFilePlan(clearParent, async () => {
+      await previewDefinition(clearParent);
+    });
+    await api('/instance/dispose', 'POST');
+    assert.equal((await api<Record<string, unknown>>('/config')).model, 'fixture/native');
+    assert.deepEqual((await api<Agent[]>('/agent')).find((agent) => agent.name === 'build')?.model, {
+      providerID: 'fixture',
+      modelID: 'native',
+    });
+    assert.ok(!(await readFile(join(configRoot, 'opencode.json'), 'utf8')).includes('__configComposerRuntime'));
+    await rm(localBaseline);
+    await api('/instance/dispose', 'POST');
+    const snapshot = await loadSnapshot(
+      configRoot,
+      project,
+      readRuntimeBaseline(await api('/config'), runtimeLocation, configRoot),
+      project,
+      '/',
+    );
     assert.ok(snapshot.agents.some((agent) => agent.name === 'project-json'));
     assert.ok(snapshot.agents.some((agent) => agent.name === 'project-md'));
     assert.ok(snapshot.agents.some((agent) => agent.name === 'ancestor'));
@@ -204,8 +271,33 @@ test(
       'verify the complete pinned native identity catalog',
     );
     assert.ok(!baseline.some((item) => item.name === 'reviewer'), 'definitions alone do not activate custom agents');
+    for (const change of [
+      {
+        operation: 'create',
+        registry: 'profiles',
+        name: 'editor-profile',
+        sourceId: join(configRoot, 'config-composer.jsonc'),
+      },
+      {
+        operation: 'patch',
+        registry: 'profiles',
+        name: 'editor-profile',
+        path: ['layers'],
+        value: [{ componentGroup: 'work' }],
+      },
+      { operation: 'rename', registry: 'profiles', name: 'editor-profile', nextName: 'edited-profile' },
+    ] as const) {
+      const plan = planDefinition(
+        await loadSnapshot(configRoot, project, undefined, project, '/'),
+        change.operation === 'patch' ? { ...change, path: [...change.path] } : change,
+      );
+      await saveFilePlan(plan, async () => {
+        await previewDefinition(plan);
+      });
+    }
+    assert.deepEqual((await loadSnapshot(configRoot, project, undefined, project, '/')).sources.activeProfiles, []);
     const local = join(project, '.opencode/config-composer.local.jsonc');
-    await writeFile(local, '{"activeProfiles":["work"]}');
+    await writeFile(local, '{"activeProfiles":["edited-profile","work"]}');
     await api('/instance/dispose', 'POST');
     const activated = await api<Agent[]>('/agent');
     for (const before of baseline.filter((item) => item.native)) {
