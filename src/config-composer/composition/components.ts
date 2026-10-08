@@ -5,9 +5,10 @@ import { configurationFile } from '../configuration.ts';
 import { type AgentSettings, SettingsError, record } from '../settings.ts';
 import type { LoadedSources } from './sources.ts';
 
-async function text(path: string): Promise<string> {
+async function text(path: string, overlays: ReadonlyMap<string, string> = new Map()): Promise<string> {
   try {
     const file = await configurationFile(await realpath(path));
+    file.text = overlays.get(path) ?? file.text;
     if (file.text.includes('\0')) {
       throw new SettingsError('Component files must not contain NUL bytes.');
     }
@@ -43,8 +44,11 @@ function safe(value: unknown, depth = 0): void {
     }
   }
 }
-async function markdown(path: string): Promise<{ metadata: Record<string, unknown>; body: string }> {
-  const content = await text(path);
+async function markdown(
+  path: string,
+  overlays: ReadonlyMap<string, string> = new Map(),
+): Promise<{ metadata: Record<string, unknown>; body: string }> {
+  const content = await text(path, overlays);
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
   if (match === null) {
     throw new SettingsError(`Component ${path} requires YAML frontmatter.`);
@@ -160,7 +164,11 @@ function nativeAgent(metadata: AgentSettings): AgentSettings {
       : {}),
   };
 }
-export async function loadComponents(sources: LoadedSources, available: Record<string, AgentSettings>) {
+export async function loadComponents(
+  sources: LoadedSources,
+  available: Record<string, AgentSettings>,
+  overlays: ReadonlyMap<string, string> = new Map(),
+) {
   const components = sources.registry.components;
   const agents: Record<string, AgentSettings> = {};
   const prompts: Record<string, string> = {};
@@ -170,13 +178,13 @@ export async function loadComponents(sources: LoadedSources, available: Record<s
   > = {};
   const skills: Record<string, string> = {};
   for (const [name, value] of Object.entries(components?.prompts ?? {})) {
-    prompts[name] = value.file === undefined ? value.text : await text(value.file);
+    prompts[name] = value.file === undefined ? value.text : await text(value.file, overlays);
   }
   for (const [name, value] of Object.entries(components?.skills ?? {})) {
     if (basename(value.file) !== 'SKILL.md') {
       throw new SettingsError(`Skill ${name} must name its native SKILL.md file.`);
     }
-    const file = await markdown(value.file);
+    const file = await markdown(value.file, overlays);
     if (file.metadata.name !== name || typeof file.metadata.description !== 'string') {
       throw new SettingsError(`Skill ${name} requires matching name and description frontmatter in ${value.file}.`);
     }
@@ -188,7 +196,7 @@ export async function loadComponents(sources: LoadedSources, available: Record<s
         `Component agent ${name} conflicts with an existing native or custom agent. Select it by name and use configuration overrides instead.`,
       );
     }
-    const file = value.file === undefined ? { metadata: {}, body: value.prompt } : await markdown(value.file);
+    const file = value.file === undefined ? { metadata: {}, body: value.prompt } : await markdown(value.file, overlays);
     const metadata: AgentSettings = file.metadata;
     if (metadata.name !== undefined && metadata.name !== name) {
       throw new SettingsError(`Agent frontmatter name must match component identity ${name}.`);
@@ -217,7 +225,8 @@ export async function loadComponents(sources: LoadedSources, available: Record<s
     agents[name] = { ...nativeAgent(metadata), prompt: parts.join('\n\n') };
   }
   for (const [name, value] of Object.entries(components?.commands ?? {})) {
-    const file = value.file === undefined ? { metadata: {}, body: value.template } : await markdown(value.file);
+    const file =
+      value.file === undefined ? { metadata: {}, body: value.template } : await markdown(value.file, overlays);
     const metadata: Record<string, unknown> = { ...file.metadata, ...value };
     if (
       (metadata.agent !== undefined && typeof metadata.agent !== 'string') ||

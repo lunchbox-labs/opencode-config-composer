@@ -25,6 +25,7 @@ export interface ProfileOccurrence {
 }
 
 export interface LoadedSources {
+  paths: ReadonlyMap<string, string | undefined>;
   documents: CompositionSourceDocument[];
   scopes: CompositionSourceDocument[];
   registry: CompositionDocument;
@@ -56,8 +57,12 @@ function relativeFile<T extends { file?: string }>(value: T, path: string): T {
   return value.file === undefined ? value : { ...value, file: configurationPath(value.file, dirname(path)) };
 }
 
-export async function loadCompositionSources(context: ProjectContext): Promise<LoadedSources> {
+export async function loadCompositionSources(
+  context: ProjectContext,
+  overlays: ReadonlyMap<string, string> = new Map(),
+): Promise<LoadedSources> {
   const documents = new Map<string, CompositionSourceDocument>();
+  const paths = new Map<string, string | undefined>();
   const visited = new Set<string>();
   const scopes: CompositionSourceDocument[] = [];
   const provenance: Record<string, FieldOrigin> = {};
@@ -79,6 +84,7 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
       await lstat(path);
     } catch (error) {
       if (optional && error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        paths.set(path, undefined);
         return undefined;
       }
       report(`Could not read composition source ${path}.`);
@@ -89,6 +95,7 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
     } catch {
       return report(`Could not resolve composition source ${path}.`);
     }
+    paths.set(path, canonical);
     const cached = documents.get(canonical);
     if (cached !== undefined) {
       return cached;
@@ -98,6 +105,7 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
         `Could not read composition source ${path}: ${error instanceof Error ? error.message : 'unreadable file'}`,
       ),
     );
+    file.text = overlays.get(canonical) ?? file.text;
     totalBytes += Buffer.byteLength(file.text, 'utf8');
     if (totalBytes > 8 * 1024 * 1024) {
       fail('Composition sources exceed the 8 MiB total text limit.', path);
@@ -311,5 +319,5 @@ export async function loadCompositionSources(context: ProjectContext): Promise<L
   const orderedProfiles = activeProfiles.flatMap((name, index) =>
     profileChain(name, new Set(), { sourceId: activeSource?.id, pointer: `/activeProfiles/${index}` }),
   );
-  return { documents: [...documents.values()], scopes, registry, provenance, activeProfiles, orderedProfiles };
+  return { paths, documents: [...documents.values()], scopes, registry, provenance, activeProfiles, orderedProfiles };
 }

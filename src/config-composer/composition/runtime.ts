@@ -91,13 +91,14 @@ function mergeAuthored(base: AgentSettings, extra: AgentSettings): AgentSettings
 export async function resolveProfileRuntime(
   sources: LoadedSources,
   native: NativeInput,
+  overlays: ReadonlyMap<string, string> = new Map(),
 ): Promise<ResolvedProfileRuntime> {
   const { registry } = sources;
   const groups = registry.componentGroups ?? {};
   const presets = registry.configurationPresets ?? {};
   const available: Record<string, AgentSettings> = Object.fromEntries(nativeAgentNames.map((name) => [name, {}]));
   Object.assign(available, structuredClone(native.agent ?? {}));
-  const components = await loadComponents(sources, available);
+  const components = await loadComponents(sources, available, overlays);
   Object.assign(available, components.agents);
   for (const [name, value] of Object.entries(native.composerOwnedAgents ?? {})) {
     available[name] = mergeAuthored(available[name] ?? {}, structuredClone(value));

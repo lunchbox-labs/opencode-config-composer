@@ -11,12 +11,10 @@ import {
   type NativeModels,
   type ResolutionContext,
   SettingsError,
-  agentGroups,
   catalogModels,
   groupName,
   presetName,
   record,
-  resolveChoice,
   resolveGroup,
   validateChoice,
 } from './settings.ts';
@@ -27,6 +25,7 @@ import {
   affectedGroups,
   groupNames,
   loadSnapshot,
+  memberships,
   planChange,
   plannedChoices,
   reloadConfiguration,
@@ -34,6 +33,8 @@ import {
 } from './storage.ts';
 import { configurationDirectory } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
+import { editorSettings } from './composition/editor.ts';
+import { resolveProfileRuntime } from './composition/runtime.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 const label = (choice: ModelChoice) =>
@@ -59,16 +60,28 @@ export function registerSettings(
   const native = new WeakMap<Snapshot, NativeModels>();
   const context = (snapshot: Snapshot): ResolutionContext => ({
     modelPresets: snapshot.modelPresets,
-    native: native.get(snapshot) ?? snapshot.config,
+    native: native.get(snapshot) ?? { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model },
   });
-  const refreshNative = async (snapshot: Snapshot) => {
+  const readNative = async (): Promise<NativeModels> => {
     const response: { error?: unknown; data?: Config | null } = await api.client.config.get();
     if (Boolean(response.error) || response.data === undefined || response.data === null) {
       throw new SettingsError(
         'Could not read effective workspace defaults. Reopen the editor after checking the server.',
       );
     }
-    native.set(snapshot, { model: response.data.model, small_model: response.data.small_model });
+    return { model: response.data.model, small_model: response.data.small_model };
+  };
+  const refreshNative = async (snapshot: Snapshot) => {
+    const models = await readNative();
+    snapshot.nativeModels = models;
+    snapshot.settings = editorSettings(snapshot.sources, models);
+    snapshot.modelPresets = snapshot.settings.modelPresets;
+    snapshot.resolved = await resolveProfileRuntime(
+      snapshot.sources,
+      { ...models, agent: snapshot.nativeAgents },
+      new Map(snapshot.files.map((file) => [file.path, file.text])),
+    );
+    native.set(snapshot, { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model });
   };
   const run = (action: () => void | Promise<void>) => {
     if (busy || api.lifecycle.signal.aborted) {
@@ -155,10 +168,13 @@ export function registerSettings(
   };
   const load = async () => {
     const { root } = await connection();
-    const snapshot = await loadSnapshot(root);
-    if (Object.values(snapshot.groups).some((choice) => choice.modelRef?.startsWith('opencode:') === true)) {
-      await refreshNative(snapshot);
-    }
+    const path = api.state.path as { worktree?: string; directory?: string };
+    const project =
+      typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
+        ? path.worktree
+        : (path.directory ?? root);
+    const snapshot = await loadSnapshot(root, project, await readNative());
+    native.set(snapshot, { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model });
     return snapshot;
   };
   const models = async () => {
@@ -195,8 +211,11 @@ export function registerSettings(
   };
   const describeAgent = (snapshot: Snapshot, agent: StoredAgent) => {
     try {
-      const choice = resolveChoice(agent.settings, snapshot.groups, context(snapshot));
-      return `${resolvedLabel(snapshot, choice)} · ${choice.source}`;
+      const choice = snapshot.resolved.choices[agent.name] ?? {
+        model: agent.settings.model,
+        variant: agent.settings.variant,
+      };
+      return `${resolvedLabel(snapshot, choice)} · ${snapshot.resolved.selectedAgents.includes(agent.name) ? 'Active profile settings' : 'Native fallback'}`;
     } catch (error) {
       if (!(error instanceof SettingsError)) {
         throw error;
@@ -210,6 +229,7 @@ export function registerSettings(
     selected: (choice: ModelChoice) => void | Promise<void>,
     variants = true,
     extra: Action[] = [],
+    inheritedVariant?: ModelChoice,
   ) => {
     const isCurrent = navigation.checkpoint();
     const available = await models();
@@ -233,7 +253,14 @@ export function registerSettings(
             menu(
               `${model.name}: variant`,
               [
-                { title: 'Model default', value: '', run: () => selected({ model: model.id }) },
+                {
+                  title:
+                    inheritedVariant?.model === model.id && inheritedVariant.variant !== undefined
+                      ? `Inherit authored variant (${inheritedVariant.variant})`
+                      : 'Model default',
+                  value: '',
+                  run: () => selected({ model: model.id }),
+                },
                 ...names.map((variant) => ({
                   title: variant,
                   value: variant,
@@ -319,12 +346,16 @@ export function registerSettings(
       undefined,
       root,
     );
-  const propose = (snapshot: Snapshot, change: Change) => {
+  const propose = async (snapshot: Snapshot, change: Change) => {
+    const isCurrent = navigation.checkpoint();
     const plan = planChange(snapshot, change);
-    const preview = plannedChoices(plan, context(snapshot).native);
+    const preview = await plannedChoices(plan, context(snapshot).native);
+    if (!isCurrent()) {
+      return;
+    }
     const affected = affectedGroups(snapshot, change);
     const members = snapshot.agents.filter((agent) =>
-      agentGroups(agent.settings).some((group) => affected.includes(group)),
+      memberships(snapshot, agent).some((group) => affected.includes(group)),
     );
     const pinned = members.filter(
       (agent) => typeof agent.settings.model === 'string' && agent.settings.model !== '',
@@ -346,15 +377,16 @@ export function registerSettings(
       change.kind === 'global' || change.kind === 'all'
         ? '\nOther native fallback consumers can also change. Workspace overrides and session selections still apply.'
         : '';
+    const modelsPreview = [...new Set(preview.map(label))].join(', ');
     confirm(
       'Save agent settings?',
-      `${plan.description}\n${choiceLabel}${impact}${scope}\n\n` +
+      `${plan.description}\n${choiceLabel}${impact}${scope}\nModels to validate: ${modelsPreview === '' ? 'Native fallback' : modelsPreview}\n\n` +
         `${plan.edits.length} file(s) will change. Reload settings after saving to apply them.`,
       async () => {
         if (native.has(snapshot)) {
           await refreshNative(snapshot);
         }
-        const choices = plannedChoices(plan, context(snapshot).native);
+        const choices = await plannedChoices(plan, context(snapshot).native);
         if (JSON.stringify(choices) !== JSON.stringify(preview)) {
           throw new SettingsError(
             'Effective model defaults changed while the dialog was open. Reopen it and review the new models.',
@@ -379,7 +411,7 @@ export function registerSettings(
   };
   const selectReference = async (snapshot: Snapshot, name: string, modelRef: string) => {
     const isCurrent = navigation.checkpoint();
-    if (modelRef.startsWith('opencode:')) {
+    if (modelRef.startsWith('opencode:') || native.has(snapshot)) {
       await refreshNative(snapshot);
     }
     const resolved = resolveGroup({ modelRef }, context(snapshot));
@@ -398,7 +430,7 @@ export function registerSettings(
       });
     const variants = Object.keys(model.variants);
     if (variants.length === 0) {
-      selected();
+      await selected();
       return;
     }
     menu(
@@ -468,10 +500,10 @@ export function registerSettings(
           if (groupNames(snapshot).includes(name)) {
             throw new SettingsError('That group already exists. Choose it from the group list.');
           }
-          propose(
+          return propose(
             snapshot,
             agent !== undefined
-              ? { kind: 'membership', agent: agent.name, groups: [...agentGroups(agent.settings), name] }
+              ? { kind: 'membership', agent: agent.name, groups: [...memberships(snapshot, agent), name] }
               : { kind: 'group', name, choice: {} },
           );
         }),
@@ -528,27 +560,19 @@ export function registerSettings(
       },
     ]);
   const membershipMenu = (snapshot: Snapshot, agent: StoredAgent) => {
-    const pending = [...agentGroups(agent.settings)];
+    const pending = [...memberships(snapshot, agent)];
     const options = () => {
-      const settings = {
-        ...agent.settings,
-        groups: pending,
-        options: {
-          ...(record(agent.settings.options) ? agent.settings.options : {}),
-          groups: undefined,
-        },
-      };
       return [
         {
           title: 'Save groups…',
           value: '+save',
-          description: describeAgent(snapshot, { ...agent, settings }),
+          description: 'Membership uses active profile layer order; save to preview the effective models.',
           run: () => propose(snapshot, { kind: 'membership', agent: agent.name, groups: [...pending] }),
         },
         ...pending.map((name, index) => ({
           title: `${index + 1}. ${name}`,
           value: name,
-          description: 'Later groups override earlier settings',
+          description: 'Active profile layer order controls precedence',
           run: () =>
             menu(`Membership: ${name}`, [
               {
@@ -615,13 +639,13 @@ export function registerSettings(
         },
       ];
     };
-    menu(`${agent.name}: ordered groups`, options);
+    menu(`${agent.name}: groups`, options);
   };
   const agentMenu = (snapshot: Snapshot, agent: StoredAgent) => {
-    const groups = agentGroups(agent.settings);
+    const groups = memberships(snapshot, agent);
     menu(`${agent.name} · ${groups.length > 0 ? groups.join(' → ') : 'Ungrouped'}`, [
       {
-        title: 'Manage ordered groups',
+        title: 'Manage groups',
         value: 'group',
         description: 'Keep any explicit model override',
         run: () => membershipMenu(snapshot, agent),
@@ -631,21 +655,29 @@ export function registerSettings(
         value: 'override',
         description: describeAgent(snapshot, agent),
         run: () =>
-          selectModel(agent.name, agent.settings, (choice) =>
-            propose(snapshot, { kind: 'override', agent: agent.name, choice }),
+          selectModel(
+            agent.name,
+            snapshot.resolved.choices[agent.name] ?? agent.settings,
+            (choice) => propose(snapshot, { kind: 'override', agent: agent.name, choice }),
+            true,
+            [],
+            agent.component === true ? agent.settings : undefined,
           ),
       },
       {
-        title: 'Use group defaults',
+        title: agent.component === true ? 'Use component source defaults' : 'Use group defaults',
         value: 'inherit',
-        description: "Clear this agent's model and variant overrides",
+        description:
+          agent.component === true
+            ? "Clear this component's JSONC model and variant overrides"
+            : "Clear this agent's model and variant overrides",
         run: () => propose(snapshot, { kind: 'override', agent: agent.name, choice: {} }),
       },
     ]);
   };
   const members = (snapshot: Snapshot, group?: string) =>
     snapshot.agents.filter((agent) =>
-      group === undefined ? agentGroups(agent.settings).length === 0 : agentGroups(agent.settings).includes(group),
+      group === undefined ? memberships(snapshot, agent).length === 0 : memberships(snapshot, agent).includes(group),
     );
   const agentOptions = (snapshot: Snapshot, agents: StoredAgent[]): Action[] =>
     agents.map((agent) => ({
@@ -675,17 +707,17 @@ export function registerSettings(
           menu(
             'Choose an agent',
             snapshot.agents
-              .filter((agent) => !agentGroups(agent.settings).includes(name))
+              .filter((agent) => !memberships(snapshot, agent).includes(name))
               .map((agent) => ({
                 title: agent.name,
                 value: agent.name,
                 description:
-                  agentGroups(agent.settings).length > 0 ? agentGroups(agent.settings).join(' → ') : 'Ungrouped',
+                  memberships(snapshot, agent).length > 0 ? memberships(snapshot, agent).join(' → ') : 'Ungrouped',
                 run: () =>
                   propose(snapshot, {
                     kind: 'membership',
                     agent: agent.name,
-                    groups: [...agentGroups(agent.settings), name],
+                    groups: [...memberships(snapshot, agent), name],
                   }),
               })),
           ),
@@ -741,7 +773,7 @@ export function registerSettings(
                         if (choice.model === undefined || choice.model === '') {
                           throw new SettingsError('Select a concrete global model.');
                         }
-                        propose(snapshot, { kind: 'global', field, model: choice.model });
+                        return propose(snapshot, { kind: 'global', field, model: choice.model });
                       },
                       false,
                     ),
