@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Native workspace defaults, also used by built-in agents such as build.
+  // Replace these model IDs with models available through your configured providers.
+  "model": "anthropic/claude-sonnet-4-5",
+  "small_model": "anthropic/claude-haiku-4-5",
+  "default_agent": "build",
+  // Replace VERSION with your installed Composer version, matching tui.jsonc.
+  // Composer reads config-composer.jsonc and its explicit profiles.jsonc import.
+  "plugin": ["@lunchbox-labs/opencode-config-composer@VERSION"],
+  // OpenCode discovers agents/*.md, commands/*.md and skills/*/SKILL.md beside this file.
+  // Composer profiles apply settings to the native agents by name.
+}

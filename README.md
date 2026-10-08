@@ -52,22 +52,69 @@ or restrict access. A group's `prompts` list alone does not inject those prompts
 ## Complete review and programming example
 
 Copy the complete [example directory](docs/examples/review-programming) together, keeping relative paths.
-Place its `config-composer.jsonc`, `profiles.jsonc` and `skills/` in your OpenCode configuration directory,
-or put them in the project's `.opencode/` directory. All referenced resources are supplied.
+Put its contents in the project's `.opencode/` directory, or in your global OpenCode configuration directory
+(normally `~/.config/opencode/`, or `$XDG_CONFIG_HOME/opencode/`). Replace `VERSION` in both native plugin lists
+with the same installed Composer version; merge the example settings into existing files when needed.
+For the project layout, also retain the global plugin registrations from **Install**: Composer's editor
+reads the server registration from that global installation directory.
+All referenced resources are supplied:
+
+```text
+.opencode/                         # Or your global OpenCode configuration directory
+├── opencode.jsonc                  # Native defaults and server plugin registration
+├── tui.jsonc                       # Native TUI plugin registration for /compose
+├── config-composer.jsonc           # Groups, skill references, presets and active selection
+├── profiles.jsonc                 # Explicitly imported profile definitions
+├── agents/
+│   ├── code-reviewer.md
+│   ├── test-auditor.md
+│   ├── implementer.md
+│   └── test-writer.md
+├── commands/
+│   ├── review-code.md
+│   ├── audit-tests.md
+│   ├── implement.md
+│   └── write-tests.md
+└── skills/
+    ├── code-review/SKILL.md
+    ├── test-audit/SKILL.md
+    ├── implementation/SKILL.md
+    └── test-writing/SKILL.md
+```
+
+[opencode.jsonc](docs/examples/review-programming/opencode.jsonc) sets native `model`, `small_model` and
+`default_agent` defaults and registers the Composer server plugin.
+[tui.jsonc](docs/examples/review-programming/tui.jsonc) registers the matching TUI plugin.
+OpenCode loads `agents/*.md`, `commands/*.md` and `skills/*/SKILL.md` natively. Agent filenames supply their
+names, YAML frontmatter supplies `description` and `mode: subagent`, and the Markdown body supplies the full
+prompt, including the original review/programming scope guidance. Command filenames supply slash-command
+names; frontmatter supplies `description`, the target `agent` and `subtask: true`, while the body supplies the
+template, retaining `$ARGUMENTS` for `/implement` and `/write-tests`. These paths and fields are verified against
+the supported [OpenCode 1.18.34 agent loader](https://github.com/anomalyco/opencode/blob/v1.18.34/packages/opencode/src/config/agent.ts)
+and [command loader](https://github.com/anomalyco/opencode/blob/v1.18.34/packages/opencode/src/config/command.ts).
 
 | Group         | Agents                          | Skills                           | Commands                     |
 | ------------- | ------------------------------- | -------------------------------- | ---------------------------- |
 | `review`      | `code-reviewer`, `test-auditor` | `code-review`, `test-audit`      | `review-code`, `audit-tests` |
 | `programming` | `implementer`, `test-writer`    | `implementation`, `test-writing` | `implement`, `write-tests`   |
 
-[config-composer.jsonc](docs/examples/review-programming/config-composer.jsonc) defines the four agents,
-four skills, explicit command targets, prompt relationships, groups and reusable presets.
+[config-composer.jsonc](docs/examples/review-programming/config-composer.jsonc) references the four native
+agents by name in two groups, names the four skill files and defines reusable model and permission presets.
+Keep the native agents and commands out of `components.agents` and `components.commands`: declaring the same
+names in Composer would conflict with OpenCode's discovered definitions. The table shows intended skill and
+command relationships; native command targets live in their Markdown frontmatter. Skills load on demand.
 [profiles.jsonc](docs/examples/review-programming/profiles.jsonc) is explicitly imported and contains:
 
 - `base-workflow`: selects `review`, then `programming`, and assigns each group's permission preset.
 - `claude-coding`: extends `base-workflow`, assigns `claude-code` to all four agents, then allows `git *`
   for `code-reviewer` in its final override.
 - `openai-coding`: extends the same parent and assigns `openai-code` to the same agents.
+
+The example selects `claude-coding` initially. These profiles configure the four subagents; built-in agents
+such as the default `build` retain the native workspace defaults from `opencode.jsonc`. Switching profiles
+changes the Composer model and permission overlays. Native agents, commands and skills remain discoverable
+even with `activeProfiles: []`; clearing profiles removes those overlays. Native definitions alone do not
+activate a Composer profile.
 
 Model presets use `anthropic/claude-sonnet-4-5` and `openai/gpt-5` with `maxOutputTokens: 4096`.
 Replace IDs with models available in your connected catalog as needed. Provider access and parameter support
@@ -150,7 +197,8 @@ the raw GitHub schema URL tracks its named branch. `$schema` may point to a loca
 `imports` lists explicit local `.json` or `.jsonc` definition files. Imports, component files and
 `sourceDirectories` aliases resolve from their declaring document. Imported definitions do not activate
 profiles and cannot contain root `activeProfiles`, `defaults` or `overrides`. Duplicate named definitions,
-import cycles and repeated canonical identities are rejected. Automatic directory discovery remains deferred.
+import cycles and repeated canonical identities are rejected. Automatic discovery of Composer definition files
+remains deferred; OpenCode still discovers its native agent, command and skill directories.
 
 `activeProfiles` contains ordered names, not filenames. The highest scope supplying the key replaces the
 earlier selection. Omit the key to inherit; `[]` selects none. A local selection can replace the example's

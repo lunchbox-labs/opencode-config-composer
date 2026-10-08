@@ -1,0 +1,4 @@
+{
+  // Match the Composer version in opencode.jsonc to enable /compose in the native TUI.
+  "plugin": ["@lunchbox-labs/opencode-config-composer@VERSION"],
+}
