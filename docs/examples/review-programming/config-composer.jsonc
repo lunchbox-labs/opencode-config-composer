@@ -1,91 +1,30 @@
 {
-  // Keep this file, profiles.jsonc, and the skills directory together.
-  // Model IDs must be available through your configured providers.
   "imports": ["./profiles.jsonc"],
+  "sourceDirectories": { "prompts": "./prompts" },
   "components": {
-    "agents": {
-      "code-reviewer": {
-        "description": "Review changes for correctness and maintainability",
-        "mode": "subagent",
-        "prompt": "Review the current changes. Identify concrete bugs, explain their impact, and cite the relevant files and lines.",
-        "promptRefs": ["review-scope"],
-        "skills": ["code-review"],
-      },
-      "test-auditor": {
-        "description": "Audit test coverage and verification gaps",
-        "mode": "subagent",
-        "prompt": "Compare the requested behavior with existing tests. Identify missing cases and distinguish verified behavior from assumptions.",
-        "promptRefs": ["review-scope"],
-        "skills": ["test-audit"],
-      },
-      "implementer": {
-        "description": "Implement the requested change",
-        "mode": "subagent",
-        "prompt": "Implement the requested change using the repository's existing conventions. Explain the resulting behavior and any remaining limitations.",
-        "promptRefs": ["programming-scope"],
-        "skills": ["implementation"],
-      },
-      "test-writer": {
-        "description": "Add focused tests for the requested behavior",
-        "mode": "subagent",
-        "prompt": "Add tests that exercise the requested behavior, including meaningful failure and boundary cases. Report the checks you actually ran.",
-        "promptRefs": ["programming-scope"],
-        "skills": ["test-writing"],
-      },
-    },
     "skills": {
       "code-review": { "file": "./skills/code-review/SKILL.md" },
       "test-audit": { "file": "./skills/test-audit/SKILL.md" },
       "implementation": { "file": "./skills/implementation/SKILL.md" },
       "test-writing": { "file": "./skills/test-writing/SKILL.md" },
     },
-    "commands": {
-      "review-code": {
-        "agent": "code-reviewer",
-        "description": "Review the current diff",
-        "subtask": true,
-        "template": "Review the current diff for correctness and maintainability. Explain concrete findings with file references.",
-      },
-      "audit-tests": {
-        "agent": "test-auditor",
-        "description": "Audit coverage of the current change",
-        "subtask": true,
-        "template": "Audit the tests for the current change. Identify important behavior that is not exercised.",
-      },
-      "implement": {
-        "agent": "implementer",
-        "description": "Implement the requested change",
-        "subtask": true,
-        "template": "Implement the requested change: $ARGUMENTS",
-      },
-      "write-tests": {
-        "agent": "test-writer",
-        "description": "Add tests for the requested behavior",
-        "subtask": true,
-        "template": "Add focused tests for the requested behavior: $ARGUMENTS",
-      },
-    },
     "prompts": {
-      "review-scope": {
-        "text": "Keep review findings grounded in the current change. Describe the evidence, likely impact, and a practical correction.",
-      },
-      "programming-scope": {
-        "text": "Keep changes focused on the requested behavior. Follow existing conventions and report verification results.",
-      },
+      "review-scope": { "file": "./prompts/review-scope.md" },
+      "programming-scope": { "file": "./prompts/programming-scope.md" },
     },
   },
   "componentGroups": {
     "review": {
       "agents": ["code-reviewer", "test-auditor"],
       "skills": ["code-review", "test-audit"],
-      "commands": ["review-code", "audit-tests"],
       "prompts": ["review-scope"],
+      "configuration": { "prompt": { "append": ["@prompts/review-scope.md"] } },
     },
     "programming": {
       "agents": ["implementer", "test-writer"],
       "skills": ["implementation", "test-writing"],
-      "commands": ["implement", "write-tests"],
       "prompts": ["programming-scope"],
+      "configuration": { "prompt": { "append": ["@prompts/programming-scope.md"] } },
     },
   },
   "configurationPresets": {
