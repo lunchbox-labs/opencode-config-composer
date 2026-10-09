@@ -1,10 +1,7 @@
 {
-  // Keep the complete example directory together, including native agents/ and commands/.
-  // Model IDs must be available through your configured providers.
   "imports": ["./profiles.jsonc"],
   "sourceDirectories": { "prompts": "./prompts" },
   "components": {
-    // OpenCode discovers agents/ natively; groups below select those names without redefining them.
     "skills": {
       "code-review": { "file": "./skills/code-review/SKILL.md" },
       "test-audit": { "file": "./skills/test-audit/SKILL.md" },

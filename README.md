@@ -9,9 +9,6 @@ The package is **`@lunchbox-labs/opencode-config-composer`**. Supported host: **
 
 ## Install
 
-Register the same package version in both native configuration files, retaining other plugin entries.
-Replace `VERSION` with your chosen version.
-
 `opencode.jsonc`:
 
 ```jsonc
@@ -24,9 +21,7 @@ Replace `VERSION` with your chosen version.
 { "plugin": ["@lunchbox-labs/opencode-config-composer@VERSION"] }
 ```
 
-OpenCode selects the server and TUI entrypoints. Register one Composer entry in each file.
-For a local build, run `npm ci`, `npm run build` and `npm pack`, install the printed tarball in a separate
-directory, then use the absolute installed package directory in both plugin lists.
+Composer's editors require the server plugin entry in the shared configuration, including for project workflows.
 
 ## Components, groups, presets and profiles
 
@@ -51,23 +46,13 @@ or restrict access. A group's `prompts` list alone does not inject those prompts
 
 ## Complete review and programming example
 
-Copy the complete [example directory](docs/examples/review-programming) together, keeping relative paths.
-Place its contents in your OpenCode configuration directory, or in the project's `.opencode/` directory.
-For project use, keep the shared Composer plugin registrations from [Install](#install) for its editors.
-The [directory layout and loading guide](docs/examples/review-programming/README.md) covers native
-`agents/`, `commands/` and `skills/`, shared `prompts/`, and the JSONC configuration files. Replace `VERSION`
-in both plugin lists with your installed release. All referenced resources are supplied.
+See the [example directory and composition notes](docs/examples/review-programming/README.md).
 
 | Group         | Agents                          | Skills                           | Native commands              |
 | ------------- | ------------------------------- | -------------------------------- | ---------------------------- |
 | `review`      | `code-reviewer`, `test-auditor` | `code-review`, `test-audit`      | `review-code`, `audit-tests` |
 | `programming` | `implementer`, `test-writer`    | `implementation`, `test-writing` | `implement`, `write-tests`   |
 
-[opencode.jsonc](docs/examples/review-programming/opencode.jsonc) sets native global model defaults and
-loads Composer; [tui.jsonc](docs/examples/review-programming/tui.jsonc) registers its TUI entrypoint.
-OpenCode discovers the four agent prompts and command templates from Markdown files with YAML frontmatter
-in `agents/` and `commands/`. Command frontmatter targets the native agent names. Composer selects those
-agents by name without duplicate agent or command component definitions.
 [config-composer.jsonc](docs/examples/review-programming/config-composer.jsonc) references skills and shared
 scope prompts, appends those prompts through group configuration, and defines groups and reusable presets.
 [profiles.jsonc](docs/examples/review-programming/profiles.jsonc) is explicitly imported and contains:
@@ -76,10 +61,6 @@ scope prompts, appends those prompts through group configuration, and defines gr
 - `claude-coding`: extends `base-workflow`, assigns `claude-code` to all four agents, then allows `git *`
   for `code-reviewer` in its final override.
 - `openai-coding`: extends the same parent and assigns `openai-code` to the same agents.
-
-Model presets use `anthropic/claude-sonnet-4-5` and `openai/gpt-5` with `maxOutputTokens: 4096`.
-Replace IDs with models available in your connected catalog as needed. Provider access and parameter support
-are checked at dispatch; the example supplies no credentials.
 
 With no additional overrides, native authored model pins or session-selected models, the configured result is:
 
@@ -92,8 +73,6 @@ With no additional overrides, native authored model pins or session-selected mod
 
 All four agents receive the 4,096-token output limit. Removing the Claude reviewer's final Git override
 restores `ask` while retaining its earlier npm denial. Unmatched requests use native permission fallback.
-These rules describe Git and npm requests, not a blanket read-only or full-access policy.
-Switching profiles reuses components and command targets; it does not duplicate or preload skills.
 Native files remain registered when no profile is selected; clearing profiles removes their Composer settings
 and scope prompt appends, leaving the authored Markdown bodies and native global defaults.
 
@@ -109,11 +88,9 @@ Groups can name built-in agents directly. This complete minimal document selects
 }
 ```
 
-The pinned host also has `general`, `compaction`, `title` and `summary`. Composer retains native prompts,
-modes, permissions and model pins unless a supported explicit override changes them. Hidden agents remain hidden.
 Ordinary availability controls exclude internal `compaction`, `title` and `summary` agents.
 
-Existing custom agents may also declare memberships in native Markdown frontmatter:
+The `groups` frontmatter field adds Composer memberships:
 
 ```yaml
 ---
@@ -129,9 +106,7 @@ through both paths occurs once. Native `options.groups` is supported; direct `gr
 both exist. Selecting the group applies its configuration once per member, in profile layer order.
 Unknown or unavailable members produce diagnostics. `/compose` offers membership repair before activation.
 
-Native project agents in `opencode.json(c)` and `.opencode/agent(s)/*.md` are included. Keep one Markdown
-identity per native directory. The editor treats native project sources as read-only: add JSONC memberships
-without shadow agent files; edit native pins or frontmatter in their declaring files.
+The editor treats native project sources as read-only; JSONC memberships remain editable.
 
 ## Shared, project and local settings
 
@@ -154,14 +129,12 @@ A relative `configFile` resolves from the shared directory. Select a custom file
 ```
 
 Missing default shared/project/local files are allowed; an explicitly selected `configFile` must exist.
-Invalid or unreadable settings produce errors. Use the [schema](schema.json) matching the installed package;
-the raw GitHub schema URL tracks its named branch. `$schema` may point to a local copy.
 
 `imports` lists explicit local `.json` or `.jsonc` definition files. Imports, component files and
 `sourceDirectories` aliases resolve from their declaring document. Imported definitions do not activate
 profiles and cannot contain root `activeProfiles`, `defaults` or `overrides`. Duplicate named definitions,
 import cycles and repeated canonical identities are rejected.
-Automatic discovery of Composer definition files remains deferred; OpenCode still discovers its native agent, command and skill directories.
+Automatic discovery of Composer definition files remains deferred.
 
 `activeProfiles` contains ordered names, not filenames. The highest scope supplying the key replaces the
 earlier selection. Omit the key to inherit; `[]` selects none. A local selection can replace the example's
@@ -172,8 +145,7 @@ shared or project `claude-coding` selection:
 ```
 
 Removing that local key restores inheritance. Selecting none leaves independent document defaults and
-overrides in effect. Keep personal local selections out of version control. Different worktrees can select
-different profiles; running instances do not automatically reload one another.
+overrides in effect.
 
 ## Precedence, prompts and permissions
 
@@ -232,8 +204,8 @@ do not expose the current unsent TUI model/variant selection or complete final p
 configured parameters are settings, not verified request values. Values under credential-like option keys are redacted.
 Inspection sends no model request and does not save, apply, select models or modify conversation history.
 
-Review the scope and proposed diff before saving. The editor preserves comments and unrelated fields, verifies
-shared filesystem access, and rejects stale snapshots and symlinked write targets. Imported definitions are
+The editor preserves comments and unrelated fields, verifies shared filesystem access,
+and rejects stale snapshots and symlinked write targets. Imported definitions are
 edited in their declaring file only when writable within the configuration directory; outside sources and
 aliases are read-only. Remote filesystem editing is unsupported.
 
@@ -251,10 +223,7 @@ restoring base values when present. Reusable definitions, base files and convers
 **Native selection limitation (OpenCode 1.18.34):** Existing conversations can retain the previous TUI model/variant;
 clearing profiles can also retain a recorded session model. In the existing TUI conversation, use `/models` to select
 the destination model, then `/variants` to select its destination/base variant, or **Default** when none is configured.
-These native selections preserve conversation history. Select the inherited base model when clearing profiles.
-
-Automatic selection requires compatible host behavior. A new selection/reset API alone would require Composer
-integration and native verification.
+Select the inherited base model when clearing profiles.
 
 `agentAvailability` decisions replay with profiles: later explicit true/false decisions win and absence inherits.
 Activation must retain a visible enabled primary agent and a valid default. If a session's old agent is unavailable
@@ -269,13 +238,10 @@ An empty shortcut selection returns to no active profiles.
 
 The package includes native `config-composer-create`, `config-composer-explain` and `config-composer-migrate`
 guidance skills. Composer registers installed paths and respects colliding native skill names.
-Native skills load on demand through OpenCode. A custom lazy prompt loader remains feasibility research;
-Composer's declared component files are read during resolution. Loaded text is not guaranteed to remain in
-context after compaction.
+Composer's declared component files are read during resolution.
 
 Public exports are the root/server plugin, the TUI plugin and `schema.json`. Internal modules are not supported
-imports. The package provides no executable CLI. Runtime installation does not require TypeScript or OpenTUI
-packages. Development requires Node 22.18 or newer, npm, and the pinned host types.
+imports. Development requires Node 22.18 or newer, npm, and the pinned host types.
 
 For local checks, use `npm ci` and `npm run check`. `npm run test:native` uses the binary selected by
 `OPENCODE_BIN` and requires Python 3 and a Unix pseudo-terminal. Scripts verify the exact host baseline.

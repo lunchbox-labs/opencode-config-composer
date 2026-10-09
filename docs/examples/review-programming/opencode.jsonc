@@ -1,13 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  // Native workspace defaults. Use model IDs available through your configured providers.
   // Composer profiles set the four subagents' models; build keeps the global default.
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "openai/gpt-5",
   "default_agent": "build",
-  // Replace VERSION with the installed Composer release, as in the repository's setup guide.
   "plugin": ["@lunchbox-labs/opencode-config-composer@VERSION"],
-  // OpenCode discovers agents/, commands/ and skills/ beside this file.
-  // Composer loads config-composer.jsonc from the shared directory and/or project .opencode/.
-  // It selects the native agents by name and explicitly imports profiles.jsonc.
 }
