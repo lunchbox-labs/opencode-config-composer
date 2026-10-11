@@ -99,10 +99,22 @@ for (const scope of ['shared', 'project'] as const) {
       assert.deepEqual(await Promise.all([markdown, jsonPath].map((path) => readFile(path, 'utf8'))), before);
       assert.equal(host.requests.length, 0, 'configuration checks send no model requests');
       await writeFile(join(directory, 'prompts/nested.txt'), '{{include:@missing/body.md}}');
+      await writeFile(composerPath, JSON.stringify({ ...composer, activeProfiles: ['a'] }));
       assert.equal(await host.api('/instance/dispose', {}), true);
-      const rejected = await host.response('/command');
-      assert.equal(rejected.ok, false, 'a native include error rejects registry loading');
-      assert.match(await rejected.text(), /Prompt source missing does not exist/);
+      // OpenCode catches config-hook errors and continues with native settings.
+      // Composer must leave the command bodies and profile settings unapplied.
+      const rejected = await host.api<{ model: string; command: Record<string, Command> }>('/config');
+      assert.equal(rejected.model, 'fixture/native');
+      assert.equal(rejected.command['from-directory'].template, body);
+      assert.equal(rejected.command['from-json'].template, body);
+      assert.match(host.stderr, /Prompt source missing does not exist/);
+      await writeFile(join(directory, 'prompts/nested.txt'), 'Recovered');
+      assert.equal(await host.api('/instance/dispose', {}), true);
+      const recovered = await host.api<{ model: string; command: Record<string, Command> }>('/config');
+      assert.equal(recovered.model, 'fixture/a');
+      assert.equal(recovered.command['from-json'].template, expected.replace('Nested $ARGUMENTS $1', 'Recovered'));
+      assert.deepEqual(await host.api('/global/config'), globalBefore);
+      assert.equal(host.requests.length, 0);
     },
   );
 }

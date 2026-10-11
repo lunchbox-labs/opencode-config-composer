@@ -94,6 +94,29 @@ test('native includes resolve aliases relative to imported documents', async (t)
   assert.equal(config.command!.native.template, 'Imported');
 });
 
+test('externally retained Composer command output is not expanded again after deselection', async (t) => {
+  const { file, hooks } = await fixture(t);
+  const definitions = {
+    components: { commands: { composed: { template: '\\{{include:@missing/literal.md}}' } } },
+    componentGroups: { work: { commands: ['composed'] } },
+    profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+  };
+  await writeFile(file, JSON.stringify({ ...definitions, activeProfiles: ['work'] }));
+  const config: Config = {};
+  await hooks.config!(config);
+  config.command!.composed.description = 'External description';
+  await writeFile(file, JSON.stringify({ ...definitions, activeProfiles: [] }));
+  for (let pass = 0; pass < 2; pass++) {
+    await hooks.config!(config);
+    assert.deepEqual(config.command!.composed, {
+      template: '{{include:@missing/literal.md}}',
+      description: 'External description',
+    });
+  }
+  config.command!.composed.template = '{{include:@missing/new.md}}';
+  await assert.rejects(hooks.config!(config), /Prompt source missing does not exist/);
+});
+
 test('native include errors reject before publishing a partial command or agent composition', async (t) => {
   const { root, file, hooks } = await fixture(t);
   await writeFile(join(root, 'snippets/good.md'), 'Good');

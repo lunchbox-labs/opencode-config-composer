@@ -52,7 +52,11 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
   const agentSnapshots = new WeakMap<object, Authored>();
   const resources = new WeakMap<
     object,
-    { commands: { native: Record<string, unknown>; applied: Record<string, unknown> }; addedPaths: Set<string> }
+    {
+      commands: { native: Record<string, unknown>; applied: Record<string, unknown> };
+      composedCommands: Set<string>;
+      addedPaths: Set<string>;
+    }
   >();
   const configurations = new WeakMap<
     object,
@@ -186,7 +190,16 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         throw error;
       }
       const previousResources = resources.get(config);
-      const nativeCommands = restore(config.command ?? {}, previousResources?.commands, true);
+      const nativeCommands = restore(config.command ?? {}, previousResources?.commands);
+      for (const [name, command] of Object.entries(nativeCommands)) {
+        const native = previousResources?.commands.native[name];
+        const applied = previousResources?.commands.applied[name];
+        if (record(command) && record(native) && record(applied)) {
+          // Restore expanded bodies even if a later plugin changed metadata. Generated
+          // commands have no native baseline and retain the existing whole-command policy.
+          nativeCommands[name] = restore(command, { native, applied }, true);
+        }
+      }
       if (!commandConfigurations(nativeCommands)) {
         throw new SettingsError('Native commands must contain valid templates.');
       }
@@ -196,19 +209,29 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
       }
       validateShortcutCommands(nextSources, Object.keys(nativeCommands));
-      const expandedCommands: NonNullable<Config['command']> = {};
+      // OpenCode has already loaded and ordered these commands. Only compose their bodies;
+      // keep the native cache and the authored snapshot free of expanded text.
+      const expandedCommands = structuredClone(nativeCommands);
       const commandInputs: PromptDependency[] = [];
-      for (const [name, command] of Object.entries(nativeCommands)) {
-        // OpenCode has already loaded and ordered these commands. Only compose their bodies;
-        // keep the native cache and the authored snapshot free of expanded text.
-        expandedCommands[name] = {
-          ...structuredClone(command),
-          template: command.template.includes('{{include:')
-            ? await expandIncludes(command.template, nextSources.registry.sourceDirectories ?? {}, (file) =>
-                commandInputs.push(file),
-              )
-            : command.template,
-        };
+      const composedCommands = new Set(Object.keys(resolved.commands));
+      for (const [name, command] of Object.entries(expandedCommands)) {
+        const applied = previousResources?.commands.applied[name];
+        if (
+          previousResources?.composedCommands.has(name) === true &&
+          record(applied) &&
+          command.template === applied.template
+        ) {
+          // A generated command retained by an external metadata edit is already expanded.
+          composedCommands.add(name);
+          continue;
+        }
+        if (command.template.includes('{{include:')) {
+          command.template = await expandIncludes(
+            command.template,
+            nextSources.registry.sourceDirectories ?? {},
+            (file) => commandInputs.push(file),
+          );
+        }
       }
       // Composer command bodies were expanded by resolveProfileRuntime, including escaped markers.
       const nextCommands = { ...expandedCommands, ...resolved.commands };
@@ -271,6 +294,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       config.skills = nextSkills;
       resources.set(config, {
         commands: { native: structuredClone(nativeCommands), applied: structuredClone(nextCommands) },
+        composedCommands,
         addedPaths: new Set(
           [bundledSkillDirectory, ...resolved.skillPaths].filter((path) => !nativePaths.includes(path)),
         ),
