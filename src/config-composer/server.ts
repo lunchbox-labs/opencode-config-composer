@@ -7,7 +7,7 @@ import { type AgentSettings, type EffectiveChoice, SettingsError, record } from 
 import { permissionNotifications } from './composition/permission-warnings.ts';
 import { publishRuntimeBaseline } from './composition/runtime-baseline.ts';
 import { MembershipValidationError } from './composition/membership.ts';
-import { expandIncludes } from './prompts.ts';
+import { type PromptDependency, expandIncludes } from './prompts.ts';
 import { loadCompositionSources } from './composition/sources.ts';
 import { type ResolvedModelSettings, resolveProfileRuntime } from './composition/runtime.ts';
 import { filterParameters, mergeOptions, parametersForDispatch, unprotectedOptions } from './composition/parameters.ts';
@@ -186,7 +186,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         throw error;
       }
       const previousResources = resources.get(config);
-      const nativeCommands = restore(config.command ?? {}, previousResources?.commands);
+      const nativeCommands = restore(config.command ?? {}, previousResources?.commands, true);
       if (!commandConfigurations(nativeCommands)) {
         throw new SettingsError('Native commands must contain valid templates.');
       }
@@ -196,7 +196,22 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
       }
       validateShortcutCommands(nextSources, Object.keys(nativeCommands));
-      const nextCommands = { ...nativeCommands, ...resolved.commands };
+      const expandedCommands: NonNullable<Config['command']> = {};
+      const commandInputs: PromptDependency[] = [];
+      for (const [name, command] of Object.entries(nativeCommands)) {
+        // OpenCode has already loaded and ordered these commands. Only compose their bodies;
+        // keep the native cache and the authored snapshot free of expanded text.
+        expandedCommands[name] = {
+          ...structuredClone(command),
+          template: command.template.includes('{{include:')
+            ? await expandIncludes(command.template, nextSources.registry.sourceDirectories ?? {}, (file) =>
+                commandInputs.push(file),
+              )
+            : command.template,
+        };
+      }
+      // Composer command bodies were expanded by resolveProfileRuntime, including escaped markers.
+      const nextCommands = { ...expandedCommands, ...resolved.commands };
       const nativeSkills = config.skills ?? {};
       const nativePaths = (nativeSkills.paths ?? []).filter((path) => previousResources?.addedPaths.has(path) !== true);
       const nextSkills = {
@@ -204,7 +219,8 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         paths: [...new Set([...nativePaths, bundledSkillDirectory, ...resolved.skillPaths])],
       };
       const revision = compositionRevision(nextSources, resolved, inputs);
-      await verifyCompositionInputs(nextSources, inputs);
+      // Native command reads are verified here, outside the editor's Composer-only revision.
+      await verifyCompositionInputs(nextSources, [...inputs, ...commandInputs]);
       // Validate the complete candidate before mutating host objects.
       for (const key of ['model', 'small_model'] as const) {
         if (resolved[key] === undefined) {
