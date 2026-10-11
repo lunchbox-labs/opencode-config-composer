@@ -7,7 +7,7 @@ import { type AgentSettings, type EffectiveChoice, SettingsError, record } from 
 import { permissionNotifications } from './composition/permission-warnings.ts';
 import { publishRuntimeBaseline } from './composition/runtime-baseline.ts';
 import { MembershipValidationError } from './composition/membership.ts';
-import { expandIncludes } from './prompts.ts';
+import { type PromptDependency, expandIncludes } from './prompts.ts';
 import { loadCompositionSources } from './composition/sources.ts';
 import { type ResolvedModelSettings, resolveProfileRuntime } from './composition/runtime.ts';
 import { filterParameters, mergeOptions, parametersForDispatch, unprotectedOptions } from './composition/parameters.ts';
@@ -52,7 +52,11 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
   const agentSnapshots = new WeakMap<object, Authored>();
   const resources = new WeakMap<
     object,
-    { commands: { native: Record<string, unknown>; applied: Record<string, unknown> }; addedPaths: Set<string> }
+    {
+      commands: { native: Record<string, unknown>; applied: Record<string, unknown> };
+      composedCommands: Set<string>;
+      addedPaths: Set<string>;
+    }
   >();
   const configurations = new WeakMap<
     object,
@@ -187,6 +191,15 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       }
       const previousResources = resources.get(config);
       const nativeCommands = restore(config.command ?? {}, previousResources?.commands);
+      for (const [name, command] of Object.entries(nativeCommands)) {
+        const native = previousResources?.commands.native[name];
+        const applied = previousResources?.commands.applied[name];
+        if (record(command) && record(native) && record(applied)) {
+          // Restore expanded bodies even if a later plugin changed metadata. Generated
+          // commands have no native baseline and retain the existing whole-command policy.
+          nativeCommands[name] = restore(command, { native, applied }, true);
+        }
+      }
       if (!commandConfigurations(nativeCommands)) {
         throw new SettingsError('Native commands must contain valid templates.');
       }
@@ -196,7 +209,32 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
       }
       validateShortcutCommands(nextSources, Object.keys(nativeCommands));
-      const nextCommands = { ...nativeCommands, ...resolved.commands };
+      // OpenCode has already loaded and ordered these commands. Only compose their bodies;
+      // keep the native cache and the authored snapshot free of expanded text.
+      const expandedCommands = structuredClone(nativeCommands);
+      const commandInputs: PromptDependency[] = [];
+      const composedCommands = new Set(Object.keys(resolved.commands));
+      for (const [name, command] of Object.entries(expandedCommands)) {
+        const applied = previousResources?.commands.applied[name];
+        if (
+          previousResources?.composedCommands.has(name) === true &&
+          record(applied) &&
+          command.template === applied.template
+        ) {
+          // A generated command retained by an external metadata edit is already expanded.
+          composedCommands.add(name);
+          continue;
+        }
+        if (command.template.includes('{{include:')) {
+          command.template = await expandIncludes(
+            command.template,
+            nextSources.registry.sourceDirectories ?? {},
+            (file) => commandInputs.push(file),
+          );
+        }
+      }
+      // Composer command bodies were expanded by resolveProfileRuntime, including escaped markers.
+      const nextCommands = { ...expandedCommands, ...resolved.commands };
       const nativeSkills = config.skills ?? {};
       const nativePaths = (nativeSkills.paths ?? []).filter((path) => previousResources?.addedPaths.has(path) !== true);
       const nextSkills = {
@@ -204,7 +242,8 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         paths: [...new Set([...nativePaths, bundledSkillDirectory, ...resolved.skillPaths])],
       };
       const revision = compositionRevision(nextSources, resolved, inputs);
-      await verifyCompositionInputs(nextSources, inputs);
+      // Native command reads are verified here, outside the editor's Composer-only revision.
+      await verifyCompositionInputs(nextSources, [...inputs, ...commandInputs]);
       // Validate the complete candidate before mutating host objects.
       for (const key of ['model', 'small_model'] as const) {
         if (resolved[key] === undefined) {
@@ -255,6 +294,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       config.skills = nextSkills;
       resources.set(config, {
         commands: { native: structuredClone(nativeCommands), applied: structuredClone(nextCommands) },
+        composedCommands,
         addedPaths: new Set(
           [bundledSkillDirectory, ...resolved.skillPaths].filter((path) => !nativePaths.includes(path)),
         ),
