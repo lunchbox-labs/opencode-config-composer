@@ -1,3 +1,4 @@
+import type { SelectionEnvironment } from './selection-state.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
@@ -93,6 +94,7 @@ export interface RuntimeLocation {
   directory: string;
 }
 export interface EditorNativeBaseline extends NativeModels {
+  selectionEnvironment?: SelectionEnvironment;
   agent?: Record<string, AgentSettings>;
 }
 
@@ -120,6 +122,7 @@ export function publishRuntimeBaseline(
   native: NativeModels,
   agent: Record<string, AgentSettings> = {},
   state?: {
+    selectionEnvironment?: SelectionEnvironment;
     revision?: CompositionRevision;
     observedNativeFiles: string;
     choices?: Record<string, ResolvedModelSettings>;
@@ -158,6 +161,7 @@ export function publishRuntimeBaseline(
           ? {}
           : {
               observedNativeFiles: state.observedNativeFiles,
+              ...(state.selectionEnvironment === undefined ? {} : { selectionEnvironment: state.selectionEnvironment }),
               ...(state.revision === undefined ? {} : { revision: structuredClone(state.revision) }),
               ...(state.choices === undefined ? {} : { appliedChoices: publishedChoices(state.choices) }),
               appliedCommands: structuredClone(config.command ?? {}),
@@ -241,7 +245,20 @@ export function readRuntimeBaseline(
       }
     }
   }
+  const environment = marker.selectionEnvironment;
+  let selectionEnvironment: SelectionEnvironment | undefined;
+  if (environment !== undefined) {
+    if (
+      !record(environment) ||
+      typeof environment.stateDirectory !== 'string' ||
+      typeof environment.lifetime !== 'string'
+    ) {
+      return fail('The server returned invalid selection state metadata.');
+    }
+    selectionEnvironment = { stateDirectory: environment.stateDirectory, lifetime: environment.lifetime };
+  }
   return {
+    ...(selectionEnvironment === undefined ? {} : { selectionEnvironment }),
     ...(marker.native.default_agent === null ? {} : { default_agent: marker.native.default_agent }),
     ...(marker.native.permission === null || marker.native.permission === undefined
       ? {}

@@ -1,3 +1,5 @@
+import { selectionLifetime, selectionStateDirectory } from '../src/config-composer/composition/selection-state.ts';
+import { editorSelectionEnvironment } from './editor-server-config.ts';
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -38,8 +40,13 @@ async function fixture(t: TestContext) {
 
 test('repair capture retains unresolved sources while normal snapshots still reject invalid active members', async (t) => {
   const f = await fixture(t);
-  await assert.rejects(loadSnapshot(f.root), /removed.*unavailable/);
-  const snapshot = await loadEditorSnapshot(f.root);
+  await assert.rejects(
+    loadSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) }),
+    /removed.*unavailable/,
+  );
+  const snapshot = await loadEditorSnapshot(f.root, f.root, {
+    selectionEnvironment: editorSelectionEnvironment(f.root),
+  });
   assert.ok('diagnostic' in snapshot);
   assert.equal(snapshot.diagnostic.group, 'work');
   assert.match(snapshot.diagnostic.message, /removed.*unavailable/);
@@ -55,7 +62,11 @@ test('repair capture retains unresolved sources while normal snapshots still rej
   });
   assert.equal((await previewFilePlan(plan)).resolved.agent.build.model, 'fixture/composed');
   await saveFilePlan(plan, async () => {});
-  assert.equal((await loadSnapshot(f.root)).resolved.agent.build.model, 'fixture/composed');
+  assert.equal(
+    (await loadSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) })).resolved.agent
+      .build.model,
+    'fixture/composed',
+  );
   assert.match(await readFile(f.file, 'utf8'), /Retain this comment/);
   assert.deepEqual(JSON.parse(await readFile(join(f.root, 'opencode.jsonc'), 'utf8')), f.native);
 });
@@ -63,7 +74,9 @@ test('repair capture retains unresolved sources while normal snapshots still rej
 test('a still-invalid repair is rejected even when the save callback omits candidate validation', async (t) => {
   const f = await fixture(t);
   const before = await readFile(f.file, 'utf8');
-  const snapshot = await loadEditorSnapshot(f.root);
+  const snapshot = await loadEditorSnapshot(f.root, f.root, {
+    selectionEnvironment: editorSelectionEnvironment(f.root),
+  });
   const plan = planDefinition(snapshot, {
     operation: 'patch',
     registry: 'componentGroups',
@@ -82,7 +95,9 @@ test('repair supports explicit local deactivation of read-only membership withou
   const f = await fixture(t);
   const before = await readFile(f.file, 'utf8');
   await chmod(f.file, 0o444);
-  const snapshot = await loadEditorSnapshot(f.root);
+  const snapshot = await loadEditorSnapshot(f.root, f.root, {
+    selectionEnvironment: editorSelectionEnvironment(f.root),
+  });
   assert.throws(
     () =>
       planDefinition(snapshot, {
@@ -96,13 +111,19 @@ test('repair supports explicit local deactivation of read-only membership withou
   );
   const plan = planScope(snapshot, 'local', { operation: 'selection', profiles: [] });
   await saveFilePlan(plan, async () => {});
-  assert.deepEqual((await loadSnapshot(f.root)).sources.activeProfiles, []);
+  assert.deepEqual(
+    (await loadSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) })).sources
+      .activeProfiles,
+    [],
+  );
   assert.equal(await readFile(f.file, 'utf8'), before);
 });
 
 test('repair captures freshness and does not swallow unrelated source or runtime failures', async (t) => {
   const f = await fixture(t);
-  const snapshot = await loadEditorSnapshot(f.root);
+  const snapshot = await loadEditorSnapshot(f.root, f.root, {
+    selectionEnvironment: editorSelectionEnvironment(f.root),
+  });
   const plan = planScope(snapshot, 'local', { operation: 'selection', profiles: [] });
   await writeFile(f.file, (await readFile(f.file, 'utf8')) + '\n// Concurrent edit');
   await assert.rejects(
@@ -110,7 +131,10 @@ test('repair captures freshness and does not swallow unrelated source or runtime
     /changed/,
   );
   await writeFile(f.file, '{"activeProfiles":');
-  await assert.rejects(loadEditorSnapshot(f.root), /JSONC|syntax/);
+  await assert.rejects(
+    loadEditorSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) }),
+    /JSONC|syntax/,
+  );
   await writeFile(
     f.file,
     JSON.stringify({
@@ -119,7 +143,10 @@ test('repair captures freshness and does not swallow unrelated source or runtime
       activeProfiles: ['work'],
     }),
   );
-  await assert.rejects(loadEditorSnapshot(f.root), /preset|missing/);
+  await assert.rejects(
+    loadEditorSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) }),
+    /preset|missing/,
+  );
 });
 
 test('initial membership failure publishes an exact native repair baseline and rethrows without partial apply', async (t) => {
@@ -130,6 +157,7 @@ test('initial membership failure publishes an exact native repair baseline and r
   const hooks = await server.server({ directory: f.root, worktree: f.root } as PluginInput, options);
   await assert.rejects(hooks.config!(config), /removed.*unavailable/);
   assert.deepEqual(readRuntimeBaseline(config, { root: f.root, directory: f.root }), {
+    selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
     model: 'fixture/native',
     agent: f.native.agent,
   });
@@ -146,14 +174,16 @@ test('several repairs in one source accumulate and preserve the draft until ever
   value.componentGroups.other = { agents: ['also-removed'] };
   value.profiles.work.layers.push({ componentGroup: 'other' });
   await writeFile(f.file, JSON.stringify(value));
-  const snapshot = await loadEditorSnapshot(f.root);
+  const snapshot = await loadEditorSnapshot(f.root, f.root, {
+    selectionEnvironment: editorSelectionEnvironment(f.root),
+  });
   const members = [{ group: 'work', kind: 'agents' as const, members: ['build'] }];
   await assert.rejects(previewFilePlan(planMembershipRepair(snapshot, { members })), /also-removed/);
   members.push({ group: 'other', kind: 'agents', members: ['plan'] });
   const plan = planMembershipRepair(snapshot, { members });
   assert.equal(plan.edits.length, 1);
   await saveFilePlan(plan, async () => {});
-  const current = await loadSnapshot(f.root);
+  const current = await loadSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) });
   assert.deepEqual(current.sources.registry.componentGroups?.work.agents, ['build']);
   assert.deepEqual(current.sources.registry.componentGroups.other.agents, ['plan']);
 });
@@ -163,13 +193,19 @@ test('a missing native frontmatter group can be defined in the chosen scope with
   f.native.agent!.worker = { options: { groups: ['missing-team'] }, model: 'fixture/pinned' };
   const nativeText = JSON.stringify(f.native);
   await writeFile(join(f.root, 'opencode.jsonc'), nativeText);
-  const snapshot = await loadEditorSnapshot(f.root);
+  const snapshot = await loadEditorSnapshot(f.root, f.root, {
+    selectionEnvironment: editorSelectionEnvironment(f.root),
+  });
   const plan = planMembershipRepair(snapshot, {
     members: [{ group: 'work', kind: 'agents', members: ['build'] }],
     groups: [{ name: 'missing-team', sourceId: f.file }],
   });
   await saveFilePlan(plan, async () => {});
-  assert.deepEqual((await loadSnapshot(f.root)).sources.registry.componentGroups?.['missing-team'], {});
+  assert.deepEqual(
+    (await loadSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) })).sources.registry
+      .componentGroups?.['missing-team'],
+    {},
+  );
   assert.equal(await readFile(join(f.root, 'opencode.jsonc'), 'utf8'), nativeText);
 });
 
@@ -190,6 +226,7 @@ test('membership failure on a reused config preserves last applied fields and th
   await assert.rejects(hooks.config!(config), /missing-later/);
   assert.deepEqual({ ...config, plugin: undefined }, applied);
   assert.deepEqual(readRuntimeBaseline(config, { root: f.root, directory: f.root }), {
+    selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
     model: 'fixture/native',
     agent: f.native.agent,
   });
@@ -204,9 +241,12 @@ test('repair observes component inputs and native agents across asynchronous val
   const snippet = join(f.root, 'guide.md');
   await writeFile(snippet, '---\ndescription: Helper\n---\nOriginal guidance');
   const createPlan = async () =>
-    planMembershipRepair(await loadEditorSnapshot(f.root), {
-      members: [{ group: 'work', kind: 'agents', members: ['helper'] }],
-    });
+    planMembershipRepair(
+      await loadEditorSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) }),
+      {
+        members: [{ group: 'work', kind: 'agents', members: ['helper'] }],
+      },
+    );
   const before = await readFile(f.file, 'utf8');
   await assert.rejects(
     saveFilePlan(await createPlan(), async () => {

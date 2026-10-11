@@ -1,3 +1,4 @@
+import { editorSelectionEnvironment } from './editor-server-config.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -189,7 +190,7 @@ test('inactive profile references defer model support until activation resolves 
       },
     },
   ]);
-  let snapshot = await loadSnapshot(root);
+  let snapshot = await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) });
   const target = configurationTargets(snapshot, path).find(
     (target) => target.label === 'Profile inactive: build override',
   )!;
@@ -202,7 +203,7 @@ test('inactive profile references defer model support until activation resolves 
   await saveFilePlan(plan, async () => {
     parameterReview(snapshot, target, await previewFilePlan(plan), catalog);
   });
-  snapshot = await loadSnapshot(root);
+  snapshot = await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) });
   const original = await readFile(path, 'utf8');
   const activation = planScope(snapshot, 'shared', { operation: 'selection', profiles: ['inactive'] });
   await assert.rejects(

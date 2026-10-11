@@ -85,44 +85,38 @@ export function openActivation(snapshot: SourceSnapshot, ui: ActivationUi): void
       },
     ]);
   };
-  const scopeMenu = (destination: ScopeDestination) =>
-    ui.menu(`${destination.scope} profile selection`, [
-      {
-        title: 'Edit ordered selection',
-        value: 'ordered',
-        description: `Current: ${label(destination.selection ?? destination.inherited)}`,
-        run: () => ordered(destination),
-      },
-      {
-        title: 'Select no profiles',
-        value: 'none',
-        description: 'An explicit empty list overrides earlier scopes',
-        run: () => ui.propose(destination.scope, { operation: 'selection', profiles: [] }),
-      },
-      {
-        title: 'Inherit earlier selection',
-        value: 'inherit',
-        description: `Remove this scope’s activeProfiles key; inherits ${label(destination.inherited)}`,
-        run: () => ui.propose(destination.scope, { operation: 'selection' }),
-      },
-      ...(destination.file !== undefined
-        ? []
-        : [
-            {
-              title: 'Create empty composition source',
-              value: 'create',
-              description: 'Add a destination for definitions without changing selection',
-              run: () => ui.propose(destination.scope, { operation: 'create' }),
-            },
-          ]),
-    ]);
-  ui.menu(
-    'Profile activation and scope files',
-    scopeDestinations(snapshot).map((destination) => ({
-      title: destination.scope,
-      value: destination.scope,
-      description: `${destination.path} · ${destination.selection === undefined ? `inherits ${label(destination.inherited)}` : label(destination.selection)}${destination.maskedBy === undefined ? '' : ` · masked by ${destination.maskedBy}`}${destination.writable ? '' : ' · read-only'}`,
-      run: () => scopeMenu(destination),
-    })),
-  );
+  const state = snapshot.sources.selectionState;
+  const destination: ScopeDestination = {
+    scope: 'project',
+    path: state?.path ?? 'Selection state unavailable',
+    selection: snapshot.sources.activeProfiles,
+    inherited: snapshot.sources.selectionPolicy.defaultProfiles,
+    writable: state !== undefined,
+  };
+  ui.menu('Project profile selection', [
+    ...scopeDestinations(snapshot)
+      .filter((item) => item.file === undefined && item.writable)
+      .map((item): Action => ({
+        title: `Create ${item.scope} composition source`,
+        value: `create:${item.scope}`,
+        run: () => ui.propose(item.scope, { operation: 'create' }),
+      })),
+    {
+      title: 'Edit ordered selection',
+      value: 'ordered',
+      description: label(snapshot.sources.activeProfiles),
+      run: () => ordered(destination),
+    },
+    {
+      title: 'Select no profiles',
+      value: 'none',
+      run: () => ui.propose('project', { operation: 'selection', profiles: [] }),
+    },
+    {
+      title: 'Use configured defaults',
+      value: 'inherit',
+      description: label(destination.inherited),
+      run: () => ui.propose('project', { operation: 'selection' }),
+    },
+  ]);
 }

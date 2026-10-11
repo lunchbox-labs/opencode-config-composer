@@ -28,7 +28,11 @@ const suites = {
   ],
   canonical: ['tests/integration/canonical.integration.ts', 'tests/integration/canonical-regressions.integration.ts'],
   terminal: ['tests/integration/terminal.integration.ts'],
-  editor: ['tests/integration/activation.integration.ts', 'tests/integration/authoring.integration.ts'],
+  editor: [
+    'tests/integration/activation.integration.ts',
+    'tests/integration/authoring.integration.ts',
+    'tests/integration/selection-state.integration.ts',
+  ],
   cleanup: ['tests/integration/cleanup.integration.mjs'],
   'content-terminal': ['tests/integration/content-terminal.integration.ts'],
   content: ['tests/integration/parameters.integration.ts', 'tests/integration/permission-editor.integration.ts'],

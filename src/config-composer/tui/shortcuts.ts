@@ -7,7 +7,7 @@ import { shortcutCommandPrefix, validateShortcutCommands } from '../composition/
 export function profileShortcutRegistration(
   api: TuiPluginApi,
   load: () => Promise<Snapshot>,
-  open: (snapshot: Snapshot, name: string, validate: () => Promise<void>) => void,
+  open: (snapshot: Snapshot, name: string, validate: () => Promise<void>) => void | Promise<void>,
   execute: (action: () => Promise<void>) => void | Promise<void>,
   checkpoint: () => () => boolean,
 ) {
@@ -129,7 +129,7 @@ export function profileShortcutRegistration(
                 if (!isCurrent() || api.ui.dialog.open !== dialogWasOpen) {
                   return;
                 }
-                open(fresh, name, validateCurrent);
+                await open(fresh, name, validateCurrent);
               } catch (error) {
                 notify(error);
               }

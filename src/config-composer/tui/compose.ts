@@ -108,13 +108,9 @@ export function openEffective(snapshot: Snapshot, navigation: ReturnType<typeof 
         message =
           `Selection is project-wide.\nActive profiles: ${snapshot.sources.activeProfiles.length === 0 ? 'none' : snapshot.sources.activeProfiles.join(' → ')}\n\n` +
           `Replayed profile order: ${snapshot.sources.orderedProfiles.length === 0 ? 'none' : snapshot.sources.orderedProfiles.map((item) => item.name).join(' → ')}\n\n` +
-          snapshot.sources.scopes
-            .map(
-              (source) =>
-                `${source.path}: ${source.value.activeProfiles === undefined ? 'inherit selection' : JSON.stringify(source.value.activeProfiles)}`,
-            )
-            .join('\n') +
-          '\n\nAn absent selection inherits; [] selects none. Later profile layers run after earlier layers. Existing conversations are retained.';
+          `Configured defaults: ${snapshot.sources.selectionPolicy.defaultProfiles.length === 0 ? 'none' : snapshot.sources.selectionPolicy.defaultProfiles.join(' → ')}.\n` +
+          `Retain on server restart: ${snapshot.sources.selectionPolicy.retainOnRestart ? 'yes' : 'no'}.\n` +
+          'Use configured defaults clears the project override; [] selects none. Later profile layers run after earlier layers. Existing conversations are retained.';
       } else if (option.value === '+sources') {
         message =
           snapshot.files

@@ -22,8 +22,7 @@ capabilities. Keep permission rules ordered: a later matching allow can replace 
 compiler warning and its potentially more permissive native fallback.
 
 Prepare a reviewable JSONC edit and inspect it with `/compose`. The packaged example contains definitions only and is safe to import without activating a profile.
-Definitions stay inactive until explicitly selected. If activation was requested, establish its scope and complete ordered list; otherwise preserve every
-`activeProfiles` field. Local lists replace rather than append, and `[]` selects none. Save preserves conversations. Apply through explicit reload or restart;
+Definitions stay inactive until explicitly selected. If activation was requested, establish the project and complete ordered list, then use the Compose selection editor. Live selection is external project state; never rewrite configuration to switch profiles. Configure startup defaults through `selection.defaultProfiles` only when requested; preserve legacy `activeProfiles` fallback fields otherwise. `[]` selects none. Save preserves conversations. Apply through explicit reload or restart;
 apply affects the current instance using its running native baseline. Native JSON or native-agent edits require restart. Current
 TUI sessions may retain a previous model and variant after apply. Select the destination/base model through
 `/models`, then its configured variant or `Default` through `/variants`; conversation history is preserved.

@@ -1,3 +1,4 @@
+import { type SelectionEnvironment, type SelectionSnapshot, readSelection } from './selection-state.ts';
 import { validateShortcutCommands } from './shortcuts.ts';
 import { createHash } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
@@ -18,6 +19,8 @@ export interface ProjectContext {
   baseFile?: string;
   baseExplicit: boolean;
   allowEmpty?: boolean;
+  selectionEnvironment?: SelectionEnvironment;
+  selectionPreview?: { profiles?: string[] };
 }
 
 export interface ProfileOccurrence {
@@ -34,6 +37,8 @@ export interface LoadedSources {
   provenance: Record<string, FieldOrigin>;
   activeProfiles: string[];
   orderedProfiles: ProfileOccurrence[];
+  selectionState?: SelectionSnapshot;
+  selectionPolicy: { defaultProfiles: string[]; retainOnRestart: boolean };
 }
 
 type Registry = Required<
@@ -195,9 +200,12 @@ export async function loadCompositionSources(
         reference?.pointer ?? '/imports',
       );
     }
-    if (imported && ['activeProfiles', 'defaults', 'overrides'].some((key) => Object.hasOwn(source.value, key))) {
+    if (
+      imported &&
+      ['activeProfiles', 'selection', 'defaults', 'overrides'].some((key) => Object.hasOwn(source.value, key))
+    ) {
       fail(
-        'Imported documents contribute definitions only. Move activeProfiles, defaults, and overrides to a shared, project, or local scope document.',
+        'Imported documents contribute definitions only. Move selection, activeProfiles, defaults, and overrides to a shared, project, or local scope document.',
         source.id,
       );
     }
@@ -275,6 +283,31 @@ export async function loadCompositionSources(
       activeSource = source;
     }
   }
+  let defaultSource = activeSource;
+  let defaultPointer = '/activeProfiles';
+  const policy: NonNullable<CompositionDocument['selection']> = {};
+  for (const source of scopes) {
+    Object.assign(policy, source.value.selection);
+    if (source.value.selection?.defaultProfiles !== undefined) {
+      defaultSource = source;
+      defaultPointer = '/selection/defaultProfiles';
+    }
+  }
+  const selectionPolicy = {
+    defaultProfiles: policy.defaultProfiles ?? [...activeProfiles],
+    retainOnRestart: policy.retainOnRestart ?? true,
+  };
+  const selectionState =
+    context.selectionEnvironment === undefined
+      ? undefined
+      : await readSelection(
+          context.selectionEnvironment,
+          { root, baseFile: roots[0].path },
+          selectionPolicy.retainOnRestart,
+        );
+  const selected =
+    context.selectionPreview === undefined ? selectionState?.profiles : context.selectionPreview.profiles;
+  activeProfiles = [...(selected ?? selectionPolicy.defaultProfiles)];
   function profileChain(
     name: string,
     ancestors: Set<string>,
@@ -348,8 +381,27 @@ export async function loadCompositionSources(
     }
   }
   validateShortcutCommands({ registry, provenance }, Object.keys(registry.components.commands));
+  for (const [index, name] of selectionPolicy.defaultProfiles.entries()) {
+    profileChain(name, new Set(), { sourceId: defaultSource?.id, pointer: `${defaultPointer}/${index}` });
+  }
   const orderedProfiles = activeProfiles.flatMap((name, index) =>
-    profileChain(name, new Set(), { sourceId: activeSource?.id, pointer: `/activeProfiles/${index}` }),
+    profileChain(
+      name,
+      new Set(),
+      selected === undefined
+        ? { sourceId: defaultSource?.id, pointer: `${defaultPointer}/${index}` }
+        : { sourceId: selectionState?.path, pointer: `/selection/profiles/${index}` },
+    ),
   );
-  return { paths, documents: [...documents.values()], scopes, registry, provenance, activeProfiles, orderedProfiles };
+  return {
+    paths,
+    documents: [...documents.values()],
+    scopes,
+    registry,
+    provenance,
+    activeProfiles,
+    orderedProfiles,
+    selectionPolicy,
+    selectionState,
+  };
 }

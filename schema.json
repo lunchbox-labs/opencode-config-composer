@@ -63,7 +63,7 @@
       },
       "maxItems": 64,
       "uniqueItems": true,
-      "description": "Ordered named profiles. Local list replaces shared selection; absence inherits; [] selects none. Each profile replays its complete parent chain."
+      "description": "Legacy configured default profiles. Used only when selection.defaultProfiles is absent from all scopes; the last supplied scope replaces earlier lists. Switching profiles never rewrites this field."
     },
     "profileShortcuts": {
       "type": "object",
@@ -75,6 +75,25 @@
       },
       "maxProperties": 128,
       "description": "Named TUI profile actions. Each invocation chooses its save destination; declaration never activates profiles."
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultProfiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "maxItems": 64,
+          "uniqueItems": true,
+          "description": "Configured profile defaults, never rewritten by selection changes."
+        },
+        "retainOnRestart": {
+          "type": "boolean",
+          "default": true
+        }
+      }
     }
   },
   "$defs": {

@@ -96,7 +96,13 @@ export interface ProfileShortcut {
   description?: string;
 }
 
+export interface SelectionPolicy {
+  defaultProfiles?: string[];
+  retainOnRestart?: boolean;
+}
+
 export interface CompositionDocument {
+  selection?: SelectionPolicy;
   $schema?: string;
   imports?: string[];
   components?: Components;

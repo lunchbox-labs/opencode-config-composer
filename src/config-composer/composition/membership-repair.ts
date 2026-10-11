@@ -1,7 +1,7 @@
 import { type FileEdit, type FilePlan, type SourceSnapshot, editJson } from '../storage.ts';
 import { SettingsError } from '../settings.ts';
 import { planDefinition } from './authoring.ts';
-import { type CompositionScope, type ScopeChange, planScope } from './activation.ts';
+import { type CompositionScope, type ScopeChange, planSelection } from './activation.ts';
 import { parseCompositionDocument } from './document.ts';
 
 export type MemberKind = 'agents' | 'skills' | 'commands';
@@ -59,11 +59,11 @@ export function planMembershipRepair<S extends SourceSnapshot>(snapshot: S, draf
     );
   }
   if (draft.selection !== undefined) {
-    const { scope, change } = draft.selection;
+    const { change } = draft.selection;
     if (change.operation === 'create') {
       throw new SettingsError('Repair the membership or choose a profile selection before creating an empty source.');
     }
-    apply(planScope(snapshot, scope, change), ['activeProfiles'], change.profiles);
+    descriptions.push(planSelection(snapshot, change.profiles).description);
   }
   const edits = [...pending.values()].filter((edit) => edit.text !== edit.file.text);
   for (const edit of edits) {
@@ -72,6 +72,9 @@ export function planMembershipRepair<S extends SourceSnapshot>(snapshot: S, draf
   return {
     snapshot,
     edits,
+    ...(snapshot.sources.selectionState !== undefined && draft.selection?.change.operation === 'selection'
+      ? { selection: { profiles: draft.selection.change.profiles } }
+      : {}),
     description: descriptions.length === 0 ? 'No membership repair changes' : descriptions.join('\n'),
   };
 }

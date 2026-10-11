@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { editorServerConfig } from './editor-server-config.ts';
+import { editorSelectionEnvironment, editorServerConfig } from './editor-server-config.ts';
 import { type TestContext, test } from 'node:test';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +20,7 @@ import {
   applyDefaults,
   catalogModels,
   readSettings,
+  record,
   resolveChoice,
   validateChoice,
 } from '../src/config-composer/settings.ts';
@@ -1840,20 +1841,24 @@ test('profile activation UI distinguishes local none from inheritance and preser
   const ui = uiHarness(root);
   await ui.command('config-composer.compose');
   await ui.select('activation');
-  await ui.select('local');
   await ui.select('none');
-  assert.match(ui.message(), /local profile selection: none/);
+  assert.match(ui.message(), /Project profiles: none/);
   await ui.cancel();
   await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
   await ui.select('none');
   await ui.confirm();
-  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, []);
+  assert.deepEqual(
+    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
+    [],
+  );
   await ui.command('config-composer.compose');
   await ui.select('activation');
-  await ui.select('local');
   await ui.select('inherit');
   await ui.confirm();
-  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, ['work']);
+  assert.deepEqual(
+    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
+    ['work'],
+  );
 });
 
 test('ordered activation editor reorders unique pending profiles before saving', async (t) => {
@@ -1864,7 +1869,6 @@ test('ordered activation editor reorders unique pending profiles before saving',
   const ui = uiHarness(root);
   await ui.command('config-composer.compose');
   await ui.select('activation');
-  await ui.select('local');
   await ui.select('ordered');
   await ui.select('+add');
   assert.ok(
@@ -1875,7 +1879,10 @@ test('ordered activation editor reorders unique pending profiles before saving',
   await ui.select('earlier');
   await ui.select('+save');
   await ui.confirm();
-  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, ['review', 'work']);
+  assert.deepEqual(
+    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
+    ['review', 'work'],
+  );
 });
 
 test('project writes require project filesystem proof after the installation proof succeeds', async (t) => {
@@ -1886,8 +1893,7 @@ test('project writes require project filesystem proof after the installation pro
   ui.setProject(project);
   await ui.command('config-composer.compose');
   await ui.select('activation');
-  await ui.select('project');
-  await ui.select('create');
+  await ui.select('create:project');
   ui.setProjectProofError(true);
   await ui.confirm();
   assert.match(ui.toasts.at(-1)!.message, /shared filesystem/);
@@ -1903,8 +1909,7 @@ test('first-source creation makes a project definition destination available wit
   ui.setProject(project);
   await ui.command('config-composer.compose');
   await ui.select('activation');
-  await ui.select('project');
-  await ui.select('create');
+  await ui.select('create:project');
   await ui.confirm();
   const source = join(project, '.opencode/config-composer.jsonc');
   assert.deepEqual(parseConfig(await readFile(source, 'utf8')), {});
@@ -1928,7 +1933,6 @@ test('changing projects before confirmation rejects the previous project scope w
   ui.setProject(project);
   await ui.command('config-composer.compose');
   await ui.select('activation');
-  await ui.select('local');
   await ui.select('none');
   ui.setProject(root);
   await ui.confirm();
@@ -2125,16 +2129,17 @@ test('profile shortcuts choose an explicit destination and reuse cancellation, p
   const { root, ui } = await shortcutFixture(t);
   assert.ok(ui.commandNames().includes('config-composer.shortcut.quiet'));
   await ui.command('config-composer.shortcut.quiet');
-  assert.equal(ui.title(), '/quiet: save profile selection in…');
-  assert.match(JSON.stringify(ui.dialog), /profiles: none/);
-  await ui.select('local');
+  assert.equal(ui.title(), 'Save /quiet profile selection?');
   assert.match(ui.message(), /Shortcut \/quiet: none/);
-  assert.match(ui.message(), /Destination: local/);
+  assert.match(ui.message(), /Project selection/);
   await ui.cancel();
   await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
-  await ui.select('local');
+  await ui.command('config-composer.shortcut.quiet');
   await ui.confirm();
-  assert.deepEqual((await loadSnapshot(root)).sources.activeProfiles, []);
+  assert.deepEqual(
+    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
+    [],
+  );
   assert.match(JSON.stringify(ui.dialog), /Saved Composer revision .* pending/);
   assert.equal(ui.updates, 0, 'shortcut save never silently applies');
   await ui.select('reload');
@@ -2168,7 +2173,6 @@ test('shortcut activation rejects disabled targets before saving its selected de
   await writeFile(path, JSON.stringify(source));
   await ui.refreshShortcuts();
   await ui.command('config-composer.shortcut.quiet');
-  await ui.select('local');
   assert.match(ui.toasts.at(-1)!.message, /disabled/);
   await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
   assert.equal(ui.updates, 0);
@@ -2195,14 +2199,13 @@ test('changed shortcut definitions reject stale command callbacks and instance c
   assert.match(ui.toasts.at(-1)!.message, /Shortcut \/quiet changed/);
   await ui.refreshShortcuts();
   await ui.command('config-composer.shortcut.quiet');
-  await ui.select('shared');
   const before = await readFile(path, 'utf8');
   const other = join(root, 'other');
   await mkdir(other);
   ui.setProject(other);
   await ui.confirm();
   assert.equal(await readFile(path, 'utf8'), before);
-  assert.match(ui.toasts.at(-1)!.message, /instance|connection|workspace/);
+  assert.match(ui.toasts.at(-1)!.message, /instance|connection|workspace|project/);
   assert.equal(ui.updates, 0);
 });
 
@@ -2237,4 +2240,50 @@ test('Escape does not restore a parent after the native route object changes in 
   Object.assign(ui.api.route.current, { name: 'home' });
   await ui.escape();
   assert.equal(ui.dialog, undefined);
+});
+
+test('a server process change rejects an open selection confirmation before any state write', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('none');
+  const get = ui.api.client.config.get.bind(ui.api.client.config);
+  Reflect.set(ui.api.client.config, 'get', async () => {
+    const response = await get();
+    const entry = response.data?.plugin?.[0];
+    if (Array.isArray(entry) && record(entry[1])) {
+      const marker = entry[1].__configComposerRuntime;
+      if (record(marker) && record(marker.selectionEnvironment)) {
+        marker.selectionEnvironment.lifetime = 'restarted';
+      }
+    }
+    return response;
+  });
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)?.message ?? '', /server.*changed|restart/i);
+  assert.deepEqual(
+    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
+    ['work'],
+  );
+});
+
+test('selection confirmation requires the server external state filesystem proof', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('none');
+  const get = ui.api.client.config.get.bind(ui.api.client.config);
+  Reflect.set(ui.api.client.config, 'get', async () => {
+    const response = await get();
+    await rm(join(root, '.state/config-composer/v1/processes/test-server/proof'), { force: true });
+    return response;
+  });
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)?.message ?? '', /state filesystem/);
+  assert.deepEqual(
+    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
+    ['work'],
+  );
 });

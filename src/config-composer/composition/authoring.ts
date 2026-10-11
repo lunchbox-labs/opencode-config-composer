@@ -99,6 +99,9 @@ function references(snapshot: SourceSnapshot, registry: DefinitionRegistry, name
           add(file, ['profileShortcuts', shortcut, 'activeProfiles', index], profile);
         }
       }
+      for (const [index, profile] of (value.selection?.defaultProfiles ?? []).entries()) {
+        add(file, ['selection', 'defaultProfiles', index], profile);
+      }
       for (const [index, profile] of (value.activeProfiles ?? []).entries()) {
         add(file, ['activeProfiles', index], profile);
       }
@@ -154,6 +157,18 @@ function references(snapshot: SourceSnapshot, registry: DefinitionRegistry, name
 
 export function planDefinition<S extends SourceSnapshot>(snapshot: S, change: DefinitionChange): FilePlan<S> {
   groupName(change.name);
+  let selection: FilePlan<S>['selection'];
+  const selected = snapshot.sources.selectionState?.profiles;
+  if (change.registry === 'profiles' && selected?.includes(change.name) === true) {
+    if (change.operation === 'delete') {
+      throw new SettingsError(
+        `Profile ${change.name} is selected in this project. Select different profiles before deleting it.`,
+      );
+    }
+    if (change.operation === 'rename') {
+      selection = { profiles: selected.map((name) => (name === change.name ? change.nextName : name)) };
+    }
+  }
   const explicit = new Set<string>();
   const definitions = snapshot.sources.registry[change.registry] ?? {};
   const pending = new Map<string, { file: SourceFile; text: string }>();
@@ -273,7 +288,12 @@ export function planDefinition<S extends SourceSnapshot>(snapshot: S, change: De
       : change.operation === 'rename'
         ? ` → ${change.nextName}`
         : '';
-  return { snapshot, edits, description: `${change.operation} ${change.registry}/${change.name}${detail}` };
+  return {
+    snapshot,
+    edits,
+    ...(selection === undefined ? {} : { selection }),
+    description: `${change.operation} ${change.registry}/${change.name}${detail}`,
+  };
 }
 
 export const previewDefinition = previewFilePlan;

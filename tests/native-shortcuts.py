@@ -80,10 +80,7 @@ def command(name, label):
 
 def activate(name, description, profiles, agent=None):
     command('/' + name, description)
-    wait_for('/' + name + ': save profile selection in', "local", "shared")
-    filter_menu("local")
-    os.write(terminal, b"\r")
-    wait_for('Shortcut /' + name + ': ' + profiles, "Destination: local", "Confirm")
+    wait_for('Shortcut /' + name + ': ' + profiles, "Project selection", "Confirm")
     os.write(terminal, b"\r")
     wait_for("Saved Composer revision", "pending")
     filter_menu("Reload now")

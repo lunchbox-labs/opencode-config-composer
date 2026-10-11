@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/@lunchbox-labs/opencode-config-composer/schema.json",
+  "profiles": {
+    "development": { "layers": [] },
+    "review": { "layers": [] }
+  },
+  "selection": {
+    "defaultProfiles": ["development"],
+    "retainOnRestart": true
+  }
+}

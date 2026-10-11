@@ -1,3 +1,4 @@
+import { selectionLifetime, selectionStateDirectory } from '../src/config-composer/composition/selection-state.ts';
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
@@ -653,6 +654,7 @@ test('an installation without optional sources publishes a native baseline for f
   };
   await hooks.config!(config);
   assert.deepEqual(readRuntimeBaseline(config, { root, directory: root }), {
+    selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
     model: 'fixture/native',
     agent: { worker: { prompt: 'Native body.' } },
   });

@@ -78,7 +78,7 @@ group does not select it, enable its agents, load its commands or skills, or app
 need not have been selected as long as its agent members have been. Unknown names and unselected agent targets
 are errors. This is why the provider example selects the coding group before assigning its model preset.
 
-Select profiles by name in `activeProfiles`; several profiles run from left to right. A profile can name
+Choose ordered profiles in Compose; configured startup defaults use `selection.defaultProfiles`. Several profiles run from left to right. A profile can name
 one parent with `extends` to reuse its layers and overrides before adding its own. `profileShortcuts` gives a saved profile
 selection a named action in the UI. For profiles that also control which agents are enabled, `agentAvailability`
 maps agent names to booleans: `true` selects and enables an agent before that profile's layers, while `false`
@@ -96,7 +96,7 @@ With a `coding` profile already defined, a child can reuse it and add a targeted
     ]
   }
 },
-"activeProfiles": ["workspace-coding"]
+"selection": { "defaultProfiles": ["workspace-coding"] }
 ```
 
 ## Shared, project and local settings
@@ -110,20 +110,39 @@ Composer reads these files in order:
 | Local   | `.opencode/config-composer.local.jsonc` under the same root                                   |
 
 Use explicit `imports` to split definitions across local JSON or JSONC files. Imports can contribute groups,
-presets, profiles and other named definitions, but cannot supply `activeProfiles`, document `defaults` or document
+presets, profiles and other named definitions, but cannot supply `selection`, legacy `activeProfiles`, document `defaults` or document
 `overrides`. Relative paths resolve from the declaring document, including paths in imported definitions.
 Importing a profile does not activate it. Duplicate definition names, import cycles and repeated imports of the
 same file are rejected; definitions do not replace one another just because they appear in a later scope.
 
-The last scope supplying `activeProfiles` replaces the earlier selection. Omit the key to inherit, or use an empty
-list to clear profiles:
+Configure `selection.defaultProfiles` as ordered profile names and `selection.retainOnRestart` to control
+whether choices survive an OpenCode server restart (default: `true`). See the
+[project selection example](docs/examples/project-selection). Shared, project and local sources provide
+these declarative settings; later supplied fields replace earlier ones, and `[]` selects none.
 
-```jsonc
-"activeProfiles": []
-```
+**Compose → Profile activation and scope files** and profile shortcuts save one selection for the current
+project outside configuration files. Different projects/worktrees remain independent even when they share
+the same configuration. Selecting **Use configured defaults** clears that project's override without
+changing its defaults. Presets remain authored configuration; there is no separate selected-preset state.
 
-Document defaults and overrides still apply when no profile is selected. See
-[files, imports and activation](docs/composition-schema.md#files-imports-and-activation) for the full rules.
+Existing `activeProfiles` fields remain supported as legacy defaults until `selection.defaultProfiles` is
+configured. Switching profiles never rewrites them. To migrate, move each scoped list to
+`selection.defaultProfiles` in the same file, preserving precedence and `[]`; remove the old key as a separate
+configuration edit. Do not partially migrate a mixed set of scopes without reviewing the resulting defaults.
+
+State uses OpenCode's XDG state directory on Linux and Windows, in `config-composer/v1/`. It is keyed by the
+canonical composition root and base-source path, not Git remote identity. Moving a checkout or changing
+its base source starts a separate selection. With restart retention disabled, selections survive apply/reload
+within that server process, then reset to defaults in a new process. This temporary namespace does not erase
+an earlier retained selection; re-enabling retention restores that retained choice. Closing an attached TUI
+alone does not restart its server. New or resumed sessions do not reset composition: it remains project-wide.
+
+Concurrent saves reject stale selections; running instances keep their applied revision until explicitly
+reloaded. Invalid state is reported with its path and is never silently overwritten. Restore the state file
+or remove it to return to defaults. Remove a reported stale `.lock` only after confirming no save/apply is
+running. Renaming a selected profile updates this project's selection; other projects sharing the definitions
+may need their saved selections repaired. Composer does not read or modify OpenCode's private database.
+
 
 ## How settings combine
 
