@@ -69,6 +69,7 @@ export function resetModelBindingEdits(
   };
   const nativeBefore = readGlobals(snapshot.configFile.text);
   const nativeAfter = readGlobals(pending.get(snapshot.configFile.path)?.text ?? snapshot.configFile.text);
+  const nativeSourceIndex = snapshot.nativeLayers.findIndex((layer) => layer.file.path === snapshot.configFile.path);
   const registry = (documents: typeof before) => ({
     presets: Object.fromEntries(
       [...documents.values()].flatMap((value) => Object.entries(value.configurationPresets ?? {})),
@@ -87,13 +88,15 @@ export function resetModelBindingEdits(
   ): Globals => {
     const result: Globals = { model: snapshot.nativeModels.model, small_model: snapshot.nativeModels.small_model };
     for (const key of ['model', 'small_model'] as const) {
-      const projectMask = snapshot.nativeLayers.some(
-        (layer) =>
-          layer.project &&
-          layer.file.path !== snapshot.configFile.path &&
-          layer.kind === 'config' &&
-          readGlobals(layer.file.text)[key] !== undefined,
-      );
+      const projectMask = snapshot.nativeLayers
+        .slice(nativeSourceIndex + 1)
+        .some(
+          (layer) =>
+            layer.project &&
+            layer.file.path !== snapshot.configFile.path &&
+            layer.kind === 'config' &&
+            readGlobals(layer.file.text)[key] !== undefined,
+        );
       if (!projectMask && native[key] !== nativeBefore[key]) {
         result[key] = native[key];
       }

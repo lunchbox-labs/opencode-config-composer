@@ -356,6 +356,30 @@ test('a project-native model mask prevents resets after an unrelated global nati
   assert.ok(!plan.edits.some((edit) => edit.file.path === f.file));
 });
 
+test('custom configuration model edits reset bindings when the custom source overrides project defaults', async (t) => {
+  const f = await fixture(t, {
+    configurationPresets: { preset: { modelRef: 'opencode:model', parameters: { topP: 0.4 } } },
+  });
+  const project = await mkdtemp(join(tmpdir(), 'composer-binding-project-'));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  await writeFile(join(project, 'opencode.jsonc'), '{"model":"fixture/project"}');
+  const previous = process.env.OPENCODE_CONFIG_DIR;
+  process.env.OPENCODE_CONFIG_DIR = f.root;
+  try {
+    const snapshot = await loadSnapshot(f.root, project, { model: 'fixture/base' });
+    const plan = planChange(snapshot, { kind: 'global', field: 'model', model: 'fixture/next' });
+    const preview = await previewFilePlan(plan);
+    const preset = preview.sources.registry.configurationPresets!.preset;
+    assert.equal(preset.parameters, undefined);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCODE_CONFIG_DIR;
+    } else {
+      process.env.OPENCODE_CONFIG_DIR = previous;
+    }
+  }
+});
+
 for (const selection of ['availability', 'membership'] as const) {
   test(`inactive ${selection} selection resets affected component bindings`, async (t) => {
     const f = await fixture(t, {
