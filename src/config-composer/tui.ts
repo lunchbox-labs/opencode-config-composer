@@ -109,12 +109,13 @@ export function registerSettings(
   const clearEditorError = () => {
     lastEditorError = undefined;
     errorGeneration++;
+    navigation.refresh();
   };
   const currentErrorScope = () => {
     const next = errorScope();
     if ((['client', 'config', 'directory', 'worktree', 'state'] as const).some((key) => next[key] !== scope[key])) {
-      clearEditorError();
       scope = next;
+      clearEditorError();
     }
     return !disposed && !api.lifecycle.signal.aborted;
   };
@@ -223,6 +224,7 @@ export function registerSettings(
             ),
           };
           api.ui.toast({ variant: 'error', title: 'Agent settings', message, duration: 8000 });
+          navigation.refresh();
         }
       })
       .finally(() => {
@@ -237,10 +239,12 @@ export function registerSettings(
       currentErrorScope();
       navigation.alert({
         title: 'Last editor error',
-        message:
-          lastEditorError === undefined
+        get message() {
+          currentErrorScope();
+          return lastEditorError === undefined
             ? 'No editor error in this project and instance.'
-            : `${lastEditorError.context}\n\n${lastEditorError.message}`,
+            : `${lastEditorError.context}\n\n${lastEditorError.message}`;
+        },
       });
       api.ui.dialog.setSize('xlarge');
     },

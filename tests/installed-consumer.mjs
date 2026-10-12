@@ -77,6 +77,7 @@ await tui.tui({
   state: { path: { directory: root, worktree: root } },
   client: { config: { get: async () => ({ error: 'offline fixture' }) } },
   ui: { toast: () => {} },
+  event: { on: () => () => {} },
   lifecycle: {
     signal: new AbortController().signal,
     onDispose: (callback) => {

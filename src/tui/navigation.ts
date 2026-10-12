@@ -9,6 +9,7 @@ export function dialogNavigation(api: TuiPluginApi, decoration?: DialogDecoratio
   let frames: Render[] = [];
   let revision = 0;
   let replacing = false;
+  let visibleCurrent = () => false;
 
   const reset = () => {
     frames = [];
@@ -44,6 +45,7 @@ export function dialogNavigation(api: TuiPluginApi, decoration?: DialogDecoratio
     const name = route.name;
     const sessionID = name === 'session' ? route.params?.sessionID : undefined;
     const active = ++revision;
+    visibleCurrent = checkpoint();
     replacing = true;
     try {
       api.ui.dialog.replace(render, () => {
@@ -174,7 +176,7 @@ export function dialogNavigation(api: TuiPluginApi, decoration?: DialogDecoratio
     back,
     refresh: () => {
       const current = frames.at(-1);
-      if (current !== undefined) {
+      if (current !== undefined && visibleCurrent() && api.ui.dialog.open) {
         display(current);
       }
     },

@@ -14,8 +14,10 @@ type Dialog = TuiDialogSelectProps<string> | TuiDialogAlertProps | TuiDialogConf
 function harness(decoration?: DialogDecoration) {
   let current: Dialog | undefined;
   let closed: (() => void) | undefined;
+  let renders = 0;
   const controller = new AbortController();
   const render = (props: Dialog) => {
+    renders++;
     current = props;
   };
   const api = {
@@ -49,6 +51,9 @@ function harness(decoration?: DialogDecoration) {
     api,
     navigation: dialogNavigation(api, decoration),
     controller,
+    get renders() {
+      return renders;
+    },
     get current() {
       return current;
     },
@@ -180,5 +185,28 @@ test('closing a panel never resurrects parents after another dialog, route, clie
     await Promise.resolve();
     assert.equal(view.current?.title, change === 'dialog' ? 'Other' : undefined, change);
     assert.equal(nav.canGoBack, false, change);
+  }
+});
+
+test('refresh never resurrects a view after another dialog, route or client takes over', async () => {
+  for (const change of ['dialog', 'route', 'client'] as const) {
+    const view = harness();
+    view.navigation.menu({ title: 'Editor', options: [] }, true);
+    if (change === 'dialog') {
+      view.api.ui.dialog.replace(() => view.api.ui.DialogAlert({ title: 'Other', message: '' }));
+    }
+    if (change === 'route') {
+      Object.assign(view.api.route, { current: { name: 'home' } });
+    }
+    if (change === 'client') {
+      Object.assign(view.api, { client: {} });
+    }
+    const before = view.renders;
+    view.navigation.refresh();
+    assert.equal(view.renders, before);
+    assert.equal(view.current?.title, change === 'dialog' ? 'Other' : 'Editor');
+    // A refresh must not create a fresh checkpoint that legitimizes the stale frame.
+    await view.escape();
+    assert.equal(view.current, undefined);
   }
 });
