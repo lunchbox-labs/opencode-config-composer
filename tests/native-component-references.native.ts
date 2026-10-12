@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { compositionFixture } from './integration/composition-fixture.ts';
@@ -8,6 +8,27 @@ import { pathToFileURL } from 'node:url';
 import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
 import { validateReferenceDiagnostics } from '../src/config-composer/composition/reference-diagnostics.ts';
 import type { CompositionDocument } from '../src/config-composer/composition/types.ts';
+import { nativeHarness } from './integration/harness.ts';
+import { installedEditor } from './integration/editor.ts';
+
+test(
+  'unrelated dangling symlinks do not block native project agent discovery or the editor',
+  { timeout: 120_000 },
+  async (t) => {
+    const host = await nativeHarness(t, 'unrelated-native-symlink');
+    await writeFile(join(host.configRoot, 'opencode.jsonc'), JSON.stringify({ plugin: [host.installed.directory] }));
+    const directory = join(host.project, '.opencode/agents');
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'worker.md'), '---\ndescription: Worker\n---\nNative body');
+    await symlink(join(directory, 'absent.txt'), join(directory, 'ignored.txt'));
+    await host.start();
+    const agents = await host.api<{ name: string }[]>('/agent');
+    assert.ok(agents.some((agent) => agent.name === 'worker'));
+    const editor = await installedEditor(host);
+    const snapshot = await editor.snapshot();
+    assert.equal(snapshot.nativeAgents.worker.prompt, 'Native body');
+  },
+);
 
 test(
   'native names resolve shared, project, external and configured sources without mappings, preserving permissions and reload isolation',
