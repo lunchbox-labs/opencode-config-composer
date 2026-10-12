@@ -1,3 +1,4 @@
+import type { AuthoringUi } from '../src/config-composer/tui/authoring.ts';
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -364,3 +365,121 @@ test('native command names are selectable and saved through the group membership
   assert.deepEqual(current.sources.registry.componentGroups!.work.commands, ['host-command']);
   assert.deepEqual(current.resolved.commands, {});
 });
+
+for (const registry of ['profiles', 'configurationPresets'] as const) {
+  test(`Duplicate as copies authored ${registry} from a read-only source without activation`, async (t) => {
+    const { openAuthoring } = await import('../src/config-composer/tui/authoring.ts');
+    const root = await fixture(t);
+    const source = join(root, 'definitions.jsonc');
+    const destination = join(root, 'config-composer.jsonc');
+    const authored = {
+      configurationPresets: {
+        balanced: { model: 'fixture/a' },
+        original: {
+          modelRef: 'preset:balanced',
+          variant: 'careful',
+          parameters: { temperature: 0.4, options: { custom: ['retain', 2] } },
+          permissions: [{ tool: 'bash', action: 'ask' }],
+        },
+      },
+      componentGroups: { work: { agents: ['build'] } },
+      profiles: {
+        work: { layers: [{ componentGroup: 'work' }] },
+        original: {
+          extends: 'work',
+          layers: [{ configurationPreset: 'original', target: { componentGroups: ['work'], agents: ['build'] } }],
+          agentAvailability: { build: true },
+          overrides: { agents: { build: { modelRef: 'preset:balanced' } } },
+        },
+      },
+    };
+    await writeFile(source, JSON.stringify(authored));
+    await chmod(source, 0o444);
+    const snapshot = await loadSnapshot(root);
+    const before = await readFile(source, 'utf8');
+    let actions: Parameters<AuthoringUi['menu']>[1] = [];
+    let submit: (value: string) => void | Promise<void> = () => {};
+    let plan: ReturnType<typeof planDefinition> | undefined;
+    let details = '';
+    const ui: AuthoringUi = {
+      menu: (_title, next) => {
+        actions = next;
+      },
+      prompt: (_title, _value, confirmed) => {
+        submit = confirmed;
+      },
+      back: () => {},
+      refresh: () => {},
+      groupModel: () => {},
+      presetModel: () => {},
+      createPreset: () => {},
+      propose: async (snapshot, change, review) => {
+        plan = planDefinition(snapshot, change);
+        details = review ?? '';
+        await previewDefinition(plan);
+      },
+    };
+    const getActions = () => (typeof actions === 'function' ? actions() : actions);
+    const getPlan = () => {
+      assert.ok(plan !== undefined);
+      return plan;
+    };
+    const choose = async (value: string) => {
+      const action = getActions().find((action) => action.value === value);
+      assert.ok(action !== undefined, `Missing action ${value}`);
+      await action.run();
+    };
+    openAuthoring(snapshot, ui);
+    await choose(registry);
+    await choose('original');
+    await choose('duplicate');
+    assert.equal(plan, undefined, 'opening/cancelling the name prompt does not write');
+    assert.throws(() => submit('original'), /already exists/);
+    await submit('copy');
+    const destinations = getActions();
+    assert.ok(!destinations.some((action) => action.value === source));
+    await choose(destination);
+    const proposed = getPlan();
+    assert.match(details, /still depends/i);
+    assert.match(details, /preset:balanced/);
+    if (registry === 'profiles') {
+      assert.match(details, /profile:work/);
+      assert.match(details, /group:work/);
+      assert.match(details, /preset:original/);
+    }
+    assert.deepEqual(
+      proposed.edits.map((edit) => edit.file.path),
+      [destination],
+    );
+    assert.equal(await readFile(source, 'utf8'), before);
+    assert.equal((await loadSnapshot(root)).sources.registry[registry]?.copy, undefined, 'preview does not save');
+    await save(proposed);
+    const current = await loadSnapshot(root);
+    assert.deepEqual(current.sources.registry[registry]?.copy, snapshot.sources.registry[registry]?.original);
+    assert.deepEqual(current.sources.registry[registry]?.original, snapshot.sources.registry[registry]?.original);
+    assert.deepEqual(current.sources.activeProfiles, snapshot.sources.activeProfiles);
+    assert.deepEqual(current.resolved, snapshot.resolved);
+    assert.equal(await readFile(source, 'utf8'), before);
+    await assert.rejects(save(getPlan()), /Settings changed/);
+    const staleSnapshot = await loadSnapshot(root);
+    openAuthoring(staleSnapshot, ui);
+    await choose(registry);
+    await choose('original');
+    await choose('duplicate');
+    await submit('later');
+    await choose(destination);
+    await writeFile(destination, (await readFile(destination, 'utf8')) + '\n// concurrent edit');
+    await assert.rejects(save(getPlan()), /Settings changed/);
+    assert.equal((await loadSnapshot(root)).sources.registry[registry]?.later, undefined);
+    await chmod(destination, 0o444);
+    openAuthoring(await loadSnapshot(root), ui);
+    await choose(registry);
+    await choose('original');
+    await choose('duplicate');
+    assert.throws(() => submit('unwritable'), /No writable composition source/);
+    openAuthoring(snapshot, ui);
+    await choose('componentGroups');
+    await choose('work');
+    assert.ok(!getActions().some((action) => action.value === 'duplicate'));
+  });
+}

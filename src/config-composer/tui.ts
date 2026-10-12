@@ -1175,8 +1175,13 @@ export function registerSettings(
       },
     );
   };
-  const proposeDefinition = (snapshot: Snapshot, change: DefinitionChange) =>
-    proposeComposition(snapshot, planDefinition(snapshot, change), change);
+  const proposeDefinition = (snapshot: Snapshot, change: DefinitionChange, details?: string) =>
+    proposeComposition(
+      snapshot,
+      planDefinition(snapshot, change),
+      change,
+      details === undefined ? undefined : { title: 'Save duplicate definition?', details },
+    );
   const repairMenu = async () => {
     const current = navigation.checkpoint();
     const { root } = await connection();

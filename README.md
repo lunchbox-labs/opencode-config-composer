@@ -148,6 +148,12 @@ Selecting no profiles removes profile contributions; document defaults and overr
 [files, imports and activation](docs/composition-schema.md#files-imports-and-activation) for the full rules and
 the [project selection example](docs/examples/project-selection/README.md) for retained and temporary choices.
 
+To reuse a profile or configuration preset, open **Author groups, presets and profiles** in `/compose-configs`,
+select the definition, and choose **Duplicate as…**. Enter a unique name and choose an existing writable Composer
+source. Review the destination and retained dependencies before saving. A read-only imported definition can be
+copied; the original and active selection stay unchanged. The copy retains authored fields and references to
+parents, groups, presets and native settings; it does not copy those dependencies or attached JSONC comments.
+
 ## How settings combine
 
 Composer starts from OpenCode's configuration and applies document defaults in shared, project, then local order.
