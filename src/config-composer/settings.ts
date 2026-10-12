@@ -97,7 +97,7 @@ export function modelReference(value: unknown): string {
 export function groupChoice(value: unknown): GroupChoice {
   if (record(value) && Object.hasOwn(value, 'prompt')) {
     throw new SettingsError(
-      'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Remove these settings from Config Composer; see docs/prompt-migration.md.',
+      'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Remove these settings from Config Composer; see README.md.',
     );
   }
   if (!record(value) || Object.keys(value).some((key) => !['model', 'modelRef', 'variant'].includes(key))) {
@@ -156,7 +156,7 @@ export function readSettings(value: unknown): GroupOptions {
       (record(value.agent) && Object.hasOwn(value.agent, 'prompts')))
   ) {
     throw new SettingsError(
-      'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Remove these settings from Config Composer; see docs/prompt-migration.md.',
+      'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Remove these settings from Config Composer; see README.md.',
     );
   }
   if (

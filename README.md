@@ -17,6 +17,11 @@ Add the package to `plugin` in both `opencode.jsonc` and `tui.jsonc`:
 The editors need the server plugin registered in the shared `opencode.jsonc`, even when the Composer
 configuration lives in a project.
 
+Register Config Composer before any plugin that transforms agent prompt or command template bodies.
+This lets it resolve configuration and agent availability before the other plugin processes the resulting
+bodies. Downstream body changes preserve Config Composer’s editor baseline; running a transformer first
+can make that baseline differ from the authored native inputs.
+
 ## Examples
 
 - [Switch providers](docs/examples/provider-profiles/README.md): keep model profiles for rotating provider subscriptions.
@@ -197,7 +202,7 @@ Recorded conversation values do not reveal the next request or the current unsen
 The [configuration reference](docs/composition-schema.md#files-imports-and-activation) covers editing, applying
 and inspection in detail.
 
-Prompt composition is maintained separately. Existing users should read the [migration notes](docs/prompt-migration.md) before updating.
+For dynamically composing agent prompts, see the standalone [Prompt Composer](https://github.com/lunchbox-labs/opencode-prompt-composer) package.
 
 ## Reference and development
 

@@ -20,9 +20,9 @@ const migration: Record<string, string> = {
   skill: 'Move skill definitions to components.skills.',
   groups: 'Move group memberships and settings to componentGroups; activate them through profiles.',
   modelPresets: 'Move reusable settings to configurationPresets and assign them with targeted profile layers.',
-  promptSources: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see docs/prompt-migration.md.',
-  promptDefaults: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see docs/prompt-migration.md.',
-  agentPrompts: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see docs/prompt-migration.md.',
+  promptSources: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see README.md.',
+  promptDefaults: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see README.md.',
+  agentPrompts: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see README.md.',
   model: 'Move the runtime model default to defaults.model.',
   small_model: 'Move the small runtime model default to defaults.small_model.',
   composition:
@@ -116,7 +116,7 @@ function rejectPromptComposition(value: Record<string, unknown>, sourceId?: stri
       if (Object.hasOwn(object, key)) {
         fail(
           'removed-prompt-composition',
-          'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Move this setting out of Config Composer; see docs/prompt-migration.md. Authored agent.prompt strings and command templates remain supported.',
+          'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Move this setting out of Config Composer; see README.md. Authored agent.prompt strings and command templates remain supported.',
           sourceId,
           `${pointer}/${pointerPart(key)}`,
         );

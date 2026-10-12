@@ -196,5 +196,5 @@ Migrate a copy of settings; there is no automatic conversion or legacy compatibi
 | File-path `activeProfiles` / `extends`      | Explicit `imports`, named `profiles`, named selections and parents. |
 
 Old `agent`, `command` and `skill` namespaces are rejected even when empty. Diagnostics identify the key and
-suggest its destination. Removed prompt settings fail with a migration error; see [prompt migration](prompt-migration.md). Preserve native authored pins
+suggest its destination. Prompt composition settings are not supported. Preserve native authored pins
 unless you deliberately intend to replace them; compare both selected profiles and fallback behavior after migration.
