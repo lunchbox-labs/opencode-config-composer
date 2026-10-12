@@ -197,6 +197,10 @@ Profile switches preserve conversation history. OpenCode can retain a conversati
 and variant, including after clearing profiles. Use `/models`, then `/variants`, to select the destination or
 inherited base settings.
 
+**Compose configs → Last editor error** keeps the latest editor failure available after its toast closes.
+Inspection preserves drafts and never retries or saves. Details are bounded and redact credential assignments;
+only one error is kept in memory, cleared when the project, connection or instance changes or the plugin stops.
+
 **Compose configs → Running configuration inspector** shows running settings separately from the saved preview.
 Recorded conversation values do not reveal the next request or the current unsent TUI model selection.
 The [configuration reference](docs/composition-schema.md#files-imports-and-activation) covers editing, applying
