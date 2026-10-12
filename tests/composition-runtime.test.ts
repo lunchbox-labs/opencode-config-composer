@@ -120,7 +120,7 @@ test('revision excludes native-only aliases of a Composer component without losi
   );
 });
 
-test('applied revision rejects command replacement and lost skill paths after composition', async (t) => {
+test('applied revision accepts command body transforms but rejects changed configuration and lost skill paths', async (t) => {
   const f = await fixture(t, {
     components: { commands: { run: { template: 'Expected command' } } },
     componentGroups: { work: { commands: ['run'] } },
@@ -131,10 +131,13 @@ test('applied revision rejects command replacement and lost skill paths after co
   await f.hooks.config!(config);
   const { readRuntimeRevision } = await import('../src/config-composer/composition/runtime-baseline.ts');
   const read = () => readRuntimeRevision(config, { root: f.root, directory: f.root }, f.root);
-  assert.ok(read().revision !== undefined);
+  const applied = read();
+  assert.ok(applied.revision !== undefined);
   config.command!.run.template = 'Replaced by a later plugin';
+  assert.deepEqual(read(), applied);
+  config.command!.run.model = 'fixture/later-plugin';
   assert.throws(read, /commands.*changed/i);
-  config.command!.run.template = 'Expected command';
+  delete config.command!.run.model;
   config.skills!.paths = [];
   assert.throws(read, /skill.*changed/i);
 });

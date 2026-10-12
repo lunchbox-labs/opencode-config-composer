@@ -75,6 +75,19 @@ function permissionTransport(value: unknown): unknown {
 function samePermission(left: unknown, right: unknown): boolean {
   return isDeepStrictEqual(permissionTransport(left), permissionTransport(right));
 }
+
+/** Downstream body transforms do not change configuration ownership. Keep names and every other field. */
+function configurationFields(value: unknown, body: 'prompt' | 'template'): unknown {
+  if (!record(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([name, entry]) => [
+      name,
+      record(entry) ? Object.fromEntries(Object.entries(entry).filter(([field]) => field !== body)) : entry,
+    ]),
+  );
+}
 export interface RuntimeLocation {
   root: string;
   directory: string;
@@ -212,7 +225,12 @@ export function readRuntimeBaseline(
   if (!samePermission(marker.applied.permission ?? null, config.permission ?? null)) {
     return fail('Global permissions changed after Composer applied its configuration.');
   }
-  if (!isDeepStrictEqual(marker.appliedAgents, config.agent ?? {})) {
+  if (
+    !isDeepStrictEqual(
+      configurationFields(marker.appliedAgents, 'prompt'),
+      configurationFields(config.agent ?? {}, 'prompt'),
+    )
+  ) {
     return fail('Agent settings changed after Composer applied its configuration.');
   }
   if (record(config.agent) && record(marker.appliedAgents)) {
@@ -259,7 +277,12 @@ export function readRuntimeRevision(
   if (!record(marker) || typeof marker.id !== 'string' || !hash(marker.observedNativeFiles)) {
     throw new SettingsError('The running plugin cannot attest applied revisions. Restart the matching plugin.');
   }
-  if (!isDeepStrictEqual(marker.appliedCommands, config.command ?? {})) {
+  if (
+    !isDeepStrictEqual(
+      configurationFields(marker.appliedCommands, 'template'),
+      configurationFields(config.command ?? {}, 'template'),
+    )
+  ) {
     throw new SettingsError(
       'Commands changed after composition. Reopen the apply view after resolving other plugin changes.',
     );
