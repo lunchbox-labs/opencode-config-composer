@@ -2,7 +2,6 @@
 
 Config Composer now handles configuration only. Prompt composition lives in
 [@lunchbox-labs/opencode-prompt-composer](https://github.com/lunchbox-labs/opencode-prompt-composer).
-This is a source change awaiting release; no package is published by this PR.
 
 Before updating, keep a copy of your configuration and move the following settings out of every shared,
 project, local and imported Config Composer document:

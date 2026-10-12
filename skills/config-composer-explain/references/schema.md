@@ -4,23 +4,37 @@ Use the installed package's `schema.json` to validate JSONC. Legacy keys are rej
 OpenCode's native configuration stays in its own files. Composer's default shared source is
 `config-composer.jsonc` beside the native global configuration; an explicit plugin `configFile` is supported.
 
-| Key                      | Role                                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------------------- |
-| `components.agents`      | Reusable inline `prompt` or Markdown `file`; optional `skills`, and `configuration` |
-| `components.skills`      | Explicit native `SKILL.md` file definitions                                                       |
-| `components.commands`    | Native command `file` or inline `template`                                                        |
-| `componentGroups`        | Any mix of agent/skill/command names plus optional agent configuration                     |
-| `configurationPresets`   | Reusable model, variant, parameters, and ordered permission settings                              |
-| `profiles`               | Optional named `extends`, ordered `layers`, `agentAvailability`, and explicit `overrides`         |
-| `defaults` / `overrides` | Scoped model defaults, global permissions, and selected-agent settings                            |
-| `activeProfiles`         | Ordered profile names; absence inherits, `[]` selects none                                        |
-| `imports`                | Explicit JSONC paths; no automatic directory scan                                                 |
+| Key                      | Role                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------- |
+| `components.agents`      | Reusable inline `prompt` or Markdown `file`; optional `skills`, and `configuration`       |
+| `components.skills`      | Explicit native `SKILL.md` file definitions                                               |
+| `components.commands`    | Native command `file` or inline `template`                                                |
+| `componentGroups`        | Any mix of agent/skill/command names plus optional agent configuration                    |
+| `configurationPresets`   | Reusable model, variant, parameters, and ordered permission settings                      |
+| `profiles`               | Optional named `extends`, ordered `layers`, `agentAvailability`, and explicit `overrides` |
+| `defaults` / `overrides` | Scoped model defaults, global permissions, and selected-agent settings                    |
+| `selection`              | Configured `defaultProfiles` and `retainOnRestart` policy for project selections          |
+| `activeProfiles`         | Legacy profile defaults, used only when no scope supplies `selection.defaultProfiles`     |
+| `imports`                | Explicit JSONC paths; no automatic directory scan                                         |
 
 A group layer selects components. A preset layer configures agents already selected by earlier layers or an availability decision;
 it must specify `target.agents` and/or `target.componentGroups`. Parent layers replay before child layers.
-Active profiles replay in list order. Reusable imported files must contain definitions and imports only: top-level `activeProfiles`, `defaults`,
-and `overrides` are rejected rather than silently ignored. An `activeProfiles: []` selection does not disable
-independent scoped global defaults or overrides. Shared, project, and local scope files participate in that order.
+Active profiles replay in list order. Reusable imported files must contain definitions and imports only:
+top-level `selection`, legacy `activeProfiles`, `defaults`, and `overrides` are rejected rather than silently
+ignored. Shared, project, and local scope files participate in that order. Later supplied selection fields
+replace earlier ones; profile lists are not combined.
+
+A saved project selection overrides configured `selection.defaultProfiles`, including when the saved list is
+empty. If no scope supplies `selection.defaultProfiles`, the highest-scope legacy `activeProfiles` list supplies
+the defaults. Editing either default list does not replace a saved selection. In `/compose-configs`, save
+**Select no profiles** to override the defaults with an empty list, or **Use configured defaults** to remove
+the project override. Apply the saved change separately. Selecting no profiles leaves independent document
+defaults and overrides in effect.
+
+Selections are stored outside configuration files and retained across server restarts by default. With
+`selection.retainOnRestart: false`, a selection lasts for the current server process, including apply/reload;
+a new process starts from configured defaults. This temporary selection does not erase a retained choice,
+which becomes active again if retention is re-enabled.
 Native group frontmatter can add agents to an existing selected group without duplicating native definitions.
 
 ```jsonc
@@ -42,14 +56,16 @@ Native group frontmatter can add agents to an existing selected group without du
       ],
     },
   },
-  "activeProfiles": ["review"],
+  "selection": { "defaultProfiles": ["review"] },
 }
 ```
 
 Agent settings use `model` OR `modelRef` (`preset:<name>`, `opencode:model`, or `opencode:small_model`).
 A reference supplies model-bound settings; a targeted preset layer also contributes its permission rules.
-Within one ordered replay, a different model clears inherited Composer variant/parameter values; a same-model
-reference retains earlier contributions from that replay. Switching profiles reconstructs from the original
+Within one ordered replay, changing the resolved model or authored model binding clears inherited Composer
+variant/parameter values, even when a new reference resolves to the same model. An unchanged binding or a
+parameter-only layer retains earlier contributions from that replay. New explicit settings apply after the
+reset; omitted values fall back to applicable native settings or remain unset. Switching profiles reconstructs from the original
 native/base configuration and removes old-profile-only settings, including when the destination resolves to
 the same model. Base values remain unless overridden. Native explicit pins remain unless
 an explicit component or agent override changes them. Parameters support `temperature`, `topP`, `topK`,
