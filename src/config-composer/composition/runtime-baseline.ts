@@ -38,7 +38,7 @@ function publishedChoices(choices: Record<string, ResolvedModelSettings>): Recor
   );
 }
 
-// OpenCode 1.18.34's /config response serializes known names in schema order.
+// OpenCode 1.19.0's /config response serializes known names in schema order.
 // Unknown-name order and pattern-map order survive transport and remain semantic.
 // Known-vs-wildcard ordering cannot be attested by /config alone; native evaluator
 // fixtures verify that boundary, rather than rejecting healthy response serialization.

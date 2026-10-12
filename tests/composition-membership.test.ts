@@ -5,7 +5,7 @@ import { resolveGroupAgentNames } from '../src/config-composer/composition/membe
 import type { AgentSettings } from '../src/config-composer/settings.ts';
 
 test('JSONC group membership accepts native names without shadow component declarations', () => {
-  // Observed in OpenCode v1.18.34 agent/agent.ts; this fixture is not a runtime allowlist.
+  // Observed in OpenCode v1.19.0 agent/agent.ts; this fixture is not a runtime allowlist.
   const names = ['build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary'];
   const available: Record<string, AgentSettings> = Object.fromEntries(
     names.map((name) => [name, { prompt: `${name} baseline` }]),

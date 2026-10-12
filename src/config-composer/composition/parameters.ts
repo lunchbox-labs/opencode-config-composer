@@ -163,13 +163,13 @@ export function unprotectedOptions(
   );
 }
 
-// OpenCode 1.18.34 pins this adapter. Its string schema is open-ended, not an enum.
+// OpenCode 1.19.0 pins this adapter. Its string schema is open-ended, not an enum.
 // Source: @ai-sdk/openai-compatible 2.0.41, openai-compatible-chat-language-model.
 const compatibleAdapter = {
   package: '@ai-sdk/openai-compatible',
   version: '2.0.41',
   family: 'OpenAI-compatible chat models',
-  hostVersion: '1.18.34',
+  hostVersion: '1.19.0',
 };
 
 function knownAdapter(model: Record<string, unknown>) {
@@ -182,7 +182,7 @@ export function parameterMetadata(model: unknown, parameters: ModelParameters = 
   const options = record(metadata.options) ? metadata.options : {};
   const variants = record(metadata.variants) ? Object.values(metadata.variants).filter(record) : [];
   return {
-    hostVersion: '1.18.34',
+    hostVersion: '1.19.0',
     adapter: knownAdapter(metadata),
     // This verifies host destinations, not every provider adapter's wire support.
     controls: Object.fromEntries(

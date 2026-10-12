@@ -20,7 +20,7 @@ import type {
 } from './types.ts';
 
 // The config hook runs before Agent.state can be queried. This catalog supplies identities only;
-// OpenCode 1.18.34 still constructs every built-in's prompt, mode, permissions, and other defaults.
+// OpenCode 1.19.0 still constructs every built-in's prompt, mode, permissions, and other defaults.
 export const nativeAgentNames = ['build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary'] as const;
 export interface PermissionContribution {
   agent: string;

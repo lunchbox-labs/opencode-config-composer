@@ -10,7 +10,7 @@
   },
   "engines": {
     "node": ">=22.18.0",
-    "opencode": "1.18.34"
+    "opencode": "1.19.0"
   },
   "exports": {
     ".": {
@@ -59,8 +59,8 @@
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
     "@eslint/js": "10.0.1",
-    "@opencode-ai/plugin": "1.18.34",
-    "@opencode-ai/sdk": "1.18.34",
+    "@opencode-ai/plugin": "1.19.0",
+    "@opencode-ai/sdk": "1.19.0",
     "@opentui/core": "0.4.5",
     "@opentui/keymap": "0.4.5",
     "@opentui/solid": "0.4.5",

@@ -56,7 +56,7 @@ export function integrationFiles(suite = 'all') {
   return suite === 'all' ? Object.values(suites).flat() : [...suites[suite]];
 }
 
-// Match OpenCode 1.18.34's native ripgrep dependency, with release checksums.
+// Match OpenCode 1.19.0's native ripgrep dependency, with release checksums.
 // Preinstallation avoids an instance reload interrupting the host's cached download.
 const ripgrepVersion = '15.1.0';
 export function ripgrepPackage(platform = process.platform) {
