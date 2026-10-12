@@ -215,3 +215,35 @@ test(
     );
   },
 );
+
+test(
+  'real terminal retains the last editor error across cancellation, repeated inspection and corrected sources',
+  { timeout: 120_000 },
+  async (t) => {
+    const fixture = await compositionFixture(t, 'last-editor-error');
+    await fixture.write(fixture.paths.shared, { componentGroups: { team: {} } });
+    const before = await readFile(fixture.paths.shared, 'utf8');
+    await fixture.host.start();
+    const terminal = await nativeTerminal(fixture.host, undefined, 'last-editor-error');
+    await terminal.wait(['ctrl+p', 'commands']);
+    await terminal.command('/compose-configs', 'Compose configs');
+    await terminal.choose('Last editor error', 'No editor error in this project and instance.');
+    await terminal.press('\x1b', 'Compose configs');
+    await writeFile(fixture.paths.shared, '{ invalid');
+    await terminal.choose('Effective configuration and sources', 'JSON');
+    await terminal.choose('Last editor error', 'Last editor error', 'Project:', 'Configuration:', 'JSON');
+    await terminal.press('\x1b', 'Compose configs');
+    await writeFile(fixture.paths.shared, before);
+    for (let index = 0; index < 2; index++) {
+      await terminal.choose('Last editor error', 'Last editor error', 'JSON');
+      await terminal.press('\x1b', 'Compose configs');
+    }
+    await terminal.choose('Effective configuration and sources', 'Saved composition preview');
+    await terminal.press('\x1b', 'Compose configs');
+    await terminal.choose('Last editor error', 'Last editor error', 'JSON');
+    await terminal.press('\x1b', 'Compose configs');
+    await terminal.press('\x1b', 'ctrl+p', 'commands');
+    assert.equal(await readFile(fixture.paths.shared, 'utf8'), before);
+    assert.equal(fixture.host.requests.length, 0);
+  },
+);

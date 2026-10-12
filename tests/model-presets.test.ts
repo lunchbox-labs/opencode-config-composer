@@ -362,6 +362,7 @@ function uiHarness(root: string) {
   const api = {
     state: { path: { config: root } },
     route: { current: { name: 'home' } },
+    event: { on: () => () => {} },
     lifecycle: { signal: new AbortController().signal, onDispose: () => {} },
     keymap: {
       registerLayer: (layer: { commands: typeof commands }) => {
