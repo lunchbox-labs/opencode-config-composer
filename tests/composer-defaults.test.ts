@@ -140,7 +140,7 @@ test('hooks stage overlays, restore removed defaults, and retain external change
     assert.equal(absent.agent?.[name], undefined);
   }
 
-  // Neither a failed reference nor failed prompt expansion may publish any patch.
+  // Unknown component groups and model presets must not publish any patch.
   const before = structuredClone(config);
   await writeFile(
     file,

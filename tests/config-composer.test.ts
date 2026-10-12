@@ -147,9 +147,6 @@ async function dedicatedFixture(t: TestContext): Promise<string> {
         },
         null,
         2,
-      ).replace(
-        '"prompt": {',
-        '// Preserve dedicated comments.\n        "prompt": {\n          // Preserve dedicated comments.',
       ) +
       '\n',
   );
