@@ -30,7 +30,7 @@ test(
     const { storage, reload } = await installedEditor(host);
     // Direct global-only editor calls use the same canonical root as the TUI.
     const globalSnapshot = async () => storage.loadSnapshot(await realpath(configRoot));
-    await mkdir(join(configRoot, 'settings', 'prompts'), { recursive: true });
+    await mkdir(join(configRoot, 'settings'), { recursive: true });
     await mkdir(join(configRoot, 'agents'), { recursive: true });
     await mkdir(join(configRoot, 'skills', 'included-skill'), { recursive: true });
     const nativePath = join(configRoot, 'opencode.jsonc');
@@ -102,12 +102,10 @@ test(
     };
     const settingsText = '// Dedicated custom settings\n' + JSON.stringify(composer, null, 2);
     await writeFile(settingsPath, settingsText);
-    await writeFile(join(configRoot, 'settings', 'prompts', 'body.md'), 'INITIAL_BODY');
-    await writeFile(join(configRoot, 'settings', 'prompts', 'skill.md'), 'EXPANDED_SKILL_SECRET');
-    await writeFile(agentPath, '---\nmode: primary\ngroups: [workers]\n---\n{{include:@shared/body.md}}\n');
+    await writeFile(agentPath, '---\nmode: primary\ngroups: [workers]\n---\nNATIVE_BODY\n');
     await writeFile(
       join(configRoot, 'skills', 'included-skill', 'SKILL.md'),
-      '---\nname: included-skill\ndescription: A deterministic permission fixture\n---\n{{include:@shared/skill.md}}\n',
+      '---\nname: included-skill\ndescription: A deterministic permission fixture\n---\nNATIVE_SKILL_BODY\n',
     );
     await writeFile(
       join(project, 'README.md'),
@@ -162,17 +160,16 @@ test(
         await reload();
       }
     };
-    await t.test('custom settings reach the provider while authored includes remain unchanged', async () => {
+    await t.test('custom settings reach the provider while authored bodies remain unchanged', async () => {
       const { message } = await send();
       assert.equal(message.info.modelID, 'alpha');
       const captured = JSON.stringify(requests.at(-1)?.messages);
-      assert.ok(captured.includes('{{include:@shared/body.md}}'));
+      assert.ok(captured.includes('NATIVE_BODY'));
       assert.equal(requests.at(-1)?.reasoning_effort, 'low');
       const pinned = await agent('pinned');
-      assert.ok(pinned.prompt?.includes('DEFAULT_START') !== true);
       assert.equal(pinned.prompt, 'PINNED_PROMPT');
     });
-    await t.test('save waits for explicit reload and reload removes stale content without duplication', async () => {
+    await t.test('save waits for explicit reload and reload preserves native content', async () => {
       await storage.savePlan(
         storage.planChange(await globalSnapshot(), {
           kind: 'preset',
@@ -180,17 +177,14 @@ test(
           choice: { model: 'fixture/beta', variant: 'high' },
         }),
       );
-      await writeFile(join(configRoot, 'settings', 'prompts', 'body.md'), 'SAVED_BODY');
       assert.equal((await send()).message.info.modelID, 'alpha', 'saving does not apply cached settings');
-      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('{{include:@shared/body.md}}'));
+      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('NATIVE_BODY'));
       await reload();
       assert.equal((await send()).message.info.modelID, 'beta');
       assert.equal(requests.at(-1)?.reasoning_effort, 'high');
-      assert.ok(!JSON.stringify(requests.at(-1)?.messages).includes('INITIAL_BODY'));
       await reload();
       const prompt = (await agent()).prompt ?? '';
-      assert.equal(prompt.split('{{include:@shared/body.md}}').length - 1, 1);
-      assert.equal(prompt.split('GROUP_START').length - 1, 0);
+      assert.equal(prompt.trim(), 'NATIVE_BODY');
       assert.equal((await agent('pinned')).model?.modelID, 'alpha');
       await send('worker', 'Explicit session model', undefined, {
         model: { providerID: 'fixture', modelID: 'alpha' },
@@ -260,7 +254,7 @@ test(
         await change({ kind: 'membership', agent: 'worker', groups: ['workers', 'alternate'] });
         assert.equal((await send()).message.info.modelID, 'alpha');
         assert.equal(requests.at(-1)?.reasoning_effort, 'low');
-        assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('{{include:@shared/body.md}}'));
+        assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('NATIVE_BODY'));
         await change({ kind: 'membership', agent: 'build', groups: ['workers', 'alternate'] });
         assert.equal((await send('build')).message.info.modelID, 'alpha');
         await change({ kind: 'membership', agent: 'worker', groups: ['alternate', 'workers'] });
@@ -294,7 +288,7 @@ test(
         await change({ kind: 'override', agent: 'worker', choice: {} });
         assert.equal((await send()).message.info.modelID, 'beta');
         await change({ kind: 'membership', agent: 'worker', groups: ['workers'] });
-        assert.ok((await agent()).prompt?.includes('{{include:@shared/body.md}}') === true);
+        assert.ok((await agent()).prompt?.includes('NATIVE_BODY') === true);
         assert.equal((await send('pinned')).message.info.modelID, 'alpha');
         assert.equal(requests.at(-1)?.reasoning_effort, 'low');
       },
@@ -323,7 +317,7 @@ test(
           assert.ok(permission !== undefined, 'native host must ask before executing the skill');
           assert.equal(permission.permission, 'skill');
           assert.ok(permission.patterns.includes('included-skill'));
-          assert.ok(!JSON.stringify(requests.slice(before)).includes('EXPANDED_SKILL_SECRET'));
+          assert.ok(!JSON.stringify(requests.slice(before)).includes('NATIVE_SKILL_BODY'));
           await api(`/permission/${permission.id}/reply`, { reply: 'once' });
         }
         const outcome = await completed;
@@ -340,10 +334,10 @@ test(
         );
         if (action === 'deny') {
           assert.match(tool.state.error ?? '', /rule which prevents you from using this specific tool call/);
-          assert.ok(!JSON.stringify(requests.slice(before)).includes('EXPANDED_SKILL_SECRET'));
+          assert.ok(!JSON.stringify(requests.slice(before)).includes('NATIVE_SKILL_BODY'));
         } else {
-          assert.ok(tool.state.output?.includes('{{include:@shared/skill.md}}') === true);
-          assert.ok(JSON.stringify(requests.slice(before)).includes('{{include:@shared/skill.md}}'));
+          assert.ok(tool.state.output?.includes('NATIVE_SKILL_BODY') === true);
+          assert.ok(JSON.stringify(requests.slice(before)).includes('NATIVE_SKILL_BODY'));
         }
       }
     });
@@ -382,7 +376,6 @@ test(
       await saveAndApply(
         storage.planChange(await globalSnapshot(), { kind: 'membership', agent: 'worker', groups: [] }),
       );
-      assert.ok((await agent()).prompt?.includes('GROUP_START') !== true);
       assert.equal((await send()).message.info.modelID, 'alpha');
       await saveAndApply(
         storage.planChange(await globalSnapshot(), {
@@ -415,7 +408,7 @@ test(
       assert.ok((await api<Message[]>(`/session/${saved.session.id}/message`)).length >= 4);
     });
     await t.test(
-      'editor rejects removed prompt settings; native hook failure is atomic and corrected reload recovers',
+      'editor rejects unknown settings; native hook failure is atomic and corrected reload recovers',
       async (t) => {
         const bodyPath = settingsPath;
         const goodBody = await readFile(bodyPath, 'utf8');
@@ -443,11 +436,8 @@ test(
         });
         const before = requests.length;
         const activeBefore = await agent();
-        await writeFile(
-          bodyPath,
-          JSON.stringify({ ...storage.parseConfig(goodBody), sourceDirectories: { removed: './prompts' } }),
-        );
-        await assert.rejects(globalSnapshot(), /Prompt composition moved/);
+        await writeFile(bodyPath, JSON.stringify({ ...storage.parseConfig(goodBody), unexpected: {} }));
+        await assert.rejects(globalSnapshot(), /must NOT have additional properties/);
         // Changed composition documents invalidate the reviewed snapshot.
         await assert.rejects(reload(snapshot), /Settings changed.*Reopen the editor/);
         assert.deepEqual(await agent(), activeBefore, 'editor rejection preserves the running configuration');
@@ -456,10 +446,9 @@ test(
         // OpenCode catches config-hook errors. Verify transactional composition rather
         // than claiming that the host prevents later requests with native settings.
         const rejected = await agent();
-        assert.ok(rejected.prompt?.includes('{{include:@shared/body.md}}') === true);
+        assert.ok(rejected.prompt?.includes('NATIVE_BODY') === true);
         assert.equal(rejected.model, undefined);
-        assert.ok(!rejected.prompt.includes('DEFAULT_START'));
-        assert.ok((await agent('pinned')).prompt?.includes('GROUP_START') !== true);
+        assert.equal((await agent('pinned')).prompt, 'PINNED_PROMPT');
         assert.equal(requests.length, before, 'reading configuration makes no provider request');
         await writeFile(bodyPath, goodBody);
         await nativeReload();

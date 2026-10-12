@@ -48,7 +48,7 @@ test(
       dirname(models),
       join(configRoot, 'agents'),
       dirname(local),
-      join(library, 'snippets'),
+      join(library),
       join(library, 'included-skill'),
     ]) {
       await mkdir(path, { recursive: true });
@@ -94,18 +94,15 @@ test(
     );
     await writeFile(
       reviewerPath,
-      '---\nmode: primary\ngroups: [primary]\npermission:\n  edit: deny\n---\nIMPORTED_REVIEWER {{include:@external/fragment.md}}',
+      '---\nmode: primary\ngroups: [primary]\npermission:\n  edit: deny\n---\nIMPORTED_REVIEWER AUTHORED_TEXT',
     );
-    await writeFile(join(library, 'snippets/fragment.md'), 'ORIGIN_RELATIVE_FRAGMENT');
-    await writeFile(join(library, 'snippets/reference.md'), 'NAMED_PROMPT_REFERENCE');
-    await writeFile(join(library, 'snippets/skill.md'), 'CANONICAL_SKILL_BODY');
     await writeFile(
       join(library, 'included-skill/SKILL.md'),
-      '---\nname: included-skill\ndescription: Imported native skill\n---\n{{include:@external/skill.md}}',
+      '---\nname: included-skill\ndescription: Imported native skill\n---\nCANONICAL_SKILL_BODY',
     );
     await writeFile(
       join(library, 'review.md'),
-      '---\nagent: reviewer\ndescription: Imported command\n---\nCOMMAND_BODY $ARGUMENTS {{include:@external/fragment.md}}',
+      '---\nagent: reviewer\ndescription: Imported command\n---\nCOMMAND_BODY $ARGUMENTS AUTHORED_TEXT',
     );
     await writeDocument(external, {
       configurationPresets: { 'shared-read-only': { model: 'fixture/beta' } },
@@ -249,8 +246,7 @@ test(
       assert.notEqual(captured.max_tokens, 96);
       const text = JSON.stringify(captured.messages);
       assert.ok(text.includes('IMPORTED_REVIEWER'));
-      assert.ok(!text.includes('{{include:@external/skill.md}}'), 'skill relationships do not inject their bodies');
-      assert.ok(text.includes('{{include:'), 'include syntax remains authored text');
+      assert.ok(!text.includes('CANONICAL_SKILL_BODY'), 'skill relationships do not inject their bodies');
       assert.deepEqual(
         await readdir(join(configRoot, 'agents')),
         ['pinned.md'],
@@ -350,11 +346,7 @@ test(
         arguments: 'fixture-input',
       });
       assert.equal(result.info.error, undefined);
-      assert.ok(
-        JSON.stringify(requests.at(-1)?.messages).includes(
-          'COMMAND_BODY fixture-input {{include:@external/fragment.md}}',
-        ),
-      );
+      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('COMMAND_BODY fixture-input AUTHORED_TEXT'));
       await api<Message>(`/session/${session.id}/message`, {
         agent: 'reviewer',
         parts: [{ type: 'text', text: 'Load included-skill now.' }],
@@ -362,8 +354,8 @@ test(
       const messages = await api<Message[]>(`/session/${session.id}/message`);
       const skill = messages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
       assert.equal(skill?.state?.status, 'completed', JSON.stringify(messages));
-      assert.ok((skill.state.output ?? '').includes('{{include:@external/skill.md}}'));
-      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('{{include:@external/skill.md}}'));
+      assert.ok((skill.state.output ?? '').includes('CANONICAL_SKILL_BODY'));
+      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('CANONICAL_SKILL_BODY'));
     });
 
     await t.test('automatic title and manual compaction dispatch use their configured utility parameters', async () => {

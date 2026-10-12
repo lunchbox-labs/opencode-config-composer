@@ -103,10 +103,10 @@ test('runtime publishes exact applied revisions and skipped membership still has
 });
 
 test('revision excludes native-only aliases of a Composer component without losing their identity checks', async (t) => {
-  const f = await fixture(t, { components: { commands: { shared: { file: './prompt-alias.md' } } } });
+  const f = await fixture(t, { components: { commands: { shared: { file: './body-alias.md' } } } });
   await mkdir(join(f.root, 'agents'));
   await writeFile(join(f.root, 'agents/worker.md'), '---\nmode: primary\n---\nNative body');
-  await symlink(join(f.root, 'agents/worker.md'), join(f.root, 'prompt-alias.md'));
+  await symlink(join(f.root, 'agents/worker.md'), join(f.root, 'body-alias.md'));
   await writeFile(join(f.root, 'opencode.jsonc'), JSON.stringify({ plugin: [[packageName, { configFile: f.file }]] }));
   const native = {
     agent: { worker: { prompt: 'Native body', mode: 'primary' as const, options: {}, permission: {} } },

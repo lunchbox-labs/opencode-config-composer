@@ -2,17 +2,13 @@
 
 Use [config-composer.jsonc](config-composer.jsonc) as a complete configuration-selection example. Both profiles
 select OpenCode's built-in `build` and `plan` agents. The `development` preset makes edit operations ask for
-approval; `review` denies them. Other permissions retain their native fallback. No provider configuration,
-custom component files, or prompt fragments are required. OpenCode enforces the effective permissions.
+approval; `review` denies them. Other permissions retain their native fallback. No provider configuration or
+custom component files are required. OpenCode enforces the effective permissions.
 
 Each project starts with `development` until it has its own saved choice. Switch to `review` in Compose configs;
 after explicit apply, the edit rule changes. The switch changes external project state, leaving this file
 unchanged. **Use configured defaults** restores `development` without editing the default list.
 Selecting no profiles removes these configuration contributions and restores native permission behavior.
-
-Profile selection controls configuration only. Prompt Composer's independent prompt settings do not switch
-with these profiles. Native agent prompts and command bodies remain native content; there is no cross-package
-profile adapter or automatic prompt-profile selection.
 
 Set `retainOnRestart` to `false` to start from configured defaults in each fresh OpenCode server process.
 Instance apply/reload preserves the selection; new conversations do not reset it. Different projects sharing

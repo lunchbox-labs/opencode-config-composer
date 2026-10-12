@@ -8,7 +8,6 @@ export const bundledSkillDirectory = fileURLToPath(new URL('../../skills/', impo
 const resources = {
   'config-composer-explain': ['references/schema.md'],
   'config-composer-create': ['examples/review.jsonc'],
-  'config-composer-migrate': ['examples/before.jsonc', 'examples/after.jsonc', 'examples/worker.md'],
 };
 
 /** Validate only this package's declared resources; this is not composition directory discovery. */

@@ -118,6 +118,45 @@ for (const [name, value] of invalid) {
   });
 }
 
+test('configuration objects report unknown fields with their source and field location', () => {
+  for (const [pointer, value] of [
+    ['/unexpected', { unexpected: {} }],
+    ['/components/unexpected', { components: { unexpected: {} } }],
+    [
+      '/components/agents/worker/unexpected',
+      { components: { agents: { worker: { prompt: 'Native body', unexpected: [] } } } },
+    ],
+    [
+      '/components/agents/worker/configuration/prompt',
+      { components: { agents: { worker: { prompt: 'Native body', configuration: { prompt: 'Other body' } } } } },
+    ],
+    ['/componentGroups/work/unexpected', { componentGroups: { work: { unexpected: [] } } }],
+    [
+      '/componentGroups/work/configuration/prompt',
+      { componentGroups: { work: { configuration: { prompt: 'Other body' } } } },
+    ],
+    ['/defaults/agents/prompt', { defaults: { agents: { prompt: 'Other body' } } }],
+    ['/overrides/agents/worker/prompt', { overrides: { agents: { worker: { prompt: 'Other body' } } } }],
+    [
+      '/profiles/work/overrides/agents/worker/prompt',
+      { profiles: { work: { overrides: { agents: { worker: { prompt: 'Other body' } } } } } },
+    ],
+  ] as const) {
+    assert.equal(validate(value), false);
+    assert.throws(
+      () => readCompositionDocument(value, 'shared.jsonc'),
+      (error: unknown) => {
+        assert.ok(error instanceof CompositionValidationError);
+        assert.equal(error.diagnostic.code, 'invalid-composition-document');
+        assert.equal(error.diagnostic.sourceId, 'shared.jsonc');
+        assert.equal(error.diagnostic.pointer, pointer);
+        assert.match(error.message, /must NOT have additional properties/);
+        return true;
+      },
+    );
+  }
+});
+
 test('legacy formats fail with actionable source and field migration diagnostics', () => {
   for (const [key, destination] of [
     ['agent', 'components.agents'],

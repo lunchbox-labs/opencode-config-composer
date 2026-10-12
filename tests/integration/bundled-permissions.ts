@@ -3,11 +3,11 @@ import { realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { nativeHarness } from './harness.ts';
 
-/** Only the native host's complete blocks of three disjoint packaged-directory grants may reorder. */
+/** Only the native host's complete blocks of disjoint packaged-directory grants may reorder. */
 export async function bundledPermissions(host: Awaited<ReturnType<typeof nativeHarness>>) {
   const skills = await host.api<{ name: string; location: string }[]>('/skill');
   const patterns: string[] = [];
-  for (const name of ['config-composer-explain', 'config-composer-create', 'config-composer-migrate']) {
+  for (const name of ['config-composer-explain', 'config-composer-create']) {
     const skill = skills.find((item) => item.name === name);
     assert.ok(skill !== undefined, `native discovery: ${name}`);
     assert.equal(

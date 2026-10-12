@@ -147,3 +147,10 @@ test('omitted configFile loads the default file and rejects obsolete inline sett
   await rm(path);
   await assert.rejects(loadConfiguration(undefined, root), /Could not read/);
 });
+
+test('group settings report fields outside their configuration contract', () => {
+  assert.throws(
+    () => readSettings({ agent: { groups: { work: { prompt: 'Native body' } } } }),
+    /Group defaults support only model, modelRef, and variant/,
+  );
+});

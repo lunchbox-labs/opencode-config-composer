@@ -137,8 +137,8 @@ Without that setting, the last legacy `activeProfiles` list supplies defaults. N
 A saved external project selection overrides configured defaults until **Use configured defaults** is chosen.
 Document defaults/overrides still apply when no profiles are selected. `retainOnRestart` defaults to `true`;
 `false` uses a server-process namespace that survives instance apply but not server restart. There is no
-session reset setting or cross-package prompt-profile selection. These settings control configuration only.
-See [selection storage and migration](../README.md#shared-project-and-local-settings).
+session reset setting.
+See [selection storage](../README.md#shared-project-and-local-settings).
 
 Imports load explicit definition documents in authored order. They may define components, groups, presets,
 profiles and shortcuts, but cannot supply root `selection`, legacy activation, defaults or overrides.
@@ -182,19 +182,3 @@ the pinned host's public APIs. Configured settings and recorded history do not e
 pins, selected variants, capability limits, provider defaults and other plugins can affect dispatch. Values under
 credential-like option keys are redacted; provider configuration and conversation bodies are omitted. Inspection does not save,
 apply, select models, dispose an instance, send a prompt or change history.
-
-## Migration
-
-Migrate a copy of settings; there is no automatic conversion or legacy compatibility mode.
-
-| Old location                                | Current location                                                    |
-| ------------------------------------------- | ------------------------------------------------------------------- |
-| `agent.groups` or root `groups`             | `componentGroups`, with explicit members and profile selection.     |
-| `agent.modelPresets` or root `modelPresets` | `configurationPresets`, assigned by targeted profile layers.        |
-| Agent/command/skill definitions             | `components.agents`, `components.commands`, `components.skills`.    |
-| Root `model` / `small_model`                | `defaults.model` / `defaults.small_model`.                          |
-| File-path `activeProfiles` / `extends`      | Explicit `imports`, named `profiles`, named selections and parents. |
-
-Old `agent`, `command` and `skill` namespaces are rejected even when empty. Diagnostics identify the key and
-suggest its destination. Removed prompt settings fail with a migration error; see [prompt migration](prompt-migration.md). Preserve native authored pins
-unless you deliberately intend to replace them; compare both selected profiles and fallback behavior after migration.

@@ -12,26 +12,22 @@ test('native select readiness waits beyond autocomplete and first paint for focu
   await write('\x1b[47;4H/compose-configs        Compose configuration\x1b[49;6H/compose-configs\x1b[?25h');
   assert.equal(search.focused(), false, 'command autocomplete is not the Compose search input');
   await write(
-    '\x1b[?25l\x1b[16;65HCompose configs\x1b[18;65HSearch…\x1b[22;65HPrompt operations and inheritance\x1b[55;180H',
+    '\x1b[?25l\x1b[16;65HCompose configs\x1b[18;65HSearch…\x1b[22;65HModels, variants and parameters\x1b[55;180H',
   );
-  assert.ok(screen.buffer.active.getLine(21)!.translateToString().includes('Prompt operations and inheritance'));
+  assert.ok(screen.buffer.active.getLine(21)!.translateToString().includes('Models, variants and parameters'));
   assert.equal(search.focused(), false, 'first dialog paint precedes native input focus');
   assert.equal(search.pending(), true, 'another Escape must wait for the menu key handler');
-  assert.equal(search.echoed('Prompt operations and inheritance'), false, 'an option title does not prove typed input');
+  assert.equal(search.echoed('Models, variants and parameters'), false, 'an option title does not prove typed input');
   await write('\x1b[18;65H\x1b[?25h');
   assert.equal(search.focused(), true);
   assert.equal(search.pending(), false);
-  assert.equal(
-    search.echoed('Prompt operations and inheritance'),
-    false,
-    'empty focused input is not a submitted query',
-  );
-  await write('\x1b[18;65HPrompt operations and inheritance');
-  assert.equal(search.echoed('Prompt operations and inheritance'), true);
+  assert.equal(search.echoed('Models, variants and parameters'), false, 'empty focused input is not a submitted query');
+  await write('\x1b[18;65HModels, variants and parameters');
+  assert.equal(search.echoed('Models, variants and parameters'), true);
   assert.equal(search.focused(), false, 'a submitted query must not be mistaken for the next dialog input');
   await write('\x1b[?25l\x1b[22;97H');
   assert.equal(
-    search.echoed('Prompt operations and inheritance'),
+    search.echoed('Models, variants and parameters'),
     false,
     'an unfocused option cannot satisfy the echo guard',
   );
@@ -51,15 +47,15 @@ test('native filtered selection becomes ready only after its highlighted paint',
   t.after(() => screen.dispose());
   const search = terminalSearch(screen);
   const write = (text: string) => new Promise<void>((resolve) => screen.write(text, resolve));
-  const label = 'Save ordered fragments';
+  const label = 'Save ordered profiles';
   await write(
-    '\x1b[48;2;20;20;20m\x1b[18;65HSave ordered fragments\x1b[20;63H● Save ordered fragments…\x1b[18;87H\x1b[?25h',
+    '\x1b[48;2;20;20;20m\x1b[18;65HSave ordered profiles\x1b[20;63H● Save ordered profiles…\x1b[18;86H\x1b[?25h',
   );
   assert.equal(search.echoed(label), true);
   assert.equal(search.selected(label, label), false, 'the current-value dot cannot establish filtered selection');
-  await write('\x1b[48;2;250;180;130m\x1b[20;63H  Save ordered fragments…\x1b[48;2;20;20;20m\x1b[18;87H');
+  await write('\x1b[48;2;250;180;130m\x1b[20;63H  Save ordered profiles…\x1b[48;2;20;20;20m\x1b[18;86H');
   assert.equal(search.selected(label, label), true, 'the actual highlight arrives one frame after the query echo');
-  assert.equal(search.selected('Add multiline fragment', label), false);
+  assert.equal(search.selected('Add profile', label), false);
   await write(
     '\x1b[18;65H\x1b[Kmissing-agent\x1b[48;2;250;180;130m\x1b[20;65H\x1b[K✓ missing-agent\x1b[48;2;20;20;20m\x1b[18;78H',
   );

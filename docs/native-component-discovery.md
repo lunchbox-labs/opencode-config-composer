@@ -50,5 +50,4 @@ open the TUI to check it against the full skill list. Reading configuration alon
 not trigger headless notices, and offline editors cannot fully verify native discovery.
 
 Malformed configuration, conflicting definitions, model-reference cycles and invalid
-selection or primary-agent settings still produce errors. Prompt aliases, prompt
-composition and include expansion are handled by the separate prompt plugin.
+selection or primary-agent settings still produce errors.

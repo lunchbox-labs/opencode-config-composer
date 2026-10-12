@@ -41,12 +41,12 @@ test(
     native.agent.fallback = { mode: 'primary', prompt: 'NATIVE_FALLBACK' };
     native.agent.pinned = { mode: 'primary', prompt: 'NATIVE_PIN', model: 'fixture/beta' };
     await writeFile(nativePath, JSON.stringify(native));
-    const source = (model: string, _prompt: string) => ({
+    const source = (model: string) => ({
       componentGroups: { work: { agents: ['worker'], configuration: { model } } },
       profiles: { work: { layers: [{ componentGroup: 'work' }] } },
       activeProfiles: ['work'],
     });
-    await f.write(f.paths.shared, source('fixture/alpha', 'APPLIED_INITIAL'));
+    await f.write(f.paths.shared, source('fixture/alpha'));
     const observer = join(f.host.root, 'observer');
     await mkdir(join(observer, '.opencode'), { recursive: true });
     await writeFile(join(observer, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
