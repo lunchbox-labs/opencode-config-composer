@@ -156,8 +156,9 @@ test(
       defaults: { small_model: 'fixture/beta' },
     });
     await f.host.start();
-    const terminal = await nativeTerminal(f.host, undefined, 'preset-create-terminal');
-    await terminal.wait(['ctrl+p', 'commands']);
+    const original = await f.send();
+    const terminal = await nativeTerminal(f.host, original.session.id, 'preset-create-terminal');
+    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
     const create = async (name: string) => {
       await terminal.command('/compose-configs', 'Compose configs');
       await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
@@ -170,8 +171,9 @@ test(
     const before = await readFile(f.paths.shared, 'utf8');
     await terminal.choose('Parameter-only preset', 'New preset: staged parameters');
     await terminal.choose('Review and create preset', 'at least one');
+    await terminal.press('\x15', 'Search');
     await terminal.choose('maxOutputTokens', 'maxOutputTokens: blank removes this local value');
-    await terminal.press('0\r', 'positive safe integers');
+    await terminal.press('0\r', 'Use temperature');
     await terminal.press('\x15' + '128\r', 'New preset: staged parameters');
     assert.equal(await readFile(f.paths.shared, 'utf8'), before);
     await terminal.choose('Review and create preset', 'Save composition definition?', 'checked at dispatch');
@@ -215,5 +217,7 @@ test(
     assert.equal(await readFile(f.paths.shared, 'utf8'), concurrent);
     assert.deepEqual((await f.document(f.paths.shared)).activeProfiles, undefined);
     assert.match(concurrent, /Preserve fixture comments/);
+    assert.equal((await f.send(original.session.id)).captured.model, original.captured.model);
+    assert.ok((await f.history(original.session.id)).some((message) => message.info.id === original.message.info.id));
   },
 );

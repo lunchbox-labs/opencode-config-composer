@@ -61,7 +61,11 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
             const document = parseCompositionDocument(
               JSON.stringify({ configurationPresets: { draft: { parameters } } }),
             );
-            return selected(document.configurationPresets!.draft);
+            const preset = document.configurationPresets?.draft;
+            if (preset === undefined) {
+              throw new SettingsError('The parameter draft is unavailable. Reopen the editor.');
+            }
+            return selected(preset);
           }),
       },
     ]);

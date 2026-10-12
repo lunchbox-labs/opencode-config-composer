@@ -2524,7 +2524,7 @@ test('preset creation validates inherited parameters against the referenced mode
   const ui = uiHarness(root);
   await newPreset(ui, root);
   await ui.select('+reference');
-  const originalProviders = ui.api.client.config.providers;
+  const originalProviders = ui.api.client.config.providers.bind(ui.api.client.config);
   ui.api.client.config.providers = (async () => ({
     data: {
       providers: [
@@ -2542,7 +2542,7 @@ test('preset creation validates inherited parameters against the referenced mode
   assert.equal(await readFile(path, 'utf8'), before);
   ui.api.client.config.providers = originalProviders;
   await ui.select('preset:shared');
-  assert.match(ui.message(), /resolved parameters {"topK":3}/);
+  assert.match(ui.message(), /resolved parameters \{"topK":3\}/);
   ui.setProviderError(true);
   await ui.confirm();
   assert.match(ui.toasts.at(-1)!.message, /provider models/);
