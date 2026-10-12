@@ -2373,50 +2373,6 @@ test('selection confirmation requires the server external state filesystem proof
   );
 });
 
-test('compose only shows reference notices while running references need attention', async (t) => {
-  const root = await fixture(t);
-  const ui = uiHarness(root);
-  await ui.command('config-composer.compose');
-  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
-  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
-  await ui.escape();
-  const path = join(root, 'config-composer.jsonc');
-  const value = parseConfig(await readFile(path, 'utf8'));
-  const groups = value.componentGroups as Record<string, Record<string, unknown>>;
-  groups.developers.agents = ['missing-agent'];
-  await writeFile(path, JSON.stringify(value));
-  await ui.command('config-composer.compose');
-  await ui.select('reference-notices');
-  assert.match(ui.message(), /missing-agent/);
-  assert.match(ui.message(), /Group developers/);
-  assert.match(ui.message(), /componentGroups\/developers\/agents\/0/);
-  assert.match(ui.message(), /Valid composition remains active/);
-  assert.equal(ui.toasts.length, 0, 'routine reads do not toast');
-  await ui.escape();
-  groups.developers.agents = ['builtin'];
-  await writeFile(path, JSON.stringify(value));
-  await ui.command('config-composer.compose');
-  assert.ok('options' in ui.dialog);
-  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
-});
-
-test('editor rejects a native baseline replaced during host inventory discovery', async (t) => {
-  const root = await fixture(t);
-  const ui = uiHarness(root);
-  const first = (await ui.api.client.config.get()).data!;
-  const replacement = await editorServerConfig(root, { model: 'example/deep' });
-  let current = first;
-  Object.assign(ui.api.client.config, { get: async () => ({ data: current }) });
-  Object.assign(ui.api.client.app, {
-    skills: async () => {
-      current = replacement;
-      return { data: [] };
-    },
-  });
-  await ui.command();
-  assert.match(ui.toasts.at(-1)?.message ?? '', /instance changed during component discovery/i);
-});
-
 test('last editor error survives inspection and dismissal, replaces failures, and never writes files', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);
@@ -2569,3 +2525,47 @@ for (const event of ['server.connected', 'server.instance.disposed'] as const) {
     assert.match(ui.message(), /No editor error/);
   });
 }
+
+test('compose only shows reference notices while running references need attention', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
+  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
+  await ui.escape();
+  const path = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(path, 'utf8'));
+  const groups = value.componentGroups as Record<string, Record<string, unknown>>;
+  groups.developers.agents = ['missing-agent'];
+  await writeFile(path, JSON.stringify(value));
+  await ui.command('config-composer.compose');
+  await ui.select('reference-notices');
+  assert.match(ui.message(), /missing-agent/);
+  assert.match(ui.message(), /Group developers/);
+  assert.match(ui.message(), /componentGroups\/developers\/agents\/0/);
+  assert.match(ui.message(), /Valid composition remains active/);
+  assert.equal(ui.toasts.length, 0, 'routine reads do not toast');
+  await ui.escape();
+  groups.developers.agents = ['builtin'];
+  await writeFile(path, JSON.stringify(value));
+  await ui.command('config-composer.compose');
+  assert.ok('options' in ui.dialog);
+  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
+});
+
+test('editor rejects a native baseline replaced during host inventory discovery', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  const first = (await ui.api.client.config.get()).data!;
+  const replacement = await editorServerConfig(root, { model: 'example/deep' });
+  let current = first;
+  Object.assign(ui.api.client.config, { get: async () => ({ data: current }) });
+  Object.assign(ui.api.client.app, {
+    skills: async () => {
+      current = replacement;
+      return { data: [] };
+    },
+  });
+  await ui.command();
+  assert.match(ui.toasts.at(-1)?.message ?? '', /instance changed during component discovery/i);
+});
