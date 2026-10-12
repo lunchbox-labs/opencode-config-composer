@@ -1,6 +1,7 @@
 import { SettingsError } from './settings.ts';
 
-export type InputChange = 'content' | 'permissions' | 'identity' | 'source-list' | 'selection' | 'environment';
+export type InputChange =
+  'content' | 'permissions' | 'identity' | 'source-list' | 'selection' | 'environment' | 'missing' | 'unavailable';
 export interface ChangedInput {
   path: string;
   category: InputChange;
@@ -31,9 +32,27 @@ export class SaveDiagnosticError extends SettingsError {
   }
 }
 
-export function changedInput(message: string, path: string, category: InputChange): SaveDiagnosticError {
+export function changedInput(
+  message: string,
+  path: string,
+  category: InputChange,
+  cause?: unknown,
+): SaveDiagnosticError {
   const input = { path: bounded(path), category };
-  return new SaveDiagnosticError(`${message}\nObserved ${category}: ${input.path}`, { input });
+  return new SaveDiagnosticError(`${bounded(message, 768)}\nObserved ${category}: ${input.path}`, { input }, cause);
+}
+
+/** Add context to an existing failed read without probing disk again or changing its rejection. */
+export function inputReadFailure(error: unknown, path: string): never {
+  if (error instanceof SaveDiagnosticError) {
+    throw error;
+  }
+  throw changedInput(
+    error instanceof Error ? error.message : 'Could not read settings input.',
+    path,
+    error instanceof Error && 'code' in error && error.code === 'ENOENT' ? 'missing' : 'unavailable',
+    error,
+  );
 }
 
 export const maxFileOutcomes = 8;

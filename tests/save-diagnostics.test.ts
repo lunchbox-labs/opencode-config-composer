@@ -272,7 +272,56 @@ test('long diagnostic identifiers and messages are bounded and neutralize termin
   const error = saveFailure(original, [{ path, outcome: 'restore-failed' }], 1);
   assert.equal(error.cause, original);
   assert.ok(error.message.length < 1500);
-  assert.doesNotMatch(error.message, /\u001b/);
+  assert.equal(error.message.includes('\u001b'), false);
   assert.equal(error.details.input?.path.length, 320);
   assert.equal(error.details.outcomes?.[0].path.length, 320);
+});
+
+for (const replacement of ['symlink', 'missing'] as const) {
+  test(`a ${replacement} native source reports its observed path`, async (t) => {
+    const root = await fixture(t);
+    const plan = planChange(await loadSnapshot(root), {
+      kind: 'preset',
+      name: 'balanced',
+      choice: { model: 'fixture/b' },
+    });
+    const path = plan.snapshot.configFile.path;
+    await rm(path);
+    if (replacement === 'symlink') {
+      const target = join(root, 'replacement.jsonc');
+      await writeFile(target, plan.snapshot.configFile.text);
+      await fs.promises.symlink(target, path);
+    }
+    await assert.rejects(
+      saveFilePlan(plan, async () => {}),
+      (error: unknown) => {
+        assert.deepEqual(details(error).input, { path, category: replacement === 'symlink' ? 'identity' : 'missing' });
+        return true;
+      },
+    );
+    assert.equal(await readFile(plan.edits[0].file.path, 'utf8'), plan.edits[0].file.text);
+  });
+}
+
+test('a removed captured alias reports the requested path and original read failure', async (t) => {
+  const root = await fixture(t);
+  const plan = planChange(await loadSnapshot(root), {
+    kind: 'preset',
+    name: 'balanced',
+    choice: { model: 'fixture/b' },
+  });
+  const path = join(root, 'alias.jsonc');
+  await fs.promises.symlink(plan.snapshot.configFile.path, path);
+  plan.reads = [{ ...plan.snapshot.configFile, path, canonicalPath: plan.snapshot.configFile.path, writable: false }];
+  await rm(path);
+  await assert.rejects(
+    saveFilePlan(plan, async () => {}),
+    (error: unknown) => {
+      assert.deepEqual(details(error).input, { path, category: 'missing' });
+      assert.ok(error instanceof Error && error.cause instanceof Error);
+      assert.ok(error.cause.cause instanceof Error);
+      assert.match(error.cause.cause.message, /ENOENT/);
+      return true;
+    },
+  );
 });

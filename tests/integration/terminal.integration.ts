@@ -242,9 +242,15 @@ test(
     const external = before + '\n// PRIVATE_CONCURRENT_BODY';
     await writeFile(f.paths.shared, external);
     await terminal.press('\r', 'Observed content:', 'Save rejected before file writes.');
-    assert.ok(terminal.text().replace(/[\s┃]/g, '').includes(f.paths.shared.replace(/\s/g, '')));
+    const toast = terminal
+      .text()
+      .split('\n')
+      .map((line) => line.split('┃').at(-2) ?? '')
+      .join('');
+    assert.ok(toast.replace(/\s/g, '').includes(f.paths.shared.replace(/\s/g, '')));
     assert.doesNotMatch(terminal.text(), /PRIVATE_CONCURRENT_BODY/);
     assert.equal(await readFile(f.paths.shared, 'utf8'), external);
+    await terminal.press('\x1b', 'New component groups name');
     await terminal.press('\x1b', 'Component groups');
     await terminal.press('\x1b', 'Composition definitions');
     await terminal.press('\x1b', 'Compose configs');

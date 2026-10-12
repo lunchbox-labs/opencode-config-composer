@@ -1,4 +1,4 @@
-import { type FileOutcome, changedInput, maxFileOutcomes, saveFailure } from './save-diagnostics.ts';
+import { type FileOutcome, changedInput, inputReadFailure, maxFileOutcomes, saveFailure } from './save-diagnostics.ts';
 import { verifySelection, withSelectionLock, withSelectionUpdate } from './composition/selection-state.ts';
 import { modelEditKey, resetModelBindingEdits } from './composition/model-binding-edits.ts';
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
@@ -308,12 +308,20 @@ async function nativeAgentsFromLayers(
 }
 
 async function sourceFile(root: string, path: string): Promise<SourceFile> {
-  const info = await lstat(path);
-  const rel = relative(root, await realpath(path));
-  if (!info.isFile() || info.isSymbolicLink() || rel.startsWith('..') || isAbsolute(rel) || info.size > 2_000_000) {
-    throw new SettingsError('Settings must be regular files inside this configuration directory, under 2 MB each.');
+  try {
+    const info = await lstat(path);
+    const rel = relative(root, await realpath(path));
+    if (!info.isFile() || info.isSymbolicLink() || rel.startsWith('..') || isAbsolute(rel) || info.size > 2_000_000) {
+      throw changedInput(
+        'Settings must be regular files inside this configuration directory, under 2 MB each.',
+        path,
+        !info.isFile() || info.isSymbolicLink() || rel.startsWith('..') || isAbsolute(rel) ? 'identity' : 'unavailable',
+      );
+    }
+    return { path, text: await readFile(path, 'utf8'), mode: info.mode & 0o777, writable: (info.mode & 0o222) !== 0 };
+  } catch (error) {
+    return inputReadFailure(error, path);
   }
-  return { path, text: await readFile(path, 'utf8'), mode: info.mode & 0o777, writable: (info.mode & 0o222) !== 0 };
 }
 
 async function observedComposition(sources: LoadedSources): Promise<void> {
@@ -335,18 +343,21 @@ async function observedComposition(sources: LoadedSources): Promise<void> {
 
 async function observedFile(root: string, original: SourceFile): Promise<SourceFile> {
   for (const alias of original.aliases ?? []) {
-    if ((await realpath(alias)) !== (original.canonicalPath ?? original.path)) {
+    if (
+      (await realpath(alias).catch((error: unknown) => inputReadFailure(error, alias))) !==
+      (original.canonicalPath ?? original.path)
+    ) {
       throw changedInput('Settings source identity changed. Reopen the editor.', alias, 'identity');
     }
   }
   if (original.writable !== false) {
     return sourceFile(original.writeRoot ?? root, original.path);
   }
-  const canonical = await realpath(original.path);
+  const canonical = await realpath(original.path).catch((error: unknown) => inputReadFailure(error, original.path));
   if (canonical !== (original.canonicalPath ?? original.path)) {
     throw changedInput('Settings source identity changed. Reopen the editor.', original.path, 'identity');
   }
-  return configurationFile(canonical);
+  return configurationFile(canonical).catch((error: unknown) => inputReadFailure(error, original.path));
 }
 
 function pluginOptions(config: Record<string, unknown>, index: number): unknown {
