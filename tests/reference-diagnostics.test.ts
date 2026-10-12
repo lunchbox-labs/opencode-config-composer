@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { type TestContext, test } from 'node:test';
 import { loadCompositionSources } from '../src/config-composer/composition/sources.ts';
 import { resolveProfileRuntime } from '../src/config-composer/composition/runtime.ts';
+import type { CompositionDocument } from '../src/config-composer/composition/types.ts';
 
 async function sources(t: TestContext, value: unknown) {
   const root = await mkdtemp(join(tmpdir(), 'composer-reference-diagnostics-'));
@@ -202,6 +203,7 @@ test('missing targets cannot hide cycles or native command collisions', async (t
     resolveProfileRuntime(
       await sources(t, {
         ...base,
+        configurationPresets: {},
         components: { commands: { duplicate: { template: 'Body', agent: 'absent' } } },
         componentGroups: { work: { commands: ['duplicate'] } },
       }),
@@ -220,6 +222,42 @@ test('disabled selected Composer agents still validate their authored configurat
     activeProfiles: ['work'],
   });
   await assert.rejects(resolveProfileRuntime(input, {}), /cycle/);
+});
+
+test('inactive preset cycles are rejected before runtime changes', async (t) => {
+  const input = await sources(t, {
+    configurationPresets: { first: { modelRef: 'preset:second' }, second: { modelRef: 'preset:first' } },
+    activeProfiles: [],
+  });
+  await assert.rejects(resolveProfileRuntime(input, { model: 'fixture/native' }), /cycle/);
+});
+
+const inactiveReferences: [string, CompositionDocument][] = [
+  ['preset', { configurationPresets: { unused: { modelRef: 'preset:missing' } } }],
+  [
+    'component',
+    { components: { agents: { unused: { prompt: 'Body', configuration: { modelRef: 'preset:missing' } } } } },
+  ],
+  ['group', { componentGroups: { unused: { configuration: { modelRef: 'preset:missing' } } } }],
+  ['profile override', { profiles: { unused: { overrides: { agents: { build: { modelRef: 'preset:missing' } } } } } }],
+];
+for (const [location, document] of inactiveReferences) {
+  test(`inactive ${location} rejects a missing model preset`, async (t) => {
+    const input = await sources(t, document);
+    await assert.rejects(resolveProfileRuntime(input, {}), /Model preset missing does not exist/);
+  });
+}
+
+test('inactive native model references do not require an effective model until selected', async (t) => {
+  const input = await sources(t, {
+    configurationPresets: { unused: { modelRef: 'opencode:small_model' } },
+    componentGroups: { unused: { agents: ['build'], configuration: { modelRef: 'preset:unused' } } },
+    profiles: { unused: { layers: [{ componentGroup: 'unused' }] } },
+    activeProfiles: [],
+  });
+  const result = await resolveProfileRuntime(input, {});
+  assert.deepEqual(result.selectedAgents, []);
+  assert.equal(result.small_model, undefined);
 });
 
 test('groups select authoritative native command names without duplicate definitions across reset', async (t) => {
