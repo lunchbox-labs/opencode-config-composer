@@ -1276,7 +1276,7 @@ export function registerSettings(
       navigation.reset();
       const shortcut = snapshot.sources.registry.profileShortcuts?.[name];
       if (shortcut === undefined) {
-        throw new SettingsError('The shortcut changed. Refresh shortcuts in Compose.');
+        throw new SettingsError('The shortcut changed. Refresh shortcuts in Compose configs.');
       }
       const selection = shortcut.activeProfiles;
       return proposeComposition(snapshot, planSelection(snapshot, [...selection]), undefined, {
@@ -1309,7 +1309,7 @@ export function registerSettings(
     }
     const notices = referenceWarnings.current();
     menu(
-      'Compose',
+      'Compose configs',
       [
         ...(notices.diagnostics.length === 0 && notices.unavailable === undefined
           ? []
@@ -1557,7 +1557,7 @@ export function registerSettings(
         title: 'Compose configuration',
         category: 'Config',
         namespace: 'palette',
-        slashName: 'compose',
+        slashName: 'compose-configs',
         run: () => {
           navigation.reset();
           return run(composeMenu);

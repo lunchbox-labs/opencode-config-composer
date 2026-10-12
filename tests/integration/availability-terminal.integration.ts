@@ -18,7 +18,7 @@ test(
     await terminal.wait(['Availability conversation', 'verified', 'ctrl+p', 'commands']);
 
     const edit = async () => {
-      await terminal.command('/compose', 'Compose');
+      await terminal.command('/compose-configs', 'Compose configs');
       await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
       await terminal.choose('Profiles', 'work');
       await terminal.choose('work', 'Profiles: work');

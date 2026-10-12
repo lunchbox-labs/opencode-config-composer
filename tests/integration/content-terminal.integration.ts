@@ -25,7 +25,7 @@ test(
     const terminal = await nativeTerminal(f.host, original.session.id, 'parameter-terminal');
     await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
     const open = async () => {
-      await terminal.command('/compose', 'Compose');
+      await terminal.command('/compose-configs', 'Compose configs');
       await terminal.choose('Model parameters and provider options', 'Parameter destination');
       await terminal.press('\r', 'Parameter target');
       await terminal.choose('Preset: tuning', 'Preset: tuning: parameters saved here');
@@ -87,7 +87,7 @@ test(
     const running = JSON.stringify(await f.host.api('/agent'));
     const terminal = await nativeTerminal(f.host, original.session.id, 'permission-terminal');
     await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
-    await terminal.command('/compose', 'Compose');
+    await terminal.command('/compose-configs', 'Compose configs');
     await terminal.choose('Ordered permission rules and configured previews', 'Permission destination');
     await terminal.press('\r', 'Permission target');
     await terminal.choose('Preset: checks', 'Preset: checks: ordered permissions');

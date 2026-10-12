@@ -7,7 +7,7 @@ export class MembershipValidationError extends SettingsError {
   readonly member?: string;
   readonly kind: 'agents' | 'skills' | 'commands';
   constructor(message: string, group: string, member?: string, kind: MembershipValidationError['kind'] = 'agents') {
-    super(`${message} Open /compose → Repair invalid memberships to review saved sources.`);
+    super(`${message} Open /compose-configs → Repair invalid memberships to review saved sources.`);
     this.group = group;
     this.member = member;
     this.kind = kind;

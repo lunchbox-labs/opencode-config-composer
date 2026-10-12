@@ -2,7 +2,7 @@ import { CompositionValidationError } from './document.ts';
 import type { LoadedSources } from './sources.ts';
 
 export const shortcutCommandPrefix = 'config-composer.shortcut.';
-export const reservedShortcuts = new Set(['compose', 'agent-models', 'agent-groups', 'reload-configs']);
+export const reservedShortcuts = new Set(['compose-configs', 'agent-models', 'agent-groups', 'reload-configs']);
 
 /** Check native prompt commands and all registered TUI slash names/aliases without overriding them. */
 export function validateShortcutCommands(

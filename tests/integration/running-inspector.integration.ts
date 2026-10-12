@@ -156,8 +156,8 @@ async function unchanged(
 
 async function open(terminal: Terminal) {
   await terminal.command(
-    '/compose',
-    'Compose',
+    '/compose-configs',
+    'Compose configs',
     'Running configuration inspector',
     'Effective configuration and sources',
   );
@@ -302,7 +302,7 @@ test(
     // whose established filesystem verification uses a temporary proof file.
     await unchanged(f, original.session.id, before, relay, start);
 
-    await terminal.press('\x1b', 'Compose');
+    await terminal.press('\x1b', 'Compose configs');
     await terminal.choose('Effective configuration and sources', 'Saved composition preview');
     for (const [pointer, value] of [
       ['/model', 'fixture/alpha'],
@@ -327,11 +327,11 @@ test(
     );
     assert.ok(terminal.text().replace(/\s+/g, '').includes('[2,false,null]'));
     await terminal.press('\x1b', 'Saved composition preview');
-    await terminal.press('\x1b', 'Compose');
+    await terminal.press('\x1b', 'Compose configs');
     await terminal.choose('Running configuration inspector', 'Running configuration inspector');
     await refresh(terminal, relay);
     await defaults(terminal);
-    await terminal.press('\x1b', 'Compose');
+    await terminal.press('\x1b', 'Compose configs');
     await terminal.press('\x1b', 'Fixture Beta', 'ctrl+p', 'commands');
     // The saved preview is also persistent-state read-only; its transient proof
     // file is outside the running inspector's no-filesystem-probe assertion.
@@ -383,11 +383,11 @@ test(
     await refresh(terminal, relay);
     await agentAndParameters(terminal, 'low');
     await unchanged(f, original.session.id, before, relay, start);
-    await terminal.press('\x1b', 'Compose');
+    await terminal.press('\x1b', 'Compose configs');
     await terminal.press('\x1b', 'Fixture Beta', 'ctrl+p', 'commands');
     await open(terminal);
     await conversation(terminal, before);
-    await terminal.press('\x1b', 'Compose');
+    await terminal.press('\x1b', 'Compose configs');
     await terminal.press('\x1b', 'Fixture Beta', 'ctrl+p', 'commands');
     await unchanged(f, original.session.id, before, relay, start);
   },

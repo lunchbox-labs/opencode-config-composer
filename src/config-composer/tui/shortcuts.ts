@@ -29,7 +29,7 @@ export function profileShortcutRegistration(
         message:
           error instanceof SettingsError
             ? error.message
-            : 'Could not refresh profile shortcuts. Reopen Compose after checking the server connection.',
+            : 'Could not refresh profile shortcuts. Reopen Compose configs after checking the server connection.',
         duration: 8000,
       });
     }
@@ -57,7 +57,9 @@ export function profileShortcutRegistration(
         ? path.worktree
         : (path.directory ?? snapshot.root)) !== snapshot.sourceContext.root
     ) {
-      throw new SettingsError('The shortcut instance or connection changed. Refresh profile shortcuts in Compose.');
+      throw new SettingsError(
+        'The shortcut instance or connection changed. Refresh profile shortcuts in Compose configs.',
+      );
     }
   };
   const validate = async (snapshot: Snapshot, client: TuiPluginApi['client']) => {
@@ -116,13 +118,13 @@ export function profileShortcutRegistration(
                 assertContext(snapshot, client);
                 if (!isDeepStrictEqual(fresh.sources.registry.profileShortcuts?.[name], shortcut)) {
                   throw new SettingsError(
-                    `Shortcut /${name} changed. Refresh shortcuts in Compose before reviewing its new selection.`,
+                    `Shortcut /${name} changed. Refresh shortcuts in Compose configs before reviewing its new selection.`,
                   );
                 }
                 const validateCurrent = async () => {
                   await validate(fresh, client);
                   if (token !== generation) {
-                    throw new SettingsError('Shortcut registrations changed. Refresh shortcuts in Compose.');
+                    throw new SettingsError('Shortcut registrations changed. Refresh shortcuts in Compose configs.');
                   }
                 };
                 await validateCurrent();

@@ -39,7 +39,7 @@ references add no paths. Clearing a profile does not remove native skills or com
 Missing or disabled references are skipped while valid composition continues. A
 reference stays **pending** when discovery has not finished or cannot be checked.
 
-Open `/compose` → **Reference notices** to see affected names and their source locations.
+Open `/compose-configs` → **Reference notices** to see affected names and their source locations.
 This entry appears only when references need attention or validation is unavailable.
 A warning points to it when needed; ordinary menu reads do not repeat the warning.
 Correct the source and reload to refresh the notices.

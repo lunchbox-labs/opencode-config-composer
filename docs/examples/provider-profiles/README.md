@@ -8,12 +8,12 @@ This [configuration](config-composer.jsonc) switches the existing `build`, `plan
 | `anthropic` | `anthropic/claude-sonnet-4-5` |
 | `openai`    | `openai/gpt-5`                |
 
-Select `anthropic` or `openai` in `/compose`, then save and apply. Both profiles extend `coding`, which selects
+Select `anthropic` or `openai` in `/compose-configs`, then save and apply. Both profiles extend `coding`, which selects
 the same three agents before the model preset is applied. Prompts, permissions and agent definitions stay the same.
 
 To change the checkout's configured default, set `selection.defaultProfiles` to `["openai"]` in the local
 Composer file. The example's legacy `activeProfiles` is a fallback default, not the saved selection. A choice
-saved through `/compose` takes precedence over either field. Choose **Use configured defaults**, then save and
+saved through `/compose-configs` takes precedence over either field. Choose **Use configured defaults**, then save and
 apply, to discard the saved choice and follow the configured default again.
 
 An explicit model pin in an agent's OpenCode definition takes precedence over these group presets. Existing

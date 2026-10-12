@@ -19,7 +19,7 @@ These are rules for the listed tools and patterns; requests to other tools use O
 To give another developer the same rules, add its agent name to the developers group's `agents` list.
 No copy of the permission list is needed.
 
-Choose **Select no profiles** in `/compose`, then save and apply, to remove these permission contributions
+Choose **Select no profiles** in `/compose-configs`, then save and apply, to remove these permission contributions
 while leaving the agents and their instructions available. **Use configured defaults** instead clears the saved
 selection override and can reselect the `roles` profile. See the [permission ordering and fallback notes](../../../README.md#permissions) for overrides
 and the fallback used when a policy cannot be represented faithfully.
