@@ -222,3 +222,105 @@ test('applied choices reject malformed values and unsafe prototype keys', () => 
   }
   assert.equal(Object.hasOwn(Object.prototype, 'polluted'), false);
 });
+
+test('downstream prompt and template transformations preserve configuration baseline, revision and choices', () => {
+  const native = { worker: { prompt: 'Authored agent', model: 'fixture/native' } };
+  const config: Config = {
+    plugin: [packageName],
+    agent: structuredClone(native),
+    command: { check: { template: 'Authored command', agent: 'worker', subtask: true } },
+  };
+  const choices = { worker: { model: 'fixture/native' } };
+  publishRuntimeBaseline(config, {}, context, {}, native, { observedNativeFiles, revision, choices });
+  assert.ok(config.agent?.worker !== undefined && config.command?.check !== undefined);
+  config.agent.worker.prompt = 'Transformed agent';
+  config.command.check.template = 'Transformed command';
+  assert.deepEqual(readRuntimeBaseline(config, context).agent, native);
+  assert.deepEqual(readRuntimeRevision(config, context).revision, revision);
+  assert.deepEqual(readChoices(config, context).choices, choices);
+  assert.deepEqual(marker(config).appliedAgents, native, 'comparison must not mutate the published snapshot');
+});
+
+test('command-only body transformation does not invalidate applied revisions', () => {
+  const config: Config = { plugin: [packageName], command: { check: { template: 'Authored command' } } };
+  publishRuntimeBaseline(config, {}, context, {}, {}, { observedNativeFiles, revision });
+  assert.ok(config.command?.check !== undefined);
+  config.command.check.template = 'Transformed command';
+  assert.deepEqual(readRuntimeRevision(config, context).revision, revision);
+});
+
+test('body exemptions retain every other agent and command field and component identity check', () => {
+  const initial: Config = {
+    plugin: [packageName],
+    agent: { worker: { prompt: 'Authored', model: 'fixture/native', disable: false, options: { prompt: 'option' } } },
+    command: { check: { template: 'Authored', agent: 'worker', subtask: true } },
+  };
+  const changes: [string, (config: Config) => void][] = [
+    [
+      'agent model',
+      (config) => {
+        config.agent = { worker: { ...config.agent?.worker, model: 'fixture/later' } };
+      },
+    ],
+    [
+      'agent availability',
+      (config) => {
+        config.agent = { worker: { ...config.agent?.worker, disable: true } };
+      },
+    ],
+    [
+      'agent options',
+      (config) => {
+        config.agent = { worker: { ...config.agent?.worker, options: { prompt: 'changed' } } };
+      },
+    ],
+    [
+      'agent removed',
+      (config) => {
+        config.agent = {};
+      },
+    ],
+    [
+      'agent added',
+      (config) => {
+        config.agent = { ...config.agent, extra: { prompt: 'Body only' } };
+      },
+    ],
+    [
+      'command model',
+      (config) => {
+        config.command = { check: { template: 'Body', model: 'fixture/later', agent: 'worker', subtask: true } };
+      },
+    ],
+    [
+      'command route',
+      (config) => {
+        config.command = { check: { template: 'Body', agent: 'other', subtask: true } };
+      },
+    ],
+    [
+      'command subtask',
+      (config) => {
+        config.command = { check: { template: 'Body', agent: 'worker', subtask: false } };
+      },
+    ],
+    [
+      'command removed',
+      (config) => {
+        config.command = {};
+      },
+    ],
+    [
+      'command added',
+      (config) => {
+        config.command = { ...config.command, extra: { template: 'Body only' } };
+      },
+    ],
+  ];
+  for (const [name, change] of changes) {
+    const config = structuredClone(initial);
+    publishRuntimeBaseline(config, {}, context, {}, {}, { observedNativeFiles, revision, choices: {} });
+    change(config);
+    assert.throws(() => readChoices(config, context), SettingsError, name);
+  }
+});
