@@ -326,3 +326,41 @@ test('clearing a parent global override previews the original native baseline an
   assert.equal(preview.resolved.model, 'fixture/native');
   assert.equal(preview.resolved.agent.build.model, 'fixture/native');
 });
+
+test('native command names are selectable and saved through the group membership editor', async (t) => {
+  const { openAuthoring } = await import('../src/config-composer/tui/authoring.ts');
+  const root = await fixture(t);
+  const snapshot = await loadSnapshot(root, root, { commandNames: ['host-command'] });
+  interface Action {
+    value: string;
+    description?: string;
+    run: () => void | Promise<void>;
+  }
+  let actions: Action[] = [];
+  const ui = {
+    menu: (_title: string, next: Action[] | (() => Action[])) => {
+      actions = typeof next === 'function' ? next() : next;
+    },
+    prompt: () => {},
+    back: () => {},
+    refresh: () => {},
+    propose: async (_snapshot: typeof snapshot, change: Parameters<typeof planDefinition>[1]) => {
+      await save(planDefinition(snapshot, change));
+    },
+    groupModel: () => {},
+    presetModel: () => {},
+    createPreset: () => {},
+  };
+  openAuthoring(snapshot, ui);
+  for (const value of ['componentGroups', 'work', 'commands']) {
+    await actions.find((action) => action.value === value)!.run();
+  }
+  const command = actions.find((action) => action.value === 'member:host-command');
+  assert.ok(command !== undefined, 'host commands appear without a Composer definition');
+  assert.doesNotMatch(command.description ?? '', /unavailable/i);
+  await command.run();
+  await actions.find((action) => action.value === '+save')!.run();
+  const current = await loadSnapshot(root, root, { commandNames: ['host-command'] });
+  assert.deepEqual(current.sources.registry.componentGroups!.work.commands, ['host-command']);
+  assert.deepEqual(current.resolved.commands, {});
+});

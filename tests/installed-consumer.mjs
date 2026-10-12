@@ -76,6 +76,8 @@ for (const options of [undefined, {}, { reloadToken: 'fresh' }]) {
 const commands = [];
 let dispose;
 await tui.tui({
+  state: { path: { directory: root, worktree: root } },
+  client: { config: { get: async () => ({ error: 'offline fixture' }) } },
   ui: { toast: () => {} },
   lifecycle: {
     signal: new AbortController().signal,

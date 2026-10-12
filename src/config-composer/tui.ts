@@ -1,4 +1,6 @@
 import { verifySelectionProof } from './composition/selection-state.ts';
+import { readHostComponentInventory, referenceNotices } from './tui/reference-diagnostics.ts';
+import { referenceDescription } from './composition/reference-diagnostics.ts';
 import { verifyNativeAgents } from './composition/native-baseline.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { realpath } from 'node:fs/promises';
@@ -43,6 +45,7 @@ import { verifySharedFilesystem } from './connection.ts';
 import {
   type EditorNativeBaseline,
   readRuntimeBaseline,
+  readRuntimeReferenceDiagnostics,
   readRuntimeRevision,
   sameNativePermissionOrder,
 } from './composition/runtime-baseline.ts';
@@ -88,8 +91,9 @@ export function registerSettings(
       : join(homedir(), '.config'),
     'opencode',
   ),
-): { refreshShortcuts: () => Promise<void> } {
+): { refreshShortcuts: () => Promise<void>; refreshDiagnostics: () => Promise<void> } {
   const navigation = dialogNavigation(api);
+  const referenceWarnings = referenceNotices(api, directory);
   let busy = false;
   let nativeSaveNeedsRestart = false;
   let lastFailure: (ApplyFailure & { directory: string }) | undefined;
@@ -99,17 +103,24 @@ export function registerSettings(
     native: native.get(snapshot) ?? { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model },
   });
   const readNative = async (): Promise<EditorNativeBaseline> => {
-    const response: { error?: unknown; data?: Config | null } = await api.client.config.get();
-    if (Boolean(response.error) || response.data === undefined || response.data === null) {
-      throw new SettingsError(
-        'Could not read effective workspace defaults. Reopen the editor after checking the server.',
-      );
-    }
     const path = api.state.path as { worktree?: string; directory?: string };
     const root =
       typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
         ? path.worktree
         : (path.directory ?? directory);
+    const client = api.client;
+    const scope = { root, directory: path.directory ?? root };
+    const pathBefore = { worktree: path.worktree, directory: path.directory };
+    const signal = AbortSignal.any([api.lifecycle.signal, AbortSignal.timeout(5000)]);
+    const response: { error?: unknown; data?: Config | null } = await client.config.get(
+      { directory: scope.directory },
+      { signal },
+    );
+    if (Boolean(response.error) || response.data === undefined || response.data === null) {
+      throw new SettingsError(
+        'Could not read effective workspace defaults. Reopen the editor after checking the server.',
+      );
+    }
     const baseline = readRuntimeBaseline(response.data, { root, directory: path.directory ?? root }, directory);
     const hostState = api.state.path.state;
     if (
@@ -121,7 +132,20 @@ export function registerSettings(
         'The server selection state directory differs from OpenCode. Restart with matching state paths.',
       );
     }
-    return baseline;
+    const marker = readRuntimeReferenceDiagnostics(response.data, scope, directory);
+    const componentInventory = await readHostComponentInventory(client, scope.directory, signal);
+    const after = await client.config.get({ directory: scope.directory }, { signal });
+    if (
+      api.lifecycle.signal.aborted ||
+      api.client !== client ||
+      api.state.path.worktree !== pathBefore.worktree ||
+      api.state.path.directory !== pathBefore.directory ||
+      after.error !== undefined ||
+      readRuntimeReferenceDiagnostics(after.data, scope, directory).id !== marker.id
+    ) {
+      throw new SettingsError('The running instance changed during component discovery. Reopen the editor.');
+    }
+    return { ...baseline, componentInventory };
   };
   const refreshNative = async (snapshot: Snapshot) => {
     const models = await readNative();
@@ -452,6 +476,7 @@ export function registerSettings(
       assertInstance();
       // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Apply runs after all handlers initialize.
       await shortcuts.refresh();
+      await referenceWarnings.refresh(true);
       assertInstance();
       lastFailure = undefined;
       navigation.close();
@@ -1152,7 +1177,7 @@ export function registerSettings(
     if (!current()) {
       return;
     }
-    if (!('diagnostic' in snapshot)) {
+    if (!('diagnostic' in snapshot) && snapshot.resolved.diagnostics.length === 0) {
       navigation.alert({
         title: 'Saved membership is valid',
         message: 'No active membership errors need repair. Use the regular composition editors for other changes.',
@@ -1202,7 +1227,11 @@ export function registerSettings(
           'Save membership repair?',
           permissionReview(preview.resolved.permissionWarnings) +
             `${plan.description}\n\n${plan.selection === undefined ? plan.edits.map((edit) => edit.file.path).join('\n') : plan.snapshot.sources.selectionState?.path}\n\n` +
-            'The previous saved configuration is invalid; no effective before-state is available.\n' +
+            ('diagnostic' in snapshot
+              ? 'The previous saved configuration is invalid; no effective before-state is available.\n'
+              : 'Valid composition remains active; unresolved references are skipped.\n') +
+            preview.resolved.diagnostics.map(referenceDescription).join('\n') +
+            '\n' +
             `Validated candidate profiles: ${preview.sources.activeProfiles.length === 0 ? 'none' : preview.sources.activeProfiles.join(' → ')}.\n` +
             `Selected agents: ${preview.resolved.selectedAgents.length === 0 ? 'none' : preview.resolved.selectedAgents.join(', ')}.\n` +
             `Commands: ${Object.keys(preview.resolved.commands).length === 0 ? 'none' : Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
@@ -1272,10 +1301,30 @@ export function registerSettings(
       return run(() => runningInspector(true));
     });
   };
-  const composeMenu = () =>
+  const composeMenu = async () => {
+    const current = navigation.checkpoint();
+    await referenceWarnings.refresh(false);
+    if (!current()) {
+      return;
+    }
+    const notices = referenceWarnings.current();
     menu(
       'Compose',
       [
+        ...(notices.diagnostics.length === 0 && notices.unavailable === undefined
+          ? []
+          : [
+              {
+                title: 'Reference notices',
+                value: 'reference-notices',
+                description: notices.unavailable ?? `${notices.diagnostics.length} skipped or unverified references`,
+                run: () =>
+                  navigation.alert({
+                    title: 'Reference notices',
+                    message: `${notices.unavailable ?? notices.diagnostics.map(referenceDescription).join('\n\n')}\n\nValid composition remains active. Correct the named source or restore the host component, then reload. These notices do not grant or restrict permissions.`,
+                  }),
+              },
+            ]),
         {
           title: 'Refresh profile shortcuts',
           value: 'shortcuts',
@@ -1500,6 +1549,7 @@ export function registerSettings(
       undefined,
       true,
     );
+  };
   const unregister = api.keymap.registerLayer({
     commands: [
       {
@@ -1552,10 +1602,12 @@ export function registerSettings(
     unregister();
     shortcuts.dispose();
   });
-  return { refreshShortcuts: shortcuts.refresh };
+  return { refreshShortcuts: shortcuts.refresh, refreshDiagnostics: () => referenceWarnings.refresh(true) };
 }
 
 const ConfigComposerTui: TuiPlugin = async (api) => {
-  await registerSettings(api).refreshShortcuts();
+  const settings = registerSettings(api);
+  await settings.refreshShortcuts();
+  await settings.refreshDiagnostics();
 };
 export default { id: 'config-composer', tui: ConfigComposerTui } satisfies TuiPluginModule;

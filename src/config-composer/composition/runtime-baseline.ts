@@ -1,4 +1,9 @@
 import type { SelectionEnvironment } from './selection-state.ts';
+import {
+  type ComponentInventory,
+  type ReferenceDiagnostic,
+  readReferenceDiagnostics,
+} from './reference-diagnostics.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
@@ -95,6 +100,8 @@ export interface RuntimeLocation {
 }
 export interface EditorNativeBaseline extends NativeModels {
   selectionEnvironment?: SelectionEnvironment;
+  componentInventory?: ComponentInventory;
+  commandNames?: readonly string[];
   agent?: Record<string, AgentSettings>;
 }
 
@@ -125,7 +132,9 @@ export function publishRuntimeBaseline(
     selectionEnvironment?: SelectionEnvironment;
     revision?: CompositionRevision;
     observedNativeFiles: string;
+    commandNames?: readonly string[];
     choices?: Record<string, ResolvedModelSettings>;
+    diagnostics?: readonly ReferenceDiagnostic[];
   },
 ): void {
   const plugins = config.plugin ?? [];
@@ -162,6 +171,8 @@ export function publishRuntimeBaseline(
           : {
               observedNativeFiles: state.observedNativeFiles,
               ...(state.selectionEnvironment === undefined ? {} : { selectionEnvironment: state.selectionEnvironment }),
+              ...(state.diagnostics === undefined ? {} : { referenceDiagnostics: structuredClone(state.diagnostics) }),
+              ...((state.commandNames?.length ?? 0) > 0 ? { commandNames: [...(state.commandNames ?? [])] } : {}),
               ...(state.revision === undefined ? {} : { revision: structuredClone(state.revision) }),
               ...(state.choices === undefined ? {} : { appliedChoices: publishedChoices(state.choices) }),
               appliedCommands: structuredClone(config.command ?? {}),
@@ -216,6 +227,21 @@ export function readRuntimeBaseline(
   ) {
     return fail('The server returned invalid baseline metadata.');
   }
+  if (
+    marker.commandNames !== undefined &&
+    (!Array.isArray(marker.commandNames) || !marker.commandNames.every((name: unknown) => typeof name === 'string'))
+  ) {
+    return fail('The server returned invalid native command names.');
+  }
+  if (
+    marker.commandNames !== undefined &&
+    !isDeepStrictEqual(
+      configurationFields(marker.appliedCommands, 'template'),
+      configurationFields(config.command ?? {}, 'template'),
+    )
+  ) {
+    return fail('Commands changed after Composer applied its configuration.');
+  }
   const applied = {
     model: typeof config.model === 'string' ? config.model : null,
     small_model: typeof config.small_model === 'string' ? config.small_model : null,
@@ -259,6 +285,9 @@ export function readRuntimeBaseline(
   }
   return {
     ...(selectionEnvironment === undefined ? {} : { selectionEnvironment }),
+    ...(Array.isArray(marker.commandNames)
+      ? { commandNames: marker.commandNames.filter((name: unknown): name is string => typeof name === 'string') }
+      : {}),
     ...(marker.native.default_agent === null ? {} : { default_agent: marker.native.default_agent }),
     ...(marker.native.permission === null || marker.native.permission === undefined
       ? {}
@@ -384,4 +413,26 @@ export function readRuntimeChoices(
     }),
   );
   return { id: revision.id, choices: structuredClone(choices) };
+}
+
+/** Runtime notices are advisory metadata, not part of the effective configuration revision. */
+export function readRuntimeReferenceDiagnostics(
+  config: unknown,
+  location: RuntimeLocation,
+  registrationRoot = configurationDirectory(),
+): { id: string; diagnostics: ReferenceDiagnostic[] } {
+  readRuntimeBaseline(config, location, registrationRoot);
+  if (!record(config) || !Array.isArray(config.plugin)) {
+    throw new SettingsError('Runtime diagnostics are unavailable.');
+  }
+  const markers: unknown[] = config.plugin.flatMap((entry: unknown) =>
+    Array.isArray(entry) && serverEntry(entry[0], registrationRoot) && record(entry[1]) && Object.hasOwn(entry[1], key)
+      ? [entry[1][key]]
+      : [],
+  );
+  const marker = markers[0];
+  if (!record(marker) || typeof marker.id !== 'string') {
+    throw new SettingsError('Runtime diagnostics are unavailable.');
+  }
+  return { id: marker.id, diagnostics: readReferenceDiagnostics(marker.referenceDiagnostics ?? []) };
 }

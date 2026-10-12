@@ -679,6 +679,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
               workspace,
               path.directory ?? workspace,
               path.worktree ?? workspace,
+              updates,
             ),
           };
         },
@@ -1625,7 +1626,7 @@ test('group member picker repairs unavailable members and keeps component names 
   assert.deepEqual((await loadSnapshot(root)).sources.registry.componentGroups?.work.agents, ['+save']);
 });
 
-test('compose accumulates active membership repairs, rejects incomplete drafts, and saves without applying', async (t) => {
+test('compose accumulates membership corrections, permits skipped references, and saves without applying', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);
   await ui.freezeServer();
@@ -1646,8 +1647,10 @@ test('compose accumulates active membership repairs, rejects incomplete drafts, 
   await ui.select('+keep');
   await ui.select('\u0000back');
   await ui.select('+review');
-  assert.match(ui.toasts.at(-1)!.message, /also-removed/);
+  assert.equal(ui.title(), 'Save membership repair?');
+  assert.match(ui.message(), /also-removed/);
   assert.equal(await readFile(file, 'utf8'), before);
+  await ui.cancel();
   await ui.select('group:reviewers');
   await ui.select('agents');
   await ui.select('member:also-removed');
@@ -1655,7 +1658,7 @@ test('compose accumulates active membership repairs, rejects incomplete drafts, 
   await ui.select('\u0000back');
   await ui.select('+review');
   assert.equal(ui.title(), 'Save membership repair?');
-  assert.match(ui.message(), /previous saved configuration is invalid/i);
+  assert.match(ui.message(), /unresolved references are skipped/i);
   assert.match(ui.message(), /config-composer.jsonc/);
   await ui.cancel();
   assert.equal(await readFile(file, 'utf8'), before);
@@ -2164,17 +2167,23 @@ test('shortcut registration rejects native commands and later TUI aliases withou
   assert.equal(ui.updates, 0);
 });
 
-test('shortcut activation rejects disabled targets before saving its selected destination', async (t) => {
+test('shortcut activation saves selection while disabled targets remain skipped', async (t) => {
   const { root, path, source, ui } = await shortcutFixture(t);
-  source.componentGroups = { unavailable: { agents: ['disabled'] } };
+  source.componentGroups = {
+    ...(source.componentGroups as Record<string, unknown>),
+    unavailable: { agents: ['disabled'] },
+  };
   source.profiles = { blocked: { layers: [{ componentGroup: 'unavailable' }] } };
   source.activeProfiles = [];
   source.profileShortcuts = { quiet: { activeProfiles: ['blocked'] } };
   await writeFile(path, JSON.stringify(source));
   await ui.refreshShortcuts();
   await ui.command('config-composer.shortcut.quiet');
-  assert.match(ui.toasts.at(-1)!.message, /disabled/);
-  await assert.rejects(readFile(join(root, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+  await ui.confirm();
+  assert.deepEqual(
+    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
+    ['blocked'],
+  );
   assert.equal(ui.updates, 0);
 });
 
@@ -2286,4 +2295,48 @@ test('selection confirmation requires the server external state filesystem proof
     (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
     ['work'],
   );
+});
+
+test('compose only shows reference notices while running references need attention', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
+  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
+  await ui.escape();
+  const path = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(path, 'utf8'));
+  const groups = value.componentGroups as Record<string, Record<string, unknown>>;
+  groups.developers.agents = ['missing-agent'];
+  await writeFile(path, JSON.stringify(value));
+  await ui.command('config-composer.compose');
+  await ui.select('reference-notices');
+  assert.match(ui.message(), /missing-agent/);
+  assert.match(ui.message(), /Group developers/);
+  assert.match(ui.message(), /componentGroups\/developers\/agents\/0/);
+  assert.match(ui.message(), /Valid composition remains active/);
+  assert.equal(ui.toasts.length, 0, 'routine reads do not toast');
+  await ui.escape();
+  groups.developers.agents = ['builtin'];
+  await writeFile(path, JSON.stringify(value));
+  await ui.command('config-composer.compose');
+  assert.ok('options' in ui.dialog);
+  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
+});
+
+test('editor rejects a native baseline replaced during host inventory discovery', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  const first = (await ui.api.client.config.get()).data!;
+  const replacement = await editorServerConfig(root, { model: 'example/deep' });
+  let current = first;
+  Object.assign(ui.api.client.config, { get: async () => ({ data: current }) });
+  Object.assign(ui.api.client.app, {
+    skills: async () => {
+      current = replacement;
+      return { data: [] };
+    },
+  });
+  await ui.command();
+  assert.match(ui.toasts.at(-1)?.message ?? '', /instance changed during component discovery/i);
 });

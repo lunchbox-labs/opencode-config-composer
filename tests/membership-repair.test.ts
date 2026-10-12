@@ -38,19 +38,17 @@ async function fixture(t: TestContext) {
   return { root, file, native };
 }
 
-test('repair capture retains unresolved sources while normal snapshots still reject invalid active members', async (t) => {
+test('snapshots retain skipped reference diagnostics and valid composition while memberships are corrected', async (t) => {
   const f = await fixture(t);
-  await assert.rejects(
-    loadSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) }),
-    /removed.*unavailable/,
+  const snapshot = await loadSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) });
+  assert.deepEqual(
+    snapshot.resolved.diagnostics.map((item) => [item.name, item.status]),
+    [
+      ['removed', 'missing'],
+      ['dormant', 'disabled'],
+    ],
   );
-  const snapshot = await loadEditorSnapshot(f.root, f.root, {
-    selectionEnvironment: editorSelectionEnvironment(f.root),
-  });
-  assert.ok('diagnostic' in snapshot);
-  assert.equal(snapshot.diagnostic.group, 'work');
-  assert.match(snapshot.diagnostic.message, /removed.*unavailable/);
-  assert.equal('resolved' in snapshot, false, 'no fabricated effective state');
+  assert.equal(snapshot.resolved.agent.build.model, 'fixture/composed');
   assert.deepEqual(snapshot.sources.activeProfiles, ['work']);
   assert.deepEqual(snapshot.sources.registry.componentGroups?.work.agents, ['removed', 'dormant', 'build']);
   const plan = planDefinition(snapshot, {
@@ -71,9 +69,8 @@ test('repair capture retains unresolved sources while normal snapshots still rej
   assert.deepEqual(JSON.parse(await readFile(join(f.root, 'opencode.jsonc'), 'utf8')), f.native);
 });
 
-test('a still-invalid repair is rejected even when the save callback omits candidate validation', async (t) => {
+test('disabled references can be saved without enabling their target', async (t) => {
   const f = await fixture(t);
-  const before = await readFile(f.file, 'utf8');
   const snapshot = await loadEditorSnapshot(f.root, f.root, {
     selectionEnvironment: editorSelectionEnvironment(f.root),
   });
@@ -84,11 +81,10 @@ test('a still-invalid repair is rejected even when the save callback omits candi
     path: ['agents'],
     value: ['dormant'],
   });
-  await assert.rejects(
-    saveFilePlan(plan, async () => {}),
-    /dormant.*disabled/,
-  );
-  assert.equal(await readFile(f.file, 'utf8'), before);
+  await saveFilePlan(plan, async () => {});
+  const saved = await loadSnapshot(f.root, f.root, { selectionEnvironment: editorSelectionEnvironment(f.root) });
+  assert.equal(saved.resolved.diagnostics[0].status, 'disabled');
+  assert.equal(saved.resolved.agent.dormant.disable, true);
 });
 
 test('repair supports explicit local deactivation of read-only membership without rewriting the definition', async (t) => {
@@ -149,25 +145,26 @@ test('repair captures freshness and does not swallow unrelated source or runtime
   );
 });
 
-test('initial membership failure publishes an exact native repair baseline and rethrows without partial apply', async (t) => {
+test('skipped membership publishes the native baseline while applying valid members', async (t) => {
   const f = await fixture(t);
   const options = { configFile: f.file };
   const original = [[packageName, options]] satisfies NonNullable<Config['plugin']>;
   const config: Config = { ...structuredClone(f.native), plugin: original };
   const hooks = await server.server({ directory: f.root, worktree: f.root } as PluginInput, options);
-  await assert.rejects(hooks.config!(config), /removed.*unavailable/);
+  await hooks.config!(config);
   assert.deepEqual(readRuntimeBaseline(config, { root: f.root, directory: f.root }), {
     selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
     model: 'fixture/native',
     agent: f.native.agent,
   });
-  assert.deepEqual(config.agent, f.native.agent);
+  assert.deepEqual(config.agent?.dormant, f.native.agent?.dormant);
+  assert.equal(config.agent?.build?.model, 'fixture/composed');
   assert.equal(config.model, 'fixture/native');
   assert.deepEqual(original, [[packageName, { configFile: f.file }]], 'authored registration stays untouched');
   assert.deepEqual(JSON.parse(await readFile(join(f.root, 'opencode.jsonc'), 'utf8')), f.native);
 });
 
-test('several repairs in one source accumulate and preserve the draft until every active group resolves', async (t) => {
+test('several membership corrections preserve the draft and report remaining skipped references', async (t) => {
   const f = await fixture(t);
   const value = parseCompositionDocument(await readFile(f.file, 'utf8'), f.file);
   assert.ok(value.componentGroups !== undefined && value.profiles?.work.layers !== undefined);
@@ -178,7 +175,11 @@ test('several repairs in one source accumulate and preserve the draft until ever
     selectionEnvironment: editorSelectionEnvironment(f.root),
   });
   const members = [{ group: 'work', kind: 'agents' as const, members: ['build'] }];
-  await assert.rejects(previewFilePlan(planMembershipRepair(snapshot, { members })), /also-removed/);
+  assert.ok(
+    (await previewFilePlan(planMembershipRepair(snapshot, { members }))).resolved.diagnostics.some(
+      (item) => item.name === 'also-removed',
+    ),
+  );
   members.push({ group: 'other', kind: 'agents', members: ['plan'] });
   const plan = planMembershipRepair(snapshot, { members });
   assert.equal(plan.edits.length, 1);
@@ -209,7 +210,7 @@ test('a missing native frontmatter group can be defined in the chosen scope with
   assert.equal(await readFile(join(f.root, 'opencode.jsonc'), 'utf8'), nativeText);
 });
 
-test('membership failure on a reused config preserves last applied fields and the original native repair baseline', async (t) => {
+test('missing members on a reused config preserve valid composition and the original native baseline', async (t) => {
   const f = await fixture(t);
   const value = parseCompositionDocument(await readFile(f.file, 'utf8'), f.file);
   assert.ok(value.componentGroups !== undefined && value.profiles?.work.layers !== undefined);
@@ -223,7 +224,7 @@ test('membership failure on a reused config preserves last applied fields and th
   const applied = structuredClone({ ...config, plugin: undefined });
   value.componentGroups.work.agents.push('missing-later');
   await writeFile(f.file, JSON.stringify(value));
-  await assert.rejects(hooks.config!(config), /missing-later/);
+  await hooks.config!(config);
   assert.deepEqual({ ...config, plugin: undefined }, applied);
   assert.deepEqual(readRuntimeBaseline(config, { root: f.root, directory: f.root }), {
     selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },

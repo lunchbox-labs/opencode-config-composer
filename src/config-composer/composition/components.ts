@@ -206,11 +206,6 @@ export async function loadComponents(
     if (value.disable !== undefined) {
       metadata.disable = value.disable;
     }
-    for (const skill of value.skills ?? []) {
-      if (!Object.hasOwn(skills, skill)) {
-        throw new SettingsError(`Agent ${name} names missing skill ${skill}.`);
-      }
-    }
     agents[name] = { ...nativeAgent(metadata), prompt: file.body };
   }
   for (const [name, value] of Object.entries(components?.commands ?? {})) {

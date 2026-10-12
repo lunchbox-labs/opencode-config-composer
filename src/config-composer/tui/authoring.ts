@@ -73,7 +73,13 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
     const available =
       kind === 'agents'
         ? snapshot.agents.map((agent) => agent.name)
-        : Object.keys(snapshot.sources.registry.components?.[kind] ?? {});
+        : [
+            ...new Set([
+              ...Object.keys(snapshot.sources.registry.components?.[kind] ?? {}),
+              ...(kind === 'commands' ? (snapshot.nativeModels.commandNames ?? []) : []),
+              ...(snapshot.nativeModels.componentInventory?.[kind] ?? []).map((item) => item.name),
+            ]),
+          ];
     ui.menu(`${name}: ${kind}`, () => [
       {
         title: 'Save members…',

@@ -1,3 +1,4 @@
+import { type ReferenceDiagnostic, hostReferenceStatus } from './reference-diagnostics.ts';
 import { type AgentSettings, SettingsError, record } from '../settings.ts';
 import { type GlobalPermissionContribution, type PermissionWarning, resolvePermissions } from './permission-runtime.ts';
 import { loadComponents } from './components.ts';
@@ -7,7 +8,7 @@ import {
   inspectAvailability,
   validateAvailablePrimary,
 } from './agent-availability.ts';
-import { MembershipValidationError, resolveGroupAgentNames } from './membership.ts';
+import { resolveGroupAgentNames } from './membership.ts';
 import type { LoadedSources } from './sources.ts';
 import type {
   AgentConfiguration,
@@ -49,6 +50,7 @@ export interface ResolvedProfileRuntime {
   permissions: PermissionContribution[];
   commands: Awaited<ReturnType<typeof loadComponents>>['commands'];
   skillPaths: string[];
+  diagnostics: ReferenceDiagnostic[];
 }
 
 function part(key: string): string {
@@ -180,11 +182,30 @@ export async function resolveProfileRuntime(
   overlays: ReadonlyMap<string, string> = new Map(),
 ): Promise<ResolvedProfileRuntime> {
   const { registry } = sources;
+  const diagnostics: ReferenceDiagnostic[] = [];
   const groups = registry.componentGroups ?? {};
   const presets = registry.configurationPresets ?? {};
   const available: Record<string, AgentSettings> = Object.fromEntries(nativeAgentNames.map((name) => [name, {}]));
   Object.assign(available, structuredClone(native.agent ?? {}));
   const components = await loadComponents(sources, available, overlays);
+  for (const [name, definition] of Object.entries(registry.components?.agents ?? {})) {
+    for (const [index, member] of (definition.skills ?? []).entries()) {
+      if (Object.hasOwn(components.skills, member)) {
+        continue;
+      }
+      const status = hostReferenceStatus('skills', member, native.componentInventory);
+      if (status !== undefined) {
+        diagnostics.push({
+          kind: 'skills',
+          name: member,
+          status,
+          agent: name,
+          sourceId: sources.provenance[`/components/agents/${part(name)}`].sourceId,
+          pointer: `/components/agents/${part(name)}/skills/${index}`,
+        });
+      }
+    }
+  }
   Object.assign(available, components.agents);
   for (const [name, value] of Object.entries(native.composerOwnedAgents ?? {})) {
     available[name] = mergeAuthored(available[name] ?? {}, structuredClone(value));
@@ -197,7 +218,7 @@ export async function resolveProfileRuntime(
   const authoredBindings = new Map<string, string>();
   const variantOrigins = new Map<string, FieldOrigin>();
   const provenance: Record<string, FieldOrigin> = {};
-  const toggled = availabilityTargets(sources, available);
+  const toggled = availabilityTargets(sources, available, diagnostics);
   const availability = new Map<string, boolean>();
   // Explicit workflow decisions retain membership/configuration even when the final agent is disabled.
   for (const name of toggled) {
@@ -255,6 +276,45 @@ export async function resolveProfileRuntime(
     globalSettings(scope.value.overrides, origin(scope.id, '/overrides', 'overrides'));
   }
 
+  function validateSettings(value: AgentConfiguration, at: FieldOrigin) {
+    const visited = new Set<string>();
+    let current: ConfigurationPreset = value;
+    while (current.modelRef?.startsWith('preset:') === true) {
+      const name = current.modelRef.slice(7);
+      if (visited.has(name) || visited.size >= 32) {
+        throw new SettingsError(
+          `Model preset reference cycle or depth limit at ${name} (${at.sourceId ?? ''}#${at.pointer}).`,
+        );
+      }
+      if (!Object.hasOwn(presets, name)) {
+        throw new SettingsError(`Model preset ${name} does not exist.`);
+      }
+      visited.add(name);
+      current = presets[name];
+    }
+  }
+  function validateAgentDefinition(name: string) {
+    const value = registry.components?.agents?.[name]?.configuration;
+    if (value !== undefined) {
+      validateSettings(value, sources.provenance[`/components/agents/${part(name)}/configuration`]);
+    }
+  }
+  function diagnoseGroupAgents(name: string, profile: string) {
+    for (const [index, member] of (groups[name].agents ?? []).entries()) {
+      validateAgentDefinition(member);
+      if (!Object.hasOwn(available, member) || available[member].disable === true) {
+        diagnostics.push({
+          kind: 'agents',
+          name: member,
+          status: Object.hasOwn(available, member) ? 'disabled' : 'missing',
+          group: name,
+          profile,
+          sourceId: sources.provenance[`/componentGroups/${part(name)}`].sourceId,
+          pointer: `/componentGroups/${part(name)}/agents/${index}`,
+        });
+      }
+    }
+  }
   function apply(name: string, value: AgentConfiguration, at: FieldOrigin, explicit = false) {
     const resolved = resolveConfigurationSettings(value, at, {
       presets,
@@ -389,14 +449,35 @@ export async function resolveProfileRuntime(
   }
   function overrides(value: Record<string, AgentConfiguration> | undefined, at: FieldOrigin) {
     for (const [name, setting] of Object.entries(value ?? {})) {
+      validateAgentDefinition(name);
+      validateSettings(setting, { ...at, pointer: `${at.pointer}/agents/${part(name)}` });
+      if (!Object.hasOwn(available, name) || available[name].disable === true) {
+        diagnostics.push({
+          kind: 'agents',
+          name,
+          status: Object.hasOwn(available, name) ? 'disabled' : 'missing',
+          sourceId: at.sourceId,
+          pointer: `${at.pointer}/agents/${part(name)}`,
+          ...(at.layer.startsWith('profile:') ? { profile: at.layer.slice(8) } : {}),
+        });
+        continue;
+      }
       if (!selected.has(name)) {
         throw new SettingsError(`Agent ${name} must be selected before applying an override.`);
       }
       apply(name, setting, { ...at, pointer: `${at.pointer}/agents/${part(name)}` }, true);
     }
   }
+  for (const scope of sources.scopes) {
+    if (scope.value.defaults?.agents !== undefined) {
+      validateSettings(scope.value.defaults.agents, origin(scope.id, '/defaults/agents', 'defaults'));
+    }
+  }
   for (const occurrence of sources.orderedProfiles) {
     for (const [name, enabled] of Object.entries(occurrence.profile.agentAvailability ?? {})) {
+      if (!Object.hasOwn(available, name)) {
+        continue;
+      }
       availability.set(name, enabled);
       trace(`/agent/${part(name)}/disable`, {
         ...occurrence.origin,
@@ -411,26 +492,53 @@ export async function resolveProfileRuntime(
       if (layer.componentGroup !== undefined) {
         const name = layer.componentGroup;
         const group = groups[name];
-        for (const key of ['skills', 'commands'] as const) {
-          for (const member of group[key] ?? []) {
-            if (!Object.hasOwn(components[key], member)) {
-              throw new MembershipValidationError(
-                `Component group ${name} names missing ${key} component ${member}.`,
-                name,
-                member,
-                key,
-              );
+        for (const key of ['agents', 'commands', 'skills'] as const) {
+          for (const [index, member] of (group[key] ?? []).entries()) {
+            if (key === 'agents') {
+              validateAgentDefinition(member);
+            }
+            const status =
+              key === 'agents'
+                ? !Object.hasOwn(available, member)
+                  ? 'missing'
+                  : available[member].disable === true
+                    ? 'disabled'
+                    : undefined
+                : Object.hasOwn(components[key], member) ||
+                    (key === 'commands' && native.commandNames?.includes(member) === true)
+                  ? undefined
+                  : hostReferenceStatus(key, member, native.componentInventory);
+            if (status !== undefined) {
+              diagnostics.push({
+                kind: key,
+                name: member,
+                status,
+                group: name,
+                profile: occurrence.name,
+                sourceId: sources.provenance[`/componentGroups/${part(name)}`].sourceId,
+                pointer: `/componentGroups/${part(name)}/${key}/${index}`,
+              });
             }
           }
         }
         for (const skill of group.skills ?? []) {
-          skillPaths.add(components.skills[skill]);
+          if (Object.hasOwn(components.skills, skill)) {
+            skillPaths.add(components.skills[skill]);
+          }
         }
         for (const command of group.commands ?? []) {
-          commands[command] = components.commands[command];
+          if (Object.hasOwn(components.commands, command)) {
+            if (native.commandNames?.includes(command) === true) {
+              throw new SettingsError(`Component command ${command} conflicts with an existing native command.`);
+            }
+            commands[command] = components.commands[command];
+          }
         }
         const members = resolveGroupAgentNames(name, groups, available);
         const at = { ...sources.provenance[`/componentGroups/${part(name)}`], layer: `profile:${occurrence.name}` };
+        if (group.configuration !== undefined) {
+          validateSettings(group.configuration, { ...at, pointer: `${at.pointer}/configuration` });
+        }
         for (const member of members) {
           select(member);
           if (groups[name].configuration !== undefined) {
@@ -438,13 +546,31 @@ export async function resolveProfileRuntime(
           }
         }
       } else {
+        validateSettings(presets[layer.configurationPreset], {
+          ...sources.provenance[`/configurationPresets/${part(layer.configurationPreset)}`],
+          layer: `profile:${occurrence.name}`,
+        });
         const target = new Set(layer.target.agents ?? []);
         for (const group of layer.target.componentGroups ?? []) {
-          for (const name of resolveGroupAgentNames(group, groups, available)) {
+          const members = resolveGroupAgentNames(group, groups, available);
+          diagnoseGroupAgents(group, occurrence.name);
+          for (const name of members) {
             target.add(name);
           }
         }
         for (const name of target) {
+          validateAgentDefinition(name);
+          if (!Object.hasOwn(available, name) || available[name].disable === true) {
+            diagnostics.push({
+              kind: 'agents',
+              name,
+              status: Object.hasOwn(available, name) ? 'disabled' : 'missing',
+              profile: occurrence.name,
+              sourceId: occurrence.origin.sourceId,
+              pointer: `${occurrence.origin.pointer}/layers/${(occurrence.profile.layers ?? []).indexOf(layer)}/target/agents`,
+            });
+            continue;
+          }
           if (!selected.has(name)) {
             throw new SettingsError(
               `Agent ${name} must be selected before assigning preset ${layer.configurationPreset}.`,
@@ -497,12 +623,26 @@ export async function resolveProfileRuntime(
         (agent[command.agent] ?? available[command.agent]).disable === true ||
         (Object.hasOwn(components.agents, command.agent) && !selected.has(command.agent)))
     ) {
-      throw new SettingsError(`Command ${name} names unavailable or unselected agent ${command.agent}.`);
+      diagnostics.push({
+        kind: 'agents',
+        name: command.agent,
+        status: !Object.hasOwn(available, command.agent)
+          ? 'missing'
+          : (agent[command.agent] ?? available[command.agent]).disable === true
+            ? 'disabled'
+            : 'unselected',
+        command: name,
+        sourceId: sources.provenance[`/components/commands/${part(name)}`].sourceId,
+        pointer: `/components/commands/${part(name)}/agent`,
+      });
+      Reflect.deleteProperty(commands, name);
+      continue;
     }
   }
   const compiledPermissions = resolvePermissions(native.permission, agent, globalPermissions, permissions, provenance);
   return {
     ...compiledPermissions,
+    diagnostics,
     globalPermissions,
     agent,
     commands,

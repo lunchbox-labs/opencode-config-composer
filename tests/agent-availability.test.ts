@@ -21,7 +21,7 @@ async function fixture(t: TestContext, document: unknown) {
   };
 }
 
-test('availability accepts only named booleans and rejects missing and internal targets with declaring pointers', async (t) => {
+test('availability accepts only named booleans and reports missing and rejects internal targets with declaring pointers', async (t) => {
   assert.deepEqual(
     readCompositionDocument({ profiles: { work: { agentAvailability: { build: false } } } }).profiles?.work
       .agentAvailability,
@@ -31,7 +31,9 @@ test('availability accepts only named booleans and rejects missing and internal 
     () => readCompositionDocument({ profiles: { work: { agentAvailability: { build: 'disable' } } } }),
     /agentAvailability/,
   );
-  for (const name of ['missing', 'title', 'summary', 'compaction']) {
+  const missing = await fixture(t, { profiles: { work: { agentAvailability: { missing: false } } } });
+  assert.equal((await missing.resolve()).diagnostics[0].pointer, '/profiles/work/agentAvailability/missing');
+  for (const name of ['title', 'summary', 'compaction']) {
     const f = await fixture(t, { profiles: { work: { agentAvailability: { [name]: false } } } });
     await assert.rejects(
       f.resolve(),
@@ -117,7 +119,9 @@ test('hidden enabled agents stay hidden and selected commands cannot route to di
       activeProfiles: ['work'],
     }),
   );
-  await assert.rejects(f.resolve(), /Command plan names unavailable/);
+  const disabled = await f.resolve();
+  assert.deepEqual(disabled.commands, {});
+  assert.equal(disabled.diagnostics[0].status, 'disabled');
 });
 
 test('removing the last availability decision cannot leave an unavailable native default', async (t) => {

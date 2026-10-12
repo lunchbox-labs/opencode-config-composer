@@ -1,4 +1,11 @@
 import { publishSelectionProof, selectionLifetime, selectionStateDirectory } from './composition/selection-state.ts';
+import {
+  type ComponentInventory,
+  type ReferenceDiagnostic,
+  readComponentInventory,
+  referenceDescription,
+  validateReferenceDiagnostics,
+} from './composition/reference-diagnostics.ts';
 import { validateShortcutCommands } from './composition/shortcuts.ts';
 import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
@@ -50,6 +57,47 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     native: Record<string, unknown>;
     applied: Record<string, unknown>;
     owned: boolean;
+  }
+  let referenceDiagnostics: ReferenceDiagnostic[] = [];
+  let inventory: Promise<ComponentInventory> | undefined;
+  let validationGeneration = 0;
+  let lastReferenceNotice = '';
+  async function validateReferences() {
+    if (referenceDiagnostics.length === 0) {
+      return;
+    }
+    const generation = validationGeneration;
+    const pending = referenceDiagnostics.some((item) => item.status === 'pending');
+    inventory ??= pending
+      ? (async (): Promise<ComponentInventory> => {
+          try {
+            const response = await input.client.command.list({
+              query: { directory: input.directory },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (response.error !== undefined) {
+              return {};
+            }
+            return { commands: readComponentInventory(response.data) };
+          } catch {
+            // Only an inventory read failed. This cannot establish that a reference is missing.
+            return {};
+          }
+        })()
+      : Promise.resolve({});
+    const current = await inventory;
+    if (generation !== validationGeneration) {
+      return;
+    }
+    if (pending && current.commands === undefined) {
+      inventory = undefined;
+    }
+    const diagnostics = validateReferenceDiagnostics(referenceDiagnostics, current);
+    const notice = diagnostics.map(referenceDescription).join('\n\n');
+    if (notice !== '' && notice !== lastReferenceNotice) {
+      console.error(`[Config Composer] Reference notices. Run /compose to inspect.\n${notice}`);
+    }
+    lastReferenceNotice = notice;
   }
   const agentSnapshots = new WeakMap<object, Authored>();
   const resources = new WeakMap<
@@ -112,7 +160,11 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     return result;
   }
   return {
+    'command.execute.before': async () => {
+      await validateReferences();
+    },
     'chat.message': async (input, output) => {
+      await validateReferences();
       await notifications.session(input.sessionID, output.message.agent);
     },
     config: async (config: Config & Pick<NativeConfig, 'skills' | 'default_agent'>) => {
@@ -151,30 +203,6 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           staged[name] = restored;
         }
       }
-      const nextSources = await loadCompositionSources(context);
-      const inputs = await captureCompositionInputs(nextSources);
-      const observedNativeFiles = await observeNativeFiles();
-      let resolved: Awaited<ReturnType<typeof resolveProfileRuntime>>;
-      try {
-        resolved = await resolveProfileRuntime(
-          nextSources,
-          { ...nativeGlobals, agent: staged, composerOwnedAgents: owned },
-          new Map(inputs.map((file) => [file.path, file.text])),
-        );
-      } catch (error) {
-        if (error instanceof MembershipValidationError) {
-          // Expose exact inspection inputs without applying any part of the invalid composition.
-          publishRuntimeBaseline(
-            config,
-            options,
-            { root: context.root, directory: input.directory },
-            nativeGlobals,
-            staged,
-            { observedNativeFiles, selectionEnvironment },
-          );
-        }
-        throw error;
-      }
       const previousResources = resources.get(config);
       const nativeCommands = restore(config.command ?? {}, previousResources?.commands);
       for (const [name, command] of Object.entries(nativeCommands)) {
@@ -188,6 +216,30 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       }
       if (!commandConfigurations(nativeCommands)) {
         throw new SettingsError('Native commands must contain valid templates.');
+      }
+      const nextSources = await loadCompositionSources(context);
+      const inputs = await captureCompositionInputs(nextSources);
+      const observedNativeFiles = await observeNativeFiles();
+      let resolved: Awaited<ReturnType<typeof resolveProfileRuntime>>;
+      try {
+        resolved = await resolveProfileRuntime(
+          nextSources,
+          { ...nativeGlobals, agent: staged, composerOwnedAgents: owned, commandNames: Object.keys(nativeCommands) },
+          new Map(inputs.map((file) => [file.path, file.text])),
+        );
+      } catch (error) {
+        if (error instanceof MembershipValidationError) {
+          // Expose exact inspection inputs without applying any part of the invalid composition.
+          publishRuntimeBaseline(
+            config,
+            options,
+            { root: context.root, directory: input.directory },
+            nativeGlobals,
+            staged,
+            { observedNativeFiles, selectionEnvironment, commandNames: Object.keys(nativeCommands) },
+          );
+        }
+        throw error;
       }
       for (const name of Object.keys(resolved.commands)) {
         if (Object.hasOwn(nativeCommands, name)) {
@@ -258,13 +310,26 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           [bundledSkillDirectory, ...resolved.skillPaths].filter((path) => !nativePaths.includes(path)),
         ),
       });
+      referenceDiagnostics = resolved.diagnostics;
+      validationGeneration++;
+      inventory = undefined;
+      if (referenceDiagnostics.length === 0) {
+        lastReferenceNotice = '';
+      }
       publishRuntimeBaseline(
         config,
         options,
         { root: context.root, directory: input.directory },
         nativeGlobals,
         staged,
-        { revision, observedNativeFiles, selectionEnvironment, choices: resolved.choices },
+        {
+          revision,
+          observedNativeFiles,
+          selectionEnvironment,
+          choices: resolved.choices,
+          commandNames: Object.keys(nativeCommands),
+          diagnostics: resolved.diagnostics,
+        },
       );
       await notifications.applied(resolved.permissionWarnings);
     },

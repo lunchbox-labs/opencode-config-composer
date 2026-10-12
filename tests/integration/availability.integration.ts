@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { availabilityFixture } from './availability-fixture.ts';
 import { bundledPermissions } from './bundled-permissions.ts';
@@ -108,7 +108,6 @@ test(
         { title: true },
         { summary: false },
         { compaction: true },
-        { missing: true },
       ]) {
         await assert.rejects(
           f.saveDefinition({
@@ -123,6 +122,18 @@ test(
         assert.equal(await readFile(f.paths.shared, 'utf8'), before);
         assert.deepEqual(await f.agents(), list);
       }
+      const skipped = await f.saveDefinition({
+        operation: 'patch',
+        registry: 'profiles',
+        name: 'restored',
+        path: ['agentAvailability'],
+        value: { ...(await f.document(f.paths.shared)).profiles!.restored.agentAvailability, missing: true },
+      });
+      assert.ok(
+        skipped.preview.resolved.diagnostics.some((item) => item.name === 'missing' && item.status === 'missing'),
+      );
+      assert.deepEqual(await f.agents(), list, 'saving an unresolved target leaves native execution unchanged');
+      await writeFile(f.paths.shared, before);
       assert.equal((await f.send('worker')).captured.model, 'beta');
     });
 

@@ -1002,7 +1002,16 @@ export async function plannedChoices(
       : change.kind === 'all'
         ? { ...native, model: change.choice.model, small_model: change.choice.model }
         : native;
-  const resolved = await resolveProfileRuntime(sources, { ...defaults, agent: agents }, overlays);
+  const resolved = await resolveProfileRuntime(
+    sources,
+    {
+      ...defaults,
+      commandNames: snapshot.nativeModels.commandNames,
+      componentInventory: snapshot.nativeModels.componentInventory,
+      agent: agents,
+    },
+    overlays,
+  );
   const choices: (ModelChoice & { parameters?: ConfigurationParameters })[] = Object.entries(resolved.choices)
     .filter(([name, choice]) => {
       const previous = Object.hasOwn(snapshot.resolved.choices, name) ? snapshot.resolved.choices[name] : undefined;
@@ -1231,10 +1240,9 @@ async function persistFilePlan(
     }
     // Detect newly added agents before approving a group-wide preview.
     await observedSourceList(plan.snapshot);
-    if ('diagnostic' in plan.snapshot) {
-      // Inspection can remain unresolved; persistence requires a complete valid candidate.
-      await previewFilePlan(plan);
-    }
+    // Capture newly reachable inputs even when unresolved names are now nonfatal notices.
+    // Malformed sources and unsafe reads still reject before the asynchronous validation window.
+    await previewFilePlan(plan);
     await validate();
     // Validation can await remote catalogs or confirmation checks; include sources added during that wait.
     await observedSourceList(plan.snapshot);

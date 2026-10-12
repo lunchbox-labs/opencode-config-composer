@@ -109,7 +109,7 @@ test('packaged migration retains native Markdown bytes and pins while mapping le
   assert.equal(await readFile(agentFile, 'utf8'), native);
 });
 
-test('bundled guidance remains available when legacy or invalid active membership prevents composition', async (t) => {
+test('bundled guidance remains available when legacy settings fail or missing memberships are skipped', async (t) => {
   for (const value of [
     { agent: { groups: {} } },
     {
@@ -126,13 +126,14 @@ test('bundled guidance remains available when legacy or invalid active membershi
       agent: { worker: { prompt: 'Native body' } },
       skills: { paths: ['/native-skills'] },
     };
-    await assert.rejects(
-      hooks.config!(config as PluginConfig),
-      /Legacy composition keys|missing.*agent|missing or disabled/,
-    );
+    if ('agent' in value) {
+      await assert.rejects(hooks.config!(config as PluginConfig), /Legacy composition keys/);
+    } else {
+      await hooks.config!(config as PluginConfig);
+    }
     assert.equal(config.model, 'fixture/native');
     assert.deepEqual(config.agent, { worker: { prompt: 'Native body' } });
-    assert.equal(config.command, undefined);
+    assert.deepEqual(config.command ?? {}, {});
     assert.deepEqual(config.skills?.paths, ['/native-skills', bundledSkillDirectory]);
   }
 });

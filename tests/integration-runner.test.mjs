@@ -22,6 +22,8 @@ test('CI suites partition every portable integration file exactly once', async (
     'tests/config-composer.native.ts',
     'tests/composition-profiles.native.ts',
     'tests/canonical-permissions.native.ts',
+    'tests/native-command-references.native.ts',
+    'tests/native-component-references.native.ts',
     ...(await readdir(new URL('./integration/', import.meta.url)))
       .filter((name) => /\.integration\.(?:ts|mjs)$/.test(name))
       .map((name) => `tests/integration/${name}`),
@@ -115,3 +117,11 @@ test(
     }
   },
 );
+
+test('native discovery has its own bounded CI partition instead of consuming the core suite budget', () => {
+  assert.deepEqual(integrationFiles('discovery'), [
+    'tests/native-command-references.native.ts',
+    'tests/native-component-references.native.ts',
+  ]);
+  assert.ok(integrationFiles('core').every((file) => !file.includes('-references.native.ts')));
+});
