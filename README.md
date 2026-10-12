@@ -206,9 +206,8 @@ For dynamically composing agent prompts, see the standalone [Prompt Composer](ht
 
 ## Reference and development
 
-See the [configuration reference](docs/composition-schema.md) and [schema.json](schema.json) for field constraints
-and migration. Composer includes `config-composer-create`, `config-composer-explain` and `config-composer-migrate`
-guidance skills.
+See the [configuration reference](docs/composition-schema.md) and [schema.json](schema.json) for field constraints.
+Composer includes `config-composer-create` and `config-composer-explain` guidance skills.
 
 Development requires Node 22.18 or newer and npm. Run `npm ci` and `npm run check` for typechecking, lint,
 formatting, unit tests and the installed-package test. `npm run test:native` uses `OPENCODE_BIN`, Python 3 and

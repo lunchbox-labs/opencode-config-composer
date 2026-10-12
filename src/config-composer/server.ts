@@ -168,7 +168,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       await notifications.session(input.sessionID, output.message.agent);
     },
     config: async (config: Config & Pick<NativeConfig, 'skills' | 'default_agent'>) => {
-      // Packaged help stays discoverable even when a source requires migration or repair.
+      // Packaged help stays discoverable even when a source requires repair.
       config.skills = {
         ...config.skills,
         paths: [...new Set([...(config.skills?.paths ?? []), bundledSkillDirectory])],

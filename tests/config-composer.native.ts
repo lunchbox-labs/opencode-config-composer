@@ -236,7 +236,7 @@ test(
     assert.equal(toolMessage?.content, skillOutput, 'the next provider request receives the native skill result');
     assert.equal((await request('main-follower')).info.modelID, 'beta');
     assert.equal((await request('small-follower')).info.modelID, 'beta');
-    for (const name of ['config-composer-explain', 'config-composer-create', 'config-composer-migrate']) {
+    for (const name of ['config-composer-explain', 'config-composer-create']) {
       const beforeGuidance = requests.length;
       const session = await api<{ id: string }>('/session', { title: `Bundled guidance ${name}` });
       await api(`/session/${session.id}/message`, {
@@ -778,31 +778,27 @@ test(
     assert.equal((await request('worker')).info.error, undefined);
     assert.equal(await readFile(nativePath, 'utf8'), nativeBeforeEdit, 'workflow toggles never rewrite native JSON');
     await writeFile(settingsPath, availableSource);
-    // Migration help must load through the native host while the source is rejected.
-    const legacy = await readFile(
-      join(installed.directory, 'skills/config-composer-migrate/examples/before.jsonc'),
-      'utf8',
-    );
-    await writeFile(settingsPath, legacy);
+    // Packaged guidance remains available while invalid configuration is rejected.
+    await writeFile(settingsPath, JSON.stringify({ unexpected: {} }));
     await reload();
     const rejected = await api<{ agent?: Record<string, unknown>; skills?: { paths?: string[] } }>('/config');
-    assert.equal(rejected.agent?.['component-worker'], undefined, 'legacy rejection applies no component agents');
+    assert.equal(rejected.agent?.['component-worker'], undefined, 'invalid configuration applies no component agents');
     assert.ok(
       (await Promise.all((rejected.skills?.paths ?? []).map((path) => realpath(path)))).includes(
         await realpath(join(installed.directory, 'skills')),
       ),
     );
-    const migration = await api<{ id: string }>('/session', { title: 'Migration from rejected Composer source' });
-    await api(`/session/${migration.id}/message`, {
+    const guidance = await api<{ id: string }>('/session', { title: 'Guidance for invalid configuration' });
+    await api(`/session/${guidance.id}/message`, {
       agent: 'main-follower',
-      parts: [{ type: 'text', text: 'Load config-composer-migrate now.' }],
+      parts: [{ type: 'text', text: 'Load config-composer-explain now.' }],
     });
-    const migrationMessages = await api<Message[]>(`/session/${migration.id}/message`);
+    const guidanceMessages = await api<Message[]>(`/session/${guidance.id}/message`);
     assert.equal(
-      migrationMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill')?.state?.status,
+      guidanceMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill')?.state?.status,
       'completed',
     );
-    assert.match(harness.stderr, /Legacy composition keys are not supported/);
+    assert.match(harness.stderr, /must NOT have additional properties/);
     for (const body of requests) {
       const { messages: _messages, tools: _tools, ...parameters } = body;
       assert.doesNotMatch(JSON.stringify(parameters), /agent_group|modelRef|modelPresets|configFile/);

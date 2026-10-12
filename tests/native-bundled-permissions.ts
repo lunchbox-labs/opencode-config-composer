@@ -8,7 +8,7 @@ export interface NativePermissionRule {
 }
 
 export function normalizeBundledPermissions(rules: NativePermissionRule[], directory: string): NativePermissionRule[] {
-  const bundledPatterns = ['config-composer-explain', 'config-composer-create', 'config-composer-migrate'].map(
+  const bundledPatterns = ['config-composer-explain', 'config-composer-create'].map(
     (name) => `${join(directory, 'skills', name)}/*`,
   );
   const positions = rules.flatMap((rule, index) => (bundledPatterns.includes(rule.pattern) ? [index] : []));

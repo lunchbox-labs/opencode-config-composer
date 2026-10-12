@@ -1,6 +1,6 @@
 # Canonical composition reference
 
-Use the installed package's `schema.json` to validate JSONC. Legacy keys are rejected with migration guidance.
+Use the installed package's `schema.json` to validate JSONC.
 OpenCode's native configuration stays in its own files. Composer's default shared source is
 `config-composer.jsonc` beside the native global configuration; an explicit plugin `configFile` is supported.
 

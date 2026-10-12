@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Config as PluginConfig, PluginInput } from '@opencode-ai/plugin';
@@ -10,9 +10,6 @@ import { bundledSkillDirectory, validateBundledSkills } from '../src/config-comp
 import { parseCompositionDocument } from '../src/config-composer/composition/document.ts';
 import { loadCompositionSources } from '../src/config-composer/composition/sources.ts';
 import { resolveProfileRuntime } from '../src/config-composer/composition/runtime.ts';
-import { loadSnapshot } from '../src/config-composer/storage.ts';
-import { readSettings } from '../src/config-composer/settings.ts';
-import { packageName } from '../src/config-composer/package-name.ts';
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'composer-guidance-'));
@@ -21,6 +18,14 @@ async function fixture(t: TestContext) {
   await writeFile(file, '{}');
   return { root, file };
 }
+
+test('bundled guidance provides creation and explanation skills', async () => {
+  assert.deepEqual((await readdir(bundledSkillDirectory)).sort(), [
+    'config-composer-create',
+    'config-composer-explain',
+  ]);
+  await validateBundledSkills();
+});
 
 test('bundled explanation guidance has a native skill identity and a packaged relative reference', async () => {
   await validateBundledSkills();
@@ -89,29 +94,9 @@ test('packaged creation example resolves native built-ins, mixed components, and
   assert.deepEqual(resolved.permissionWarnings, []);
 });
 
-test('packaged migration retains native Markdown bytes and pins while mapping legacy group settings', async (t) => {
-  const f = await fixture(t);
-  const base = join(bundledSkillDirectory, 'config-composer-migrate/examples');
-  const before = await readFile(join(base, 'before.jsonc'), 'utf8');
-  assert.doesNotThrow(() => readSettings(JSON.parse(before)));
-  assert.throws(() => parseCompositionDocument(before), /Legacy composition keys/);
-  const native = await readFile(join(base, 'worker.md'), 'utf8');
-  await mkdir(join(f.root, 'agents'));
-  const agentFile = join(f.root, 'agents/worker.md');
-  await writeFile(agentFile, native);
-  await writeFile(join(f.root, 'opencode.jsonc'), JSON.stringify({ plugin: [[packageName, { configFile: f.file }]] }));
-  await writeFile(f.file, await readFile(join(base, 'after.jsonc'), 'utf8'));
-  const snapshot = await loadSnapshot(f.root);
-  assert.deepEqual(snapshot.sources.activeProfiles, ['migrated']);
-  assert.equal(snapshot.resolved.agent.worker.model, 'fixture/pinned');
-  assert.deepEqual(snapshot.resolved.agent.worker.permission, { bash: 'ask' });
-  assert.equal(snapshot.resolved.agent.worker.prompt, 'Keep this native body.');
-  assert.equal(await readFile(agentFile, 'utf8'), native);
-});
-
-test('bundled guidance remains available when legacy settings fail or missing memberships are skipped', async (t) => {
+test('bundled guidance remains available when settings fail or missing memberships are skipped', async (t) => {
   for (const value of [
-    { agent: { groups: {} } },
+    { unexpected: {} },
     {
       componentGroups: { work: { agents: ['missing'] } },
       profiles: { work: { layers: [{ componentGroup: 'work' }] } },
@@ -126,8 +111,8 @@ test('bundled guidance remains available when legacy settings fail or missing me
       agent: { worker: { prompt: 'Native body' } },
       skills: { paths: ['/native-skills'] },
     };
-    if ('agent' in value) {
-      await assert.rejects(hooks.config!(config as PluginConfig), /Legacy composition keys/);
+    if ('unexpected' in value) {
+      await assert.rejects(hooks.config!(config as PluginConfig), /must NOT have additional properties/);
     } else {
       await hooks.config!(config as PluginConfig);
     }
