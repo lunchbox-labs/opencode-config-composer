@@ -99,34 +99,8 @@ test('runtime publishes exact applied revisions and invalid membership never cla
   assert.equal(marker().revision, undefined, 'a rejected candidate must not retain the old applied attestation');
 });
 
-test('revision agrees between editor and server when a component also appears through multiple include roots', async (t) => {
-  const f = await fixture(t, {
-    components: {
-      prompts: { shared: { file: './snippet.md' } },
-      agents: { worker: { prompt: '{{include:@a/snippet.md}} {{include:@b/snippet.md}}' } },
-    },
-    sourceDirectories: { a: '.', b: '.' },
-    componentGroups: { work: { agents: ['worker'] } },
-    profiles: { work: { layers: [{ componentGroup: 'work' }] } },
-    activeProfiles: ['work'],
-  });
-  await writeFile(join(f.root, 'snippet.md'), 'Shared body');
-  await writeFile(join(f.root, 'opencode.jsonc'), JSON.stringify({ plugin: [[packageName, { configFile: f.file }]] }));
-  const config: Config = { plugin: [[packageName, { configFile: f.file }]] };
-  await f.hooks.config!(config);
-  const { loadSnapshot } = await import('../src/config-composer/storage.ts');
-  const { compositionRevision } = await import('../src/config-composer/composition/revision.ts');
-  const { readRuntimeRevision } = await import('../src/config-composer/composition/runtime-baseline.ts');
-  const snapshot = await loadSnapshot(f.root);
-  assert.deepEqual(
-    readRuntimeRevision(config, { root: f.root, directory: f.root }, f.root).revision,
-    compositionRevision(snapshot.sources, snapshot.resolved, snapshot.files),
-  );
-  assert.equal(agent(config, 'worker')?.prompt, 'Shared body Shared body');
-});
-
 test('revision excludes native-only aliases of a Composer component without losing their identity checks', async (t) => {
-  const f = await fixture(t, { components: { prompts: { shared: { file: './prompt-alias.md' } } } });
+  const f = await fixture(t, { components: { commands: { shared: { file: './prompt-alias.md' } } } });
   await mkdir(join(f.root, 'agents'));
   await writeFile(join(f.root, 'agents/worker.md'), '---\nmode: primary\n---\nNative body');
   await symlink(join(f.root, 'agents/worker.md'), join(f.root, 'prompt-alias.md'));
@@ -284,10 +258,10 @@ test('imported agent files retain frontmatter and activate only through selected
     JSON.stringify({
       components: {
         agents: {
-          reviewer: { file: './reviewer.md', promptRefs: ['scope'], skills: ['checks'] },
+          reviewer: { file: './reviewer.md', skills: ['checks'] },
           idle: { prompt: 'Inactive' },
         },
-        prompts: { scope: { file: './scope.md' } },
+
         skills: { checks: { file: './checks/SKILL.md' } },
         commands: { review: { agent: 'reviewer', template: 'Review $ARGUMENTS' } },
       },
@@ -309,7 +283,7 @@ test('imported agent files retain frontmatter and activate only through selected
   assert.equal(agent(config, 'reviewer')?.description, 'Fixture reviewer');
   assert.equal(agent(config, 'reviewer')?.mode, 'subagent');
   assert.deepEqual(agent(config, 'reviewer')?.permission, { edit: 'deny' });
-  assert.equal(agent(config, 'reviewer')?.prompt, 'Review body.\n\nShared scope.');
+  assert.equal(agent(config, 'reviewer')?.prompt, 'Review body.');
   assert.equal(agent(config, 'idle'), undefined);
   assert.equal(config.command?.review.template, 'Review $ARGUMENTS');
   assert.equal(config.command.review.agent, 'reviewer');
@@ -324,7 +298,7 @@ test('imported agent files retain frontmatter and activate only through selected
 });
 
 test('mixed groups reject missing components and unavailable command agents before mutation', async (t) => {
-  for (const group of [{ skills: ['missing'] }, { commands: ['missing'] }, { prompts: ['missing'] }]) {
+  for (const group of [{ skills: ['missing'] }, { commands: ['missing'] }]) {
     const f = await fixture(t, {
       componentGroups: { work: group },
       profiles: { work: { layers: [{ componentGroup: 'work' }] } },
@@ -455,10 +429,10 @@ test('permission contributions retain authored order and canonical origins throu
   });
 });
 
-test('prompt-only component settings do not pin an inherited model against later profile layers', async (t) => {
+test('empty component settings do not pin an inherited model against later profile layers', async (t) => {
   const f = await fixture(t, {
     defaults: { agents: { model: 'fixture/default' } },
-    components: { agents: { worker: { prompt: 'Body', configuration: { prompt: { append: ['Tail'] } } } } },
+    components: { agents: { worker: { prompt: 'Body', configuration: {} } } },
     componentGroups: { work: { agents: ['worker'], configuration: { model: 'fixture/group' } } },
     profiles: { work: { layers: [{ componentGroup: 'work' }] } },
     activeProfiles: ['work'],
@@ -466,7 +440,7 @@ test('prompt-only component settings do not pin an inherited model against later
   const config: Config = {};
   await f.hooks.config!(config);
   assert.equal(agent(config, 'worker')?.model, 'fixture/group');
-  assert.equal(agent(config, 'worker')?.prompt, 'Body\n\nTail');
+  assert.equal(agent(config, 'worker')?.prompt, 'Body');
 });
 
 test('partial parameters bind to the effective native global model without creating an agent model pin', async (t) => {

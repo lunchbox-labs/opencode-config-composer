@@ -6,17 +6,15 @@ OpenCode's native configuration stays in its own files. Composer's default share
 
 | Key                      | Role                                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------------------- |
-| `components.agents`      | Reusable inline `prompt` or Markdown `file`; optional `promptRefs`, `skills`, and `configuration` |
+| `components.agents`      | Reusable inline `prompt` or Markdown `file`; optional `skills`, and `configuration` |
 | `components.skills`      | Explicit native `SKILL.md` file definitions                                                       |
 | `components.commands`    | Native command `file` or inline `template`                                                        |
-| `components.prompts`     | Reusable `text` or `file` fragments                                                               |
-| `componentGroups`        | Any mix of agent/skill/command/prompt names plus optional agent configuration                     |
+| `componentGroups`        | Any mix of agent/skill/command names plus optional agent configuration                     |
 | `configurationPresets`   | Reusable model, variant, parameters, and ordered permission settings                              |
 | `profiles`               | Optional named `extends`, ordered `layers`, `agentAvailability`, and explicit `overrides`         |
 | `defaults` / `overrides` | Scoped model defaults, global permissions, and selected-agent settings                            |
 | `activeProfiles`         | Ordered profile names; absence inherits, `[]` selects none                                        |
 | `imports`                | Explicit JSONC paths; no automatic directory scan                                                 |
-| `sourceDirectories`      | Explicit named roots for prompt include references                                                |
 
 A group layer selects components. A preset layer configures agents already selected by earlier layers or an availability decision;
 it must specify `target.agents` and/or `target.componentGroups`. Parent layers replay before child layers.
@@ -75,12 +73,10 @@ The current unsent native TUI model/variant selection and complete final provide
 Configured settings and recorded history do not predict the next request. Inspection changes no settings or history
 and sends no prompt; values under credential-like option keys are redacted and conversation bodies are omitted.
 
-Prompt operations support ordered `prepend`/`append` strings and `inheritDefaults`/`inheritGroups` controls.
-Use `{{include:@source/path.md}}` or an entire `@source/path.md` fragment with a declared source directory.
-Repeated `promptRefs` preserve authored order. Native prompts without an authored body remain native.
 The `skills` relationship describes intended on-demand use; it does not inject bodies or grant access.
 
-`/compose` can author definitions, memberships, profile selection, parameters, permissions, prompts and
-prompt sources. Save and reload are separate. Invalid active memberships have a repair view; malformed
+`/compose` can author definitions, memberships, profile selection, parameters, permissions. Save and reload are separate. Invalid active memberships have a repair view; malformed
 JSONC, imports, and profile/preset reference errors need correction in the named source first.
 Read-only imported sources need an explicit writable destination; no tool should silently rewrite them.
+
+Prompt composition belongs to `@lunchbox-labs/opencode-prompt-composer`. Do not migrate old prompt operations into config profiles; profile-driven prompt changes have been removed. Preserve ordinary OpenCode agent prompt strings and command templates.

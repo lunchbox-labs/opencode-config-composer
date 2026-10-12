@@ -2,11 +2,19 @@
 {
   "configurationPresets": { "balanced": { "model": "fixture/review" } },
   "componentGroups": {
-    "reviewers": { "configuration": { "modelRef": "preset:balanced", "prompt": { "append": ["Check your changes."] } } }
+    "reviewers": {
+      "configuration": {
+        "modelRef": "preset:balanced"
+      }
+    }
   },
-  "defaults": { "agents": { "prompt": { "append": ["Shared guidance."] } } },
+  "defaults": {
+    "agents": {}
+  },
   "overrides": {
-    "agents": { "worker": { "prompt": { "inheritDefaults": false, "prepend": ["Review carefully."] } } }
+    "agents": {
+      "worker": {}
+    }
   },
   "profiles": { "migrated": { "layers": [{ "componentGroup": "reviewers" }] } },
   "activeProfiles": ["migrated"]

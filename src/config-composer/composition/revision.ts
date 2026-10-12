@@ -55,21 +55,11 @@ export function compositionRevision(
   const components = componentPaths(sources);
   const inputs = new Map<string, unknown>();
   for (const file of collectFileReads(files).files) {
-    if (
-      ![file.path, ...(file.aliases ?? [])].some((path) => components.has(path)) &&
-      (file.directories?.length ?? 0) === 0
-    ) {
+    if (![file.path, ...(file.aliases ?? [])].some((path) => components.has(path))) {
       continue;
     }
-    const value = [
-      file.canonicalPath ?? file.path,
-      digest(file.text),
-      [...(file.directories ?? [])].sort((a, b) => a.path.localeCompare(b.path)),
-    ];
-    for (const path of new Set([
-      ...[file.path, ...(file.aliases ?? [])].filter((path) => components.has(path)),
-      ...(file.includePaths ?? []),
-    ])) {
+    const value = [file.canonicalPath ?? file.path, digest(file.text)];
+    for (const path of new Set([...[file.path, ...(file.aliases ?? [])].filter((path) => components.has(path))])) {
       inputs.set(path, value);
     }
   }
@@ -120,13 +110,6 @@ export async function verifyCompositionInputs(sources: LoadedSources, files: rea
       for (const path of file.aliases ?? []) {
         if ((await identity(path)) !== canonical) {
           throw new SettingsError('Composition input identity changed. Reopen the editor.');
-        }
-      }
-    }
-    if ('directories' in file) {
-      for (const directory of file.directories ?? []) {
-        if ((await identity(directory.path)) !== directory.canonicalPath) {
-          throw new SettingsError('A prompt source directory changed. Reopen the editor.');
         }
       }
     }

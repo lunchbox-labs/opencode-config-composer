@@ -1,0 +1,21 @@
+{
+  "componentGroups": {
+    "coding": { "agents": ["build", "plan", "explore"] },
+  },
+  "configurationPresets": {
+    "anthropic": { "model": "anthropic/claude-sonnet-4-5" },
+    "openai": { "model": "openai/gpt-5" },
+  },
+  "profiles": {
+    "coding": { "layers": [{ "componentGroup": "coding" }] },
+    "anthropic": {
+      "extends": "coding",
+      "layers": [{ "configurationPreset": "anthropic", "target": { "componentGroups": ["coding"] } }],
+    },
+    "openai": {
+      "extends": "coding",
+      "layers": [{ "configurationPreset": "openai", "target": { "componentGroups": ["coding"] } }],
+    },
+  },
+  "activeProfiles": ["anthropic"],
+}

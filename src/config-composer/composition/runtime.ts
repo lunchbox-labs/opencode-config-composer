@@ -1,5 +1,4 @@
 import { type AgentSettings, SettingsError, record } from '../settings.ts';
-import { type PromptRead, expandIncludes } from '../prompts.ts';
 import { type GlobalPermissionContribution, type PermissionWarning, resolvePermissions } from './permission-runtime.ts';
 import { loadComponents } from './components.ts';
 import {
@@ -18,7 +17,6 @@ import type {
   JsonValue,
   NativeInput,
   PermissionRule,
-  PromptConfiguration,
 } from './types.ts';
 
 // The config hook runs before Agent.state can be queried. This catalog supplies identities only;
@@ -27,10 +25,6 @@ export const nativeAgentNames = ['build', 'plan', 'general', 'explore', 'compact
 export interface PermissionContribution {
   agent: string;
   rule: PermissionRule;
-  origin: FieldOrigin;
-}
-interface PromptContribution {
-  configuration: PromptConfiguration;
   origin: FieldOrigin;
 }
 export interface ResolvedModelSettings {
@@ -184,7 +178,6 @@ export async function resolveProfileRuntime(
   sources: LoadedSources,
   native: NativeInput,
   overlays: ReadonlyMap<string, string> = new Map(),
-  onPromptRead?: PromptRead,
 ): Promise<ResolvedProfileRuntime> {
   const { registry } = sources;
   const groups = registry.componentGroups ?? {};
@@ -212,10 +205,6 @@ export async function resolveProfileRuntime(
   }
   const permissions: PermissionContribution[] = [];
   const globalPermissions: GlobalPermissionContribution[] = [];
-  const prompts: Record<
-    string,
-    { defaults: PromptContribution[]; groups: PromptContribution[]; explicit: PromptContribution[] }
-  > = {};
   const globals: { model?: string; small_model?: string } = {};
   for (const key of ['model', 'small_model'] as const) {
     if (native[key] !== undefined) {
@@ -373,12 +362,6 @@ export async function resolveProfileRuntime(
     for (const [index, rule] of (value.permissions ?? []).entries()) {
       permissions.push({ agent: name, rule, origin: { ...at, pointer: `${at.pointer}/permissions/${index}/action` } });
     }
-    if (value.prompt !== undefined) {
-      prompts[name][explicit ? 'explicit' : at.layer === 'defaults' ? 'defaults' : 'groups'].push({
-        configuration: value.prompt,
-        origin: { ...at, pointer: `${at.pointer}/prompt` },
-      });
-    }
   }
   function select(name: string) {
     if (selected.has(name)) {
@@ -386,7 +369,6 @@ export async function resolveProfileRuntime(
     }
     selected.add(name);
     agent[name] = { ...available[name] };
-    prompts[name] = { defaults: [], groups: [], explicit: [] };
     for (const scope of sources.scopes) {
       if (scope.value.defaults?.agents !== undefined) {
         apply(name, scope.value.defaults.agents, origin(scope.id, '/defaults/agents', 'defaults'));
@@ -429,7 +411,7 @@ export async function resolveProfileRuntime(
       if (layer.componentGroup !== undefined) {
         const name = layer.componentGroup;
         const group = groups[name];
-        for (const key of ['skills', 'commands', 'prompts'] as const) {
+        for (const key of ['skills', 'commands'] as const) {
           for (const member of group[key] ?? []) {
             if (!Object.hasOwn(components[key], member)) {
               throw new MembershipValidationError(
@@ -485,93 +467,6 @@ export async function resolveProfileRuntime(
   for (const scope of sources.scopes) {
     overrides(scope.value.overrides?.agents, origin(scope.id, '/overrides', 'overrides'));
   }
-  for (const name of selected) {
-    const value = agent[name];
-    if (typeof value.prompt !== 'string' || value.prompt.trim() === '') {
-      continue;
-    }
-    const operations = prompts[name];
-    const policy = operations.explicit.reduce<PromptConfiguration>(
-      (previous, value) => ({ ...previous, ...value.configuration }),
-      {},
-    );
-    const ordered = [
-      ...(policy.inheritDefaults === false ? [] : operations.defaults),
-      ...(policy.inheritGroups === false ? [] : operations.groups),
-      ...operations.explicit,
-    ];
-    const parts = [
-      ...ordered.flatMap((item) => item.configuration.prepend ?? []),
-      value.prompt,
-      ...ordered.flatMap((item) => item.configuration.append ?? []),
-    ];
-    const reference = (at: FieldOrigin) => `${at.sourceId ?? 'native'}#${at.pointer}`;
-    const pointer = `/agent/${part(name)}/prompt`;
-    const definition = Object.hasOwn(registry.components?.agents ?? {}, name)
-      ? registry.components?.agents?.[name]
-      : undefined;
-    const nativeOverride = Object.hasOwn(native.composerOwnedAgents ?? {}, name)
-      ? native.composerOwnedAgents?.[name].prompt
-      : undefined;
-    const base =
-      definition === undefined || nativeOverride !== undefined
-        ? { ...origin(undefined, pointer, 'native'), operation: 'native' as const }
-        : sources.provenance[`/components/agents/${part(name)}/${definition.file === undefined ? 'prompt' : 'file'}`];
-    const references = [reference(base)];
-    if (definition !== undefined && base.operation !== 'native') {
-      if (definition.file !== undefined) {
-        references.push(`file:${definition.file}`);
-      }
-      for (const prompt of definition.promptRefs ?? []) {
-        const component = Object.hasOwn(registry.components?.prompts ?? {}, prompt)
-          ? registry.components?.prompts?.[prompt]
-          : undefined;
-        if (component !== undefined) {
-          references.push(
-            reference(
-              sources.provenance[
-                `/components/prompts/${part(prompt)}/${component.file === undefined ? 'text' : 'file'}`
-              ],
-            ),
-          );
-          if (component.file !== undefined) {
-            references.push(`file:${component.file}`);
-          }
-        }
-      }
-    }
-    for (const contribution of ordered) {
-      for (const field of ['prepend', 'append'] as const) {
-        for (const index of (contribution.configuration[field] ?? []).keys()) {
-          references.push(`${reference(contribution.origin)}/${field}/${index}`);
-        }
-      }
-    }
-    for (const contribution of operations.explicit) {
-      for (const field of ['inheritDefaults', 'inheritGroups'] as const) {
-        if (contribution.configuration[field] !== undefined) {
-          references.push(`${reference(contribution.origin)}/${field}`);
-        }
-      }
-    }
-    const included = new Set<string>();
-    value.prompt = await expandIncludes(
-      parts.map((text) => (/^@[a-z][a-z0-9-]*\//.test(text) ? `{{include:${text}}}` : text)).join('\n\n'),
-      registry.sourceDirectories ?? {},
-      (file) => {
-        included.add(`file:${file.canonicalPath}`);
-        onPromptRead?.(file);
-      },
-      overlays,
-    );
-    provenance[pointer] = {
-      ...base,
-      layer: 'prompt composition',
-      operation: 'merge',
-      references: [...new Set([...references, ...included])],
-      overwritten: [],
-    };
-  }
   for (const [name, enabled] of availability) {
     agent[name] = { ...(Object.hasOwn(agent, name) ? agent[name] : available[name]), disable: !enabled };
   }
@@ -604,7 +499,6 @@ export async function resolveProfileRuntime(
     ) {
       throw new SettingsError(`Command ${name} names unavailable or unselected agent ${command.agent}.`);
     }
-    command.template = await expandIncludes(command.template, registry.sourceDirectories ?? {}, onPromptRead, overlays);
   }
   const compiledPermissions = resolvePermissions(native.permission, agent, globalPermissions, permissions, provenance);
   return {

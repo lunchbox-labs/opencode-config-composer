@@ -53,7 +53,6 @@ for (const target of ['preset', 'group', 'agent'] as const) {
     assert.equal(actual.parameters, undefined);
     assert.equal(actual.variant, 'new');
     assert.deepEqual(actual.permissions, configuration.permissions);
-    assert.equal(value.components!.agents!.worker.prompt, 'Keep worker');
     assert.deepEqual(value.configurationPresets!.unrelated.parameters, { topP: 0.4 });
     assert.match(plan.edits.find((edit) => edit.file.path === f.file)!.text, /preserve this document/);
     await previewFilePlan(plan);
@@ -96,7 +95,7 @@ test('preset edits reset active and inactive transitive dependents atomically', 
       inactive: {
         overrides: {
           agents: {
-            build: { modelRef: 'preset:parent', parameters: { maxOutputTokens: 12 }, prompt: { append: ['Keep'] } },
+            build: { modelRef: 'preset:parent', parameters: { maxOutputTokens: 12 } },
           },
         },
       },
@@ -110,7 +109,6 @@ test('preset edits reset active and inactive transitive dependents atomically', 
   assert.equal(value.componentGroups!.work.configuration!.parameters, undefined);
   assert.equal(value.componentGroups!.work.configuration!.variant, undefined);
   assert.equal(value.profiles!.inactive.overrides!.agents!.build.parameters, undefined);
-  assert.deepEqual(value.profiles!.inactive.overrides!.agents!.build.prompt, { append: ['Keep'] });
   await saveFilePlan(plan, async () => {
     await previewFilePlan(plan);
   });
@@ -235,7 +233,7 @@ test('same-model reference changes reset scoped agent settings and indirect depe
         layers: [{ componentGroup: 'work' }],
         overrides: {
           agents: {
-            build: { modelRef: 'preset:parent', variant: 'old', parameters: { topK: 4 }, prompt: { append: ['Keep'] } },
+            build: { modelRef: 'preset:parent', variant: 'old', parameters: { topK: 4 } },
           },
         },
       },
@@ -262,7 +260,7 @@ test('same-model reference changes reset scoped agent settings and indirect depe
     value: 'preset:b',
   });
   const config = parse(agent.edits[0].text).profiles!.work.overrides!.agents!.build;
-  assert.deepEqual(config, { modelRef: 'preset:b', prompt: { append: ['Keep'] } });
+  assert.deepEqual(config, { modelRef: 'preset:b' });
 });
 
 test('masked native defaults and unchanged references retain their own parameters', async (t) => {

@@ -1,6 +1,6 @@
 ---
 name: config-composer-migrate
-description: Use when Config Composer rejects legacy composition keys or a user wants to convert older groups, model presets, prompt operations, or permission maps to the canonical profile format.
+description: Use when Config Composer rejects legacy composition keys or a user wants to convert older groups, model presets, permission maps to the canonical profile format.
 ---
 
 # Migrate Composer configuration
@@ -17,8 +17,6 @@ legacy top-level `agent` in Composer settings is not an instruction to move nati
 | --------------------------------------- | ---------------------------------------------------------------------------------- |
 | `agent.groups.<name>`                   | `componentGroups.<name>.configuration` plus retained membership                    |
 | `agent.modelPresets`                    | `configurationPresets`                                                             |
-| `agent.prompts.defaults`                | `defaults.agents.prompt`                                                           |
-| `agent.prompts.overrides.<name>`        | `overrides.agents.<name>.prompt`                                                   |
 | `agent.permission` in permission drafts | `defaults.permissions`                                                             |
 | Group or agent override permission map  | Ordered `configuration.permissions` or `overrides.agents.<name>.permissions` array |
 
@@ -36,9 +34,11 @@ replay for all targets. Compare each affected agent before translating multiple 
 behavior with explicit targeted layers/overrides only after proving equivalence. Preserve current scope masking; a local selection replaces the shared list. Imported files must not
 contain top-level defaults, overrides, or activeProfiles; keep those in scope files.
 
-Validate the candidate and review sources, selected agents, pins, prompt order, permission outcomes, and
+Validate the candidate and review sources, selected agents, pins, permission outcomes, and
 unchanged native bytes. Save and apply are separate; reload or restart only when requested. Apply affects the current
 instance using the running native baseline; native JSON or native-agent edits require restart. Current TUI sessions may retain a
 previous model and variant after apply. Select the destination/base model through `/models`, then its configured
 variant or `Default` through `/variants`; conversation history is preserved. Report unproven equivalence or
 missing source evidence explicitly rather than silently deleting unknown settings or adding a fallback mode.
+
+Prompt composition belongs to `@lunchbox-labs/opencode-prompt-composer`. Do not migrate old prompt operations into config profiles; profile-driven prompt changes have been removed. Preserve ordinary OpenCode agent prompt strings and command templates.

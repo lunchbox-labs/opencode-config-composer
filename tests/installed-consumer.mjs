@@ -44,7 +44,6 @@ await writeFile(join(root, 'settings', 'fragments', 'shared.md'), 'PACKAGED_GUID
 await writeFile(
   join(root, 'settings', 'composer.jsonc'),
   JSON.stringify({
-    sourceDirectories: { shared: './fragments' },
     componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
     profiles: { work: { layers: [{ componentGroup: 'workers' }] } },
     activeProfiles: ['work'],
@@ -56,10 +55,8 @@ const config = { agent: { worker: { groups: ['workers'], prompt: '{{include:@sha
 await hooks.config(config);
 await assert.rejects(hooks.config({ agent: { worker: { agent_group: 'workers' } } }), /agent_group is not supported/);
 assert.equal(config.agent.worker.model, 'fixture/model');
-assert.equal(config.agent.worker.prompt, 'PACKAGED_GUIDANCE');
-const output = { output: 'Skill {{include:@shared/shared.md}}', metadata: { name: 'fixture' } };
-await hooks['tool.execute.after']({ tool: 'skill' }, output);
-assert.equal(output.output, 'Skill PACKAGED_GUIDANCE');
+assert.equal(config.agent.worker.prompt, '{{include:@shared/shared.md}}');
+assert.equal(hooks['tool.execute.after'], undefined);
 
 await writeFile(
   join(root, 'config-composer.jsonc'),

@@ -88,13 +88,12 @@ test(
         ),
     );
     const composer = {
-      sourceDirectories: { shared: './prompts' },
       configurationPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
-      defaults: { agents: { prompt: { prepend: ['DEFAULT_START'], append: ['DEFAULT_END'] } } },
-      overrides: { agents: { pinned: { prompt: { inheritDefaults: false, append: ['PINNED_END'] } } } },
+      defaults: { agents: {} },
+      overrides: { agents: { pinned: {} } },
       componentGroups: {
         workers: {
-          configuration: { modelRef: 'preset:balanced', prompt: { prepend: ['GROUP_START'], append: ['GROUP_END'] } },
+          configuration: { modelRef: 'preset:balanced' },
         },
         alternate: { configuration: { model: 'fixture/alpha' } },
       },
@@ -163,21 +162,15 @@ test(
         await reload();
       }
     };
-    await t.test('custom settings and relative includes reach native provider in composition order', async () => {
+    await t.test('custom settings reach the provider while authored includes remain unchanged', async () => {
       const { message } = await send();
       assert.equal(message.info.modelID, 'alpha');
       const captured = JSON.stringify(requests.at(-1)?.messages);
-      const ordered = ['DEFAULT_START', 'GROUP_START', 'INITIAL_BODY', 'DEFAULT_END', 'GROUP_END'];
-      for (const [index, marker] of ordered.entries()) {
-        assert.ok(captured.includes(marker), marker);
-        if (index > 0) {
-          assert.ok(captured.indexOf(marker) > captured.indexOf(ordered[index - 1]));
-        }
-      }
+      assert.ok(captured.includes('{{include:@shared/body.md}}'));
       assert.equal(requests.at(-1)?.reasoning_effort, 'low');
       const pinned = await agent('pinned');
       assert.ok(pinned.prompt?.includes('DEFAULT_START') !== true);
-      assert.equal(pinned.prompt?.includes('PINNED_END'), true);
+      assert.equal(pinned.prompt, 'PINNED_PROMPT');
     });
     await t.test('save waits for explicit reload and reload removes stale content without duplication', async () => {
       await storage.savePlan(
@@ -189,15 +182,15 @@ test(
       );
       await writeFile(join(configRoot, 'settings', 'prompts', 'body.md'), 'SAVED_BODY');
       assert.equal((await send()).message.info.modelID, 'alpha', 'saving does not apply cached settings');
-      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('INITIAL_BODY'));
+      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('{{include:@shared/body.md}}'));
       await reload();
       assert.equal((await send()).message.info.modelID, 'beta');
       assert.equal(requests.at(-1)?.reasoning_effort, 'high');
       assert.ok(!JSON.stringify(requests.at(-1)?.messages).includes('INITIAL_BODY'));
       await reload();
       const prompt = (await agent()).prompt ?? '';
-      assert.equal(prompt.split('SAVED_BODY').length - 1, 1);
-      assert.equal(prompt.split('GROUP_START').length - 1, 1);
+      assert.equal(prompt.split('{{include:@shared/body.md}}').length - 1, 1);
+      assert.equal(prompt.split('GROUP_START').length - 1, 0);
       assert.equal((await agent('pinned')).model?.modelID, 'alpha');
       await send('worker', 'Explicit session model', undefined, {
         model: { providerID: 'fixture', modelID: 'alpha' },
@@ -262,7 +255,7 @@ test(
         await change({
           kind: 'group',
           name: 'alternate',
-          choice: { model: 'fixture/alpha', variant: 'low', prompt: { append: ['ALTERNATE_GROUP'] } },
+          choice: { model: 'fixture/alpha', variant: 'low' },
         });
         await change({ kind: 'membership', agent: 'worker', groups: ['workers', 'alternate'] });
         assert.equal((await send()).message.info.modelID, 'alpha');
@@ -349,8 +342,8 @@ test(
           assert.match(tool.state.error ?? '', /rule which prevents you from using this specific tool call/);
           assert.ok(!JSON.stringify(requests.slice(before)).includes('EXPANDED_SKILL_SECRET'));
         } else {
-          assert.match(tool.state.output ?? '', /EXPANDED_SKILL_SECRET/);
-          assert.ok(JSON.stringify(requests.slice(before)).includes('EXPANDED_SKILL_SECRET'));
+          assert.ok(tool.state.output?.includes('{{include:@shared/skill.md}}') === true);
+          assert.ok(JSON.stringify(requests.slice(before)).includes('{{include:@shared/skill.md}}'));
         }
       }
     });
@@ -422,9 +415,9 @@ test(
       assert.ok((await api<Message[]>(`/session/${saved.session.id}/message`)).length >= 4);
     });
     await t.test(
-      'editor rejects an invalid include; native hook failure is atomic and corrected reload recovers',
+      'editor rejects removed prompt settings; native hook failure is atomic and corrected reload recovers',
       async (t) => {
-        const bodyPath = join(configRoot, 'settings', 'prompts', 'body.md');
+        const bodyPath = settingsPath;
         const goodBody = await readFile(bodyPath, 'utf8');
         const snapshot = await globalSnapshot();
         const nativeReload = async () => {
@@ -450,10 +443,12 @@ test(
         });
         const before = requests.length;
         const activeBefore = await agent();
-        await writeFile(bodyPath, '{{include:@shared/../outside.md}}');
-        await assert.rejects(globalSnapshot(), /include|source|path/i);
-        // Included prompt files are captured in the reviewed snapshot. A changed
-        // input is rejected before the reload reaches include validation.
+        await writeFile(
+          bodyPath,
+          JSON.stringify({ ...storage.parseConfig(goodBody), sourceDirectories: { removed: './prompts' } }),
+        );
+        await assert.rejects(globalSnapshot(), /Prompt composition moved/);
+        // Changed composition documents invalidate the reviewed snapshot.
         await assert.rejects(reload(snapshot), /Settings changed.*Reopen the editor/);
         assert.deepEqual(await agent(), activeBefore, 'editor rejection preserves the running configuration');
         // Native reload can still load externally edited files independently of the editor.

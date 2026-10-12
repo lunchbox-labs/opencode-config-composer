@@ -17,13 +17,6 @@ export interface ConfigurationParameters {
   options?: Record<string, JsonValue>;
 }
 
-export interface PromptConfiguration {
-  prepend?: string[];
-  append?: string[];
-  inheritDefaults?: boolean;
-  inheritGroups?: boolean;
-}
-
 export type ModelIdentity =
   { model: string; modelRef?: never } | { modelRef: string; model?: never } | { model?: never; modelRef?: never };
 
@@ -33,13 +26,12 @@ export type ConfigurationPreset = ModelIdentity & {
   permissions?: PermissionRule[];
 };
 
-export type AgentConfiguration = ConfigurationPreset & { prompt?: PromptConfiguration };
+export type AgentConfiguration = ConfigurationPreset;
 
 export type AgentComponent = ({ file: string; prompt?: never } | { prompt: string; file?: never }) & {
   description?: string;
   mode?: 'primary' | 'subagent' | 'all';
   disable?: boolean;
-  promptRefs?: string[];
   /** Intended on-demand relationships; neither inject skill bodies nor restrict access. */
   skills?: string[];
   configuration?: AgentConfiguration;
@@ -55,13 +47,10 @@ export type CommandComponent = ({ file: string; template?: never } | { template:
   subtask?: boolean;
 };
 
-export type PromptComponent = { file: string; text?: never } | { text: string; file?: never };
-
 export interface Components {
   agents?: Record<string, AgentComponent>;
   skills?: Record<string, SkillComponent>;
   commands?: Record<string, CommandComponent>;
-  prompts?: Record<string, PromptComponent>;
 }
 
 /** Any subset of component kinds is valid. Agent names resolve against native and custom agents. */
@@ -69,7 +58,6 @@ export interface ComponentGroup {
   agents?: string[];
   skills?: string[];
   commands?: string[];
-  prompts?: string[];
   configuration?: AgentConfiguration;
 }
 
@@ -111,7 +99,6 @@ export interface ProfileShortcut {
 export interface CompositionDocument {
   $schema?: string;
   imports?: string[];
-  sourceDirectories?: Record<string, string>;
   components?: Components;
   componentGroups?: Record<string, ComponentGroup>;
   configurationPresets?: Record<string, ConfigurationPreset>;

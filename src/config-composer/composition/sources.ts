@@ -37,10 +37,7 @@ export interface LoadedSources {
 }
 
 type Registry = Required<
-  Pick<
-    CompositionDocument,
-    'sourceDirectories' | 'componentGroups' | 'configurationPresets' | 'profiles' | 'profileShortcuts'
-  >
+  Pick<CompositionDocument, 'componentGroups' | 'configurationPresets' | 'profiles' | 'profileShortcuts'>
 > & { components: Required<Components> };
 
 function pointerPart(key: string): string {
@@ -73,8 +70,7 @@ export async function loadCompositionSources(
   const scopes: CompositionSourceDocument[] = [];
   const provenance: Record<string, FieldOrigin> = {};
   const registry: Registry = {
-    sourceDirectories: {},
-    components: { agents: {}, skills: {}, commands: {}, prompts: {} },
+    components: { agents: {}, skills: {}, commands: {} },
     componentGroups: {},
     configurationPresets: {},
     profiles: {},
@@ -218,9 +214,6 @@ export async function loadCompositionSources(
       });
     }
     const value = source.value;
-    register(registry.sourceDirectories, value.sourceDirectories, '/sourceDirectories', source, (item) =>
-      configurationPath(item, dirname(path)),
-    );
     register(registry.components.agents, value.components?.agents, '/components/agents', source, (item) =>
       relativeFile(item, path),
     );
@@ -228,9 +221,6 @@ export async function loadCompositionSources(
       relativeFile(item, path),
     );
     register(registry.components.commands, value.components?.commands, '/components/commands', source, (item) =>
-      relativeFile(item, path),
-    );
-    register(registry.components.prompts, value.components?.prompts, '/components/prompts', source, (item) =>
       relativeFile(item, path),
     );
     register(registry.componentGroups, value.componentGroups, '/componentGroups', source);

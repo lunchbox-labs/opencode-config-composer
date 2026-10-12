@@ -41,8 +41,8 @@ test(
     native.agent.fallback = { mode: 'primary', prompt: 'NATIVE_FALLBACK' };
     native.agent.pinned = { mode: 'primary', prompt: 'NATIVE_PIN', model: 'fixture/beta' };
     await writeFile(nativePath, JSON.stringify(native));
-    const source = (model: string, prompt: string) => ({
-      componentGroups: { work: { agents: ['worker'], configuration: { model, prompt: { append: [prompt] } } } },
+    const source = (model: string, _prompt: string) => ({
+      componentGroups: { work: { agents: ['worker'], configuration: { model } } },
       profiles: { work: { layers: [{ componentGroup: 'work' }] } },
       activeProfiles: ['work'],
     });
@@ -84,7 +84,7 @@ test(
     };
     const original = await send('SCOPED_HISTORY_FIRST');
     const historyBefore = await f.history(session.id);
-    assert.ok(JSON.stringify(original.captured.messages).includes('APPLIED_INITIAL'));
+    assert.ok(JSON.stringify(original.captured.messages).includes('NATIVE_WORKER'));
     const terminal = await nativeTerminal({ ...f.host, url: server.url }, session.id, 'scoped-apply-terminal');
     await terminal.wait(['Scoped apply conversation', 'verified', 'ctrl+p', 'commands']);
     const openApply = async (...labels: string[]) => {
@@ -125,7 +125,7 @@ test(
         registry: 'componentGroups',
         name: 'work',
         path: ['configuration'],
-        value: { model: 'fixture/beta', prompt: { append: ['SAVED_PENDING'] } },
+        value: { model: 'fixture/beta' },
       });
       await openApply('is pending');
       assert.deepEqual(await runtime(), initialRuntime, 'save preserves the actual applied publication');

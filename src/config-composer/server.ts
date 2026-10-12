@@ -7,7 +7,6 @@ import { type AgentSettings, type EffectiveChoice, SettingsError, record } from 
 import { permissionNotifications } from './composition/permission-warnings.ts';
 import { publishRuntimeBaseline } from './composition/runtime-baseline.ts';
 import { MembershipValidationError } from './composition/membership.ts';
-import { type PromptDependency, expandIncludes } from './prompts.ts';
 import { loadCompositionSources } from './composition/sources.ts';
 import { type ResolvedModelSettings, resolveProfileRuntime } from './composition/runtime.ts';
 import { filterParameters, mergeOptions, parametersForDispatch, unprotectedOptions } from './composition/parameters.ts';
@@ -40,7 +39,6 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     allowEmpty: true,
   };
   await validateBundledSkills();
-  let sources: Awaited<ReturnType<typeof loadCompositionSources>> | undefined;
   const notifications = permissionNotifications(input.client);
   let agents: Partial<Record<string, AgentSettings>> = {};
   let choices: Partial<Record<string, EffectiveChoice & ResolvedModelSettings>> = {};
@@ -54,7 +52,6 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     object,
     {
       commands: { native: Record<string, unknown>; applied: Record<string, unknown> };
-      composedCommands: Set<string>;
       addedPaths: Set<string>;
     }
   >();
@@ -114,20 +111,6 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     'chat.message': async (input, output) => {
       await notifications.session(input.sessionID, output.message.agent);
     },
-    'tool.execute.after': async (input, output) => {
-      if (input.tool !== 'skill') {
-        return;
-      }
-      if (record(output.metadata) && output.metadata.truncated === true) {
-        throw new SettingsError(
-          'The skill output was truncated before composition. Reduce its size and load it again.',
-        );
-      }
-      if (output.output.includes('{{include:')) {
-        sources ??= await loadCompositionSources(context);
-        output.output = await expandIncludes(output.output, sources.registry.sourceDirectories ?? {});
-      }
-    },
     config: async (config: Config & Pick<NativeConfig, 'skills' | 'default_agent'>) => {
       // Packaged help stays discoverable even when a source requires migration or repair.
       config.skills = {
@@ -173,7 +156,6 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
           nextSources,
           { ...nativeGlobals, agent: staged, composerOwnedAgents: owned },
           new Map(inputs.map((file) => [file.path, file.text])),
-          (file) => inputs.push(file),
         );
       } catch (error) {
         if (error instanceof MembershipValidationError) {
@@ -195,7 +177,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         const native = previousResources?.commands.native[name];
         const applied = previousResources?.commands.applied[name];
         if (record(command) && record(native) && record(applied)) {
-          // Restore expanded bodies even if a later plugin changed metadata. Generated
+          // Restore authored bodies even if a later plugin changed metadata. Generated
           // commands have no native baseline and retain the existing whole-command policy.
           nativeCommands[name] = restore(command, { native, applied }, true);
         }
@@ -209,32 +191,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         }
       }
       validateShortcutCommands(nextSources, Object.keys(nativeCommands));
-      // OpenCode has already loaded and ordered these commands. Only compose their bodies;
-      // keep the native cache and the authored snapshot free of expanded text.
-      const expandedCommands = structuredClone(nativeCommands);
-      const commandInputs: PromptDependency[] = [];
-      const composedCommands = new Set(Object.keys(resolved.commands));
-      for (const [name, command] of Object.entries(expandedCommands)) {
-        const applied = previousResources?.commands.applied[name];
-        if (
-          previousResources?.composedCommands.has(name) === true &&
-          record(applied) &&
-          command.template === applied.template
-        ) {
-          // A generated command retained by an external metadata edit is already expanded.
-          composedCommands.add(name);
-          continue;
-        }
-        if (command.template.includes('{{include:')) {
-          command.template = await expandIncludes(
-            command.template,
-            nextSources.registry.sourceDirectories ?? {},
-            (file) => commandInputs.push(file),
-          );
-        }
-      }
-      // Composer command bodies were expanded by resolveProfileRuntime, including escaped markers.
-      const nextCommands = { ...expandedCommands, ...resolved.commands };
+      const nextCommands = { ...nativeCommands, ...resolved.commands };
       const nativeSkills = config.skills ?? {};
       const nativePaths = (nativeSkills.paths ?? []).filter((path) => previousResources?.addedPaths.has(path) !== true);
       const nextSkills = {
@@ -242,8 +199,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         paths: [...new Set([...nativePaths, bundledSkillDirectory, ...resolved.skillPaths])],
       };
       const revision = compositionRevision(nextSources, resolved, inputs);
-      // Native command reads are verified here, outside the editor's Composer-only revision.
-      await verifyCompositionInputs(nextSources, [...inputs, ...commandInputs]);
+      await verifyCompositionInputs(nextSources, inputs);
       // Validate the complete candidate before mutating host objects.
       for (const key of ['model', 'small_model'] as const) {
         if (resolved[key] === undefined) {
@@ -294,12 +250,10 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
       config.skills = nextSkills;
       resources.set(config, {
         commands: { native: structuredClone(nativeCommands), applied: structuredClone(nextCommands) },
-        composedCommands,
         addedPaths: new Set(
           [bundledSkillDirectory, ...resolved.skillPaths].filter((path) => !nativePaths.includes(path)),
         ),
       });
-      sources = nextSources;
       publishRuntimeBaseline(
         config,
         options,

@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstat, open } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { type Node as JsonNode, type ParseError, parse, parseTree } from 'jsonc-parser';
 import { type GroupOptions, SettingsError, readSettings, record } from './settings.ts';
@@ -118,12 +118,6 @@ export async function loadConfiguration(
   );
   const value = parseConfiguration(file.text);
   const settings = readSettings(value);
-  settings.promptSources = Object.fromEntries(
-    Object.entries(settings.promptSources).map(([alias, source]) => [
-      alias,
-      configurationPath(source, dirname(file.path)),
-    ]),
-  );
   return {
     settings,
     file,

@@ -3,10 +3,22 @@
   "imports": ["./profiles/workflows.jsonc"],
   "components": {
     "agents": {
-      "agent1": { "file": "./agents/agent1.md", "promptRefs": ["review-scope"], "skills": ["skill1"] },
-      "agent2": { "file": "./agents/agent2.md", "promptRefs": ["review-scope"], "skills": ["skill2"] },
-      "agent3": { "file": "./agents/agent3.md", "promptRefs": ["implementation-scope"], "skills": ["skill3"] },
-      "agent4": { "file": "./agents/agent4.md", "promptRefs": ["implementation-scope"], "skills": ["skill4"] },
+      "agent1": {
+        "file": "./agents/agent1.md",
+        "skills": ["skill1"],
+      },
+      "agent2": {
+        "file": "./agents/agent2.md",
+        "skills": ["skill2"],
+      },
+      "agent3": {
+        "file": "./agents/agent3.md",
+        "skills": ["skill3"],
+      },
+      "agent4": {
+        "file": "./agents/agent4.md",
+        "skills": ["skill4"],
+      },
     },
     "skills": {
       "skill1": { "file": "./skills/skill1/SKILL.md" },
@@ -20,23 +32,17 @@
       "implement": { "agent": "agent3", "template": "Implement the requested change." },
       "write-tests": { "agent": "agent4", "template": "Add tests for the requested change." },
     },
-    "prompts": {
-      "review-scope": { "file": "./prompts/review.md" },
-      "implementation-scope": { "file": "./prompts/implementation.md" },
-    },
   },
   "componentGroups": {
     "review": {
       "agents": ["agent1", "agent2"],
       "skills": ["skill1", "skill2"],
       "commands": ["review-code", "review-tests"],
-      "prompts": ["review-scope"],
     },
     "programming": {
       "agents": ["agent3", "agent4"],
       "skills": ["skill3", "skill4"],
       "commands": ["implement", "write-tests"],
-      "prompts": ["implementation-scope"],
     },
   },
   "configurationPresets": {

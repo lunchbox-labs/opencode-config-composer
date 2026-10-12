@@ -42,7 +42,6 @@ test(
           configuration: {
             model: 'fixture/beta',
             permissions: skill('deny'),
-            prompt: { append: ['INDEPENDENT_PROMPT'] },
           },
         },
         broken: { configuration: { model: 'fixture/beta', permissions: skill('deny') } },
@@ -86,10 +85,7 @@ test(
       undefined,
       'permission/model contributions preserve an unauthored built-in prompt',
     );
-    assert.match(
-      before.find((agent) => agent.name === 'custom')!.prompt!,
-      /NATIVE_CUSTOM_BODY[\s\S]*INDEPENDENT_PROMPT/,
-    );
+    assert.match(before.find((agent) => agent.name === 'custom')!.prompt!, /NATIVE_CUSTOM_BODY/);
     await nativeSkill(f.host, 'build', 'allow');
     await nativeSkill(f.host, 'custom', 'deny');
     await nativeSkill(f.host, 'fallback-allow', 'deny');

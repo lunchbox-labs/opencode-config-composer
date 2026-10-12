@@ -23,7 +23,7 @@ test('canonical JSONC fixture preserves all component kinds and ordered contribu
   const source = await readFile(new URL('config-composer.jsonc', fixture), 'utf8');
   const document = parseCompositionDocument(source, 'fixture');
   assert.equal(validate(document), true, JSON.stringify(validate.errors));
-  assert.deepEqual(Object.keys(document.components ?? {}), ['agents', 'skills', 'commands', 'prompts']);
+  assert.deepEqual(Object.keys(document.components ?? {}), ['agents', 'skills', 'commands']);
   assert.deepEqual(document.imports, ['./profiles/workflows.jsonc']);
   assert.deepEqual(document.activeProfiles, ['claude-coding']);
   assert.deepEqual(document.configurationPresets?.['review-checks'].permissions, [
@@ -73,7 +73,7 @@ const invalid: [string, unknown][] = [
   ['unknown root field', { activeProfile: 'review' }],
   ['unknown nested field', { components: { agents: { worker: { fil: './worker.md' } } } }],
   ['empty component', { components: { agents: { worker: {} } } }],
-  ['ambiguous component content', { components: { prompts: { scope: { file: './scope.md', text: 'scope' } } } }],
+  ['ambiguous component content', { components: { agents: { worker: { file: './worker.md', prompt: 'Work' } } } }],
   ['invalid registry name', { componentGroups: { '../review': {} } }],
   ['invalid component name', { components: { agents: { '../worker': { prompt: 'work' } } } }],
   ['duplicate active selection', { activeProfiles: ['review', 'review'] }],
@@ -209,11 +209,10 @@ test('ordered permissions preserve repeated rules and explicit ask without fallb
 test('schema accepts each component body and keeps external references unresolved', () => {
   const input = {
     components: {
-      agents: { 'team/reviewer': { prompt: '', skills: ['external-skill'], promptRefs: ['external-prompt'] } },
+      agents: { 'team/reviewer': { prompt: '', skills: ['external-skill'] } },
       commands: { review: { file: './commands/review.md', agent: 'team/reviewer' } },
-      prompts: { scope: { text: 'Only review the diff.' } },
     },
-    sourceDirectories: { shared: '../fragments' },
+
     configurationPresets: { variant: { variant: 'high', parameters: { topK: 1, topP: 0, temperature: 2 } } },
     profiles: {
       review: {
@@ -342,12 +341,11 @@ test('local absolute drive and UNC paths remain valid across composition path fi
   for (const path of paths) {
     const input = {
       imports: [path],
-      sourceDirectories: { library: path },
+
       components: {
         agents: { worker: { file: path } },
         commands: { check: { file: path } },
         skills: { check: { file: path } },
-        prompts: { guidance: { file: path } },
       },
     };
     assert.equal(validate(input), true, `${path}: ${JSON.stringify(validate.errors)}`);
@@ -382,7 +380,6 @@ test('invalid registry-name diagnostics include the escaped offending property',
     [{ components: { agents: { '../bad~name': { prompt: 'Work' } } } }, '/components/agents/..~1bad~0name'],
     [{ components: { skills: { '../bad~name': { file: './SKILL.md' } } } }, '/components/skills/..~1bad~0name'],
     [{ components: { commands: { '../bad~name': { template: 'Work' } } } }, '/components/commands/..~1bad~0name'],
-    [{ components: { prompts: { '../bad~name': { text: 'Work' } } } }, '/components/prompts/..~1bad~0name'],
   ] as const) {
     assert.throws(
       () => readCompositionDocument(input, 'source.jsonc'),

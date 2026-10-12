@@ -1,0 +1,46 @@
+{
+  "componentGroups": {
+    "developers": {
+      "agents": ["developer", "test-writer"],
+      "configuration": {
+        "permissions": [
+          { "tool": "edit", "action": "allow" },
+          { "tool": "bash", "action": "ask" },
+          { "tool": "bash", "pattern": "git diff *", "action": "allow" },
+          { "tool": "bash", "pattern": "npm test*", "action": "allow" },
+        ],
+      },
+    },
+    "reviewers": {
+      "agents": ["reviewer"],
+      "configuration": {
+        "permissions": [
+          { "tool": "edit", "action": "deny" },
+          { "tool": "bash", "action": "ask" },
+          { "tool": "bash", "pattern": "git diff *", "action": "allow" },
+          { "tool": "bash", "pattern": "npm test*", "action": "deny" },
+        ],
+      },
+    },
+    "orchestrators": {
+      "agents": ["orchestrator"],
+      "configuration": {
+        "permissions": [
+          { "tool": "edit", "action": "deny" },
+          { "tool": "bash", "action": "ask" },
+          { "tool": "task", "action": "allow" },
+        ],
+      },
+    },
+  },
+  "profiles": {
+    "roles": {
+      "layers": [
+        { "componentGroup": "developers" },
+        { "componentGroup": "reviewers" },
+        { "componentGroup": "orchestrators" },
+      ],
+    },
+  },
+  "activeProfiles": ["roles"],
+}

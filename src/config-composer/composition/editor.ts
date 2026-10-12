@@ -40,14 +40,10 @@ export function editorSettings(sources: LoadedSources, native: NativeModels): Gr
             ...(value.model !== undefined ? { model: value.model } : {}),
             ...(value.modelRef !== undefined ? { modelRef: value.modelRef } : {}),
             ...(value.variant !== undefined ? { variant: value.variant } : {}),
-            ...(value.prompt !== undefined ? { prompt: value.prompt } : {}),
           },
         ];
       }),
     ),
     modelPresets: Object.fromEntries(Object.entries(presets).map(([name, value]) => [name, resolve(value)])),
-    promptSources: sources.registry.sourceDirectories ?? {},
-    promptDefaults: {},
-    agentPrompts: {},
   };
 }

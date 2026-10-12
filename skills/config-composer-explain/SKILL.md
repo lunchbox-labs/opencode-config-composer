@@ -1,6 +1,6 @@
 ---
 name: config-composer-explain
-description: Use when a user asks about OpenCode Config Composer profiles, groups, presets, selection order, permission fallback, prompt fragments, or why saved settings differ from a running conversation.
+description: Use when a user asks about OpenCode Config Composer profiles, groups, presets, selection order, permission fallback, why saved settings differ from a running conversation.
 ---
 
 # Explain Config Composer
@@ -48,3 +48,5 @@ If evidence is missing, identify the missing source or native state instead of i
 Common mistakes: treating groups as presets, merging profile-selection lists, assuming a deny always wins,
 or claiming a saved preview is an applied revision. Automatic Composer profile/component discovery and a custom lazy-loading engine
 are not implemented. Native skills remain on-demand and subject to native permissions.
+
+Prompt composition belongs to `@lunchbox-labs/opencode-prompt-composer`. Do not migrate old prompt operations into config profiles; profile-driven prompt changes have been removed. Preserve ordinary OpenCode agent prompt strings and command templates.
