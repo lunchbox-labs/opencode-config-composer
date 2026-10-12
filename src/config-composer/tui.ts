@@ -1,4 +1,4 @@
-import { diagnosticText, editorErrorText } from './tui/editor-error.ts';
+import { diagnosticPages, diagnosticText, editorErrorText } from './tui/editor-error.ts';
 import { verifySelectionProof } from './composition/selection-state.ts';
 import { readHostComponentInventory, referenceNotices } from './tui/reference-diagnostics.ts';
 import { referenceDescription } from './composition/reference-diagnostics.ts';
@@ -231,22 +231,50 @@ export function registerSettings(
         busy = false;
       });
   };
+  const errorPages = () => {
+    currentErrorScope();
+    const message =
+      lastEditorError === undefined
+        ? 'No editor error in this project and instance.'
+        : `${lastEditorError.context}\n\n${lastEditorError.message}`;
+    return diagnosticPages(
+      message,
+      Math.max(10, Math.min(96, api.renderer.width - 8)),
+      Math.max(1, Math.min(12, Math.floor(api.renderer.height * 0.75) - 9)),
+    );
+  };
+  const errorPage = (index: number) => {
+    if (!currentErrorScope()) {
+      return;
+    }
+    navigation.alert({
+      title: 'Last editor error',
+      get message() {
+        return errorPages()[index] ?? 'No editor error in this project and instance.';
+      },
+    });
+    api.ui.dialog.setSize('xlarge');
+  };
   const editorErrorAction: Action = {
     title: 'Last editor error',
     value: 'last-editor-error',
     description: 'Inspect the latest error in this project and instance',
     run: () => {
-      currentErrorScope();
-      navigation.alert({
+      if (errorPages().length === 1) {
+        errorPage(0);
+        return;
+      }
+      navigation.menu({
         title: 'Last editor error',
-        get message() {
-          currentErrorScope();
-          return lastEditorError === undefined
-            ? 'No editor error in this project and instance.'
-            : `${lastEditorError.context}\n\n${lastEditorError.message}`;
+        get options() {
+          return errorPages().map((page, index, pages) => ({
+            title: `Details ${index + 1} of ${pages.length}`,
+            value: String(index),
+            description: page.split('\n')[0],
+          }));
         },
+        onSelect: (option) => errorPage(Number(option.value)),
       });
-      api.ui.dialog.setSize('xlarge');
     },
   };
   const menu = (title: string, options: Action[] | (() => Action[]), current?: string, root = false) => {

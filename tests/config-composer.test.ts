@@ -579,6 +579,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   const keymapListeners = new Set<() => void>();
   let nativeCommands: string[] = [];
   const api = {
+    renderer: { width: 180, height: 55 },
     state: {
       path: {
         config: serverDirectory,

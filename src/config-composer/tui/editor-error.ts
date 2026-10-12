@@ -42,3 +42,29 @@ export function editorErrorText(error: unknown): string {
   }
   return diagnosticText(error.message);
 }
+
+export function diagnosticPages(value: string, columns: number, rows: number): string[] {
+  const lines = value.split('\n').flatMap((line) => {
+    const wrapped: string[] = [];
+    let current = '';
+    let width = 0;
+    for (const char of line) {
+      // Conservatively allow two terminal cells for non-Latin path characters.
+      const cells = (char.codePointAt(0) ?? 0) > 255 ? 2 : 1;
+      if (width + cells > columns && current !== '') {
+        wrapped.push(current);
+        current = '';
+        width = 0;
+      }
+      current += char;
+      width += cells;
+    }
+    wrapped.push(current);
+    return wrapped;
+  });
+  const pages: string[] = [];
+  for (let index = 0; index < lines.length; index += rows) {
+    pages.push(lines.slice(index, index + rows).join('\n'));
+  }
+  return pages;
+}
