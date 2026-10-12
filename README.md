@@ -44,6 +44,12 @@ of its own. It can supply either a `model` or a `modelRef`, never both. Use `ope
 `opencode:small_model` to follow the effective workspace default, or `preset:NAME` to reuse another preset's model
 settings. That model reference does not bring along the referenced preset's permissions.
 
+Create a preset in **Compose configs → Author groups, presets and profiles → Configuration presets → Create definition**.
+Choose a name and writable destination, then a concrete model, exact model reference, or parameter-only preset.
+Parameter-only creation requires at least one valid staged parameter; nothing is written until you confirm the review.
+References remain authored references, and new presets remain inactive. Unbound parameters receive structural validation;
+model-dependent support is checked at dispatch.
+
 For example, these two sections define a group and a preset without selecting either:
 
 ```jsonc

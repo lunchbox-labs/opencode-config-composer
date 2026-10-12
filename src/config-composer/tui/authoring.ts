@@ -3,6 +3,8 @@ import type { Snapshot } from '../storage.ts';
 import { type DefinitionChange, type DefinitionRegistry, definitionDestinations } from '../composition/authoring.ts';
 import type { ConfigurationPreset, ProfileLayer } from '../composition/types.ts';
 import { SettingsError, agentGroups, groupName } from '../settings.ts';
+import { parseCompositionDocument } from '../composition/document.ts';
+import { openParameterDraft } from './parameters.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 export interface AuthoringUi {
@@ -22,6 +24,51 @@ const titles = {
 } as const;
 
 export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
+  const createPreset = (selected: (choice: ConfigurationPreset) => void | Promise<void>) =>
+    ui.menu('New configuration preset', [
+      {
+        title: 'Concrete model',
+        value: '+model',
+        description: 'Choose a model and optional variant',
+        run: () => ui.createPreset(selected),
+      },
+      {
+        title: 'Exact model reference',
+        value: '+reference',
+        description: 'Preserve the reference; follow its model and inherited settings',
+        run: () =>
+          ui.menu(
+            'New preset: model reference',
+            [
+              'opencode:model',
+              'opencode:small_model',
+              ...Object.keys(snapshot.sources.registry.configurationPresets ?? {})
+                .sort()
+                .map((name) => `preset:${name}`),
+            ].map((modelRef) => ({
+              title: modelRef,
+              value: modelRef,
+              run: () => selected({ modelRef }),
+            })),
+          ),
+      },
+      {
+        title: 'Parameter-only preset',
+        value: '+parameters',
+        description: 'Stage parameters without a model; create only after review',
+        run: () =>
+          openParameterDraft(ui, (parameters) => {
+            const document = parseCompositionDocument(
+              JSON.stringify({ configurationPresets: { draft: { parameters } } }),
+            );
+            const preset = document.configurationPresets?.draft;
+            if (preset === undefined) {
+              throw new SettingsError('The parameter draft is unavailable. Reopen the editor.');
+            }
+            return selected(preset);
+          }),
+      },
+    ]);
   const availability = (name: string) => {
     const pending = { ...snapshot.sources.registry.profiles?.[name].agentAvailability };
     ui.menu(`${name}: agent availability`, () => [
@@ -305,7 +352,7 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
                 value: file.path,
                 run: () =>
                   registry === 'configurationPresets'
-                    ? ui.createPreset((value) =>
+                    ? createPreset((value) =>
                         ui.propose(snapshot, { operation: 'create', registry, name, sourceId: file.path, value }),
                       )
                     : ui.propose(snapshot, { operation: 'create', registry, name, sourceId: file.path }),

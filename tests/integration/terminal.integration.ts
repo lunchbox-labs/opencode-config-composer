@@ -55,6 +55,7 @@ test(
         kind === 'Configuration presets' ? 'New configuration preset' : 'Save composition definition?',
       );
       if (kind === 'Configuration presets') {
+        await terminal.choose('Concrete model', 'New configuration preset');
         await terminal.choose('Fixture Beta', 'Fixture Beta: variant');
         await terminal.choose('Model default', 'Save composition definition?');
       }
