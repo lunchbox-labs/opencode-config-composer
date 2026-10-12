@@ -1175,8 +1175,34 @@ export function registerSettings(
       },
     );
   };
-  const proposeDefinition = (snapshot: Snapshot, change: DefinitionChange) =>
-    proposeComposition(snapshot, planDefinition(snapshot, change), change);
+  const proposeDefinition = async (snapshot: Snapshot, change: DefinitionChange) => {
+    const plan = planDefinition(snapshot, change);
+    if (change.registry !== 'configurationPresets' || change.operation !== 'create') {
+      return proposeComposition(snapshot, plan, change);
+    }
+    const current = navigation.checkpoint();
+    const target = {
+      sourceId: change.sourceId,
+      path: ['configurationPresets', change.name],
+      label: `Preset: ${change.name}`,
+    };
+    const review = async (preview: Awaited<ReturnType<typeof previewFilePlan>>) => {
+      const bound =
+        editorSettings(preview.sources, snapshot.nativeModels).modelPresets[change.name].model !== undefined;
+      return parameterReview(snapshot, target, preview, bound ? await models() : []);
+    };
+    const details = await review(await previewFilePlan(plan));
+    if (!current()) {
+      return;
+    }
+    return proposeComposition(snapshot, plan, change, {
+      title: 'Save composition definition?',
+      details,
+      validate: async (preview) => {
+        await review(preview);
+      },
+    });
+  };
   const repairMenu = async () => {
     const current = navigation.checkpoint();
     const { root } = await connection();
