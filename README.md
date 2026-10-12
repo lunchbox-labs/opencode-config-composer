@@ -3,7 +3,7 @@
 Compose OpenCode configuration with reusable groups, presets and profiles to switch models and permissions
 across your agents. Manage configuration through `/compose`.
 
-Package: **`@lunchbox-labs/opencode-config-composer`** · Supported host: **OpenCode V1 1.18.34**.
+Package: **`@lunchbox-labs/opencode-config-composer`** · Supported host: **OpenCode V1 1.19.0**.
 Independently maintained; not affiliated with OpenCode or Anomaly.
 
 ## Add Composer
@@ -170,7 +170,7 @@ focused editors. Save changes, then apply when the current instance is idle, or 
 that instance; changes to OpenCode configuration or agent files require a restart. Editing requires shared
 filesystem access, and some sources are read-only.
 
-Profile switches preserve conversation history. OpenCode 1.18.34 can retain a conversation's previous model
+Profile switches preserve conversation history. OpenCode 1.19.0 can retain a conversation's previous model
 and variant, including after clearing profiles. Use `/models`, then `/variants`, to select the destination or
 inherited base settings.
 
@@ -189,7 +189,7 @@ guidance skills.
 
 Development requires Node 22.18 or newer and npm. Run `npm ci` and `npm run check` for typechecking, lint,
 formatting, unit tests and the installed-package test. `npm run test:native` uses `OPENCODE_BIN`, Python 3 and
-a Unix pseudo-terminal to test against OpenCode 1.18.34. See the [integration guide](docs/integration-tests.md)
+a Unix pseudo-terminal to test against OpenCode 1.19.0. See the [integration guide](docs/integration-tests.md)
 for the Linux/Windows integration suite and coverage.
 
 This project is licensed under MIT. See [LICENSE](LICENSE).

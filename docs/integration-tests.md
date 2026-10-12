@@ -2,7 +2,7 @@
 
 Run `npm ci` and `npm run test:integration` with Node 24 on Linux x64 or Windows x64.
 The command builds the package, installs the exact OpenCode version from
-`engines.opencode` (currently **1.18.34**), verifies its reported version, packs Composer,
+`engines.opencode`, verifies its reported version, packs Composer,
 and installs the tarball in temporary consumer projects. It also installs and checksum-verifies
 the real ripgrep 15.1.0 binary used by the pinned host on both platforms before startup,
 so reload cannot interrupt OpenCode’s dependency download. Set `OPENCODE_BIN` to an
@@ -150,7 +150,7 @@ Captured compatible-adapter options establish transport to the local provider, n
 validation by a remote model API.
 
 [Native session and terminal cases](../tests/integration/profile-session-terminal.integration.ts)
-separately observe OpenCode 1.18.34’s persisted session model and independent TUI choice.
+separately observe OpenCode’s persisted session model and independent TUI choice.
 A restored TUI model/variant can continue to override the destination after apply,
 including when the configured model changes. Clearing profiles can retain a previous
 native session model; a fresh implicit session uses the restored native fallback.
@@ -167,7 +167,7 @@ profiles. Then open `/variants` and select the intended destination variant or
 picker actions and subsequent provider requests are tested with conversation history
 and native configuration bytes preserved.
 
-OpenCode 1.18.34 catches plugin configuration-hook errors and can continue with native
+OpenCode catches plugin configuration-hook errors and can continue with native
 settings. An invalid configuration exercises the real hook error. Invalid JSONC rejected by
 the editor before reload leaves the previous active settings in effect.
 

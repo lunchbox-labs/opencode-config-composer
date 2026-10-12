@@ -1,4 +1,4 @@
-// OpenCode 1.18.34 wildcard semantics, with bounded work instead of an unbounded backtracking regex.
+// OpenCode 1.19.0 wildcard semantics, with bounded work instead of an unbounded backtracking regex.
 export function matches(
   value: string,
   pattern: string,
