@@ -29,8 +29,8 @@ a frontmatter `name` exactly matching their component key and a string `descript
 
 Agent `skills` records intended on-demand relationships;
 it neither injects skill bodies nor grants exclusive access. Agent settings belong in `configuration`.
-Selected command templates support native variables and Composer includes. Command `agent` targets are explicit.
-Native skill composition preserves OpenCode's wrapper, metadata, resources and base directory.
+Command `agent` targets are explicit. Command templates pass through unchanged, including native variables.
+Skill bodies, wrappers, metadata, resources and base directories remain owned by OpenCode.
 
 ## Agent membership and availability
 
