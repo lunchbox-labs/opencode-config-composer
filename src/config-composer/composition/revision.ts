@@ -1,3 +1,4 @@
+import { changedInput } from '../save-diagnostics.ts';
 import { verifySelection } from './selection-state.ts';
 import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
@@ -97,7 +98,7 @@ export async function verifyCompositionInputs(sources: LoadedSources, files: rea
   }
   for (const [path, expected] of sources.paths) {
     if ((await identity(path)) !== expected) {
-      throw new SettingsError('Composition source identity changed. Reopen the editor.');
+      throw changedInput('Composition source identity changed. Reopen the editor.', path, 'identity');
     }
   }
   const documents = sources.documents.map((source) => ({
@@ -107,13 +108,16 @@ export async function verifyCompositionInputs(sources: LoadedSources, files: rea
   }));
   for (const file of [...documents, ...files]) {
     const canonical = file.canonicalPath ?? file.path;
-    if ((await identity(file.path)) !== canonical || (await configurationFile(canonical)).text !== file.text) {
-      throw new SettingsError('Composition inputs changed. Reopen the editor before applying.');
+    if ((await identity(file.path)) !== canonical) {
+      throw changedInput('Composition inputs changed. Reopen the editor before applying.', file.path, 'identity');
+    }
+    if ((await configurationFile(canonical)).text !== file.text) {
+      throw changedInput('Composition inputs changed. Reopen the editor before applying.', file.path, 'content');
     }
     if ('aliases' in file) {
       for (const path of file.aliases ?? []) {
         if ((await identity(path)) !== canonical) {
-          throw new SettingsError('Composition input identity changed. Reopen the editor.');
+          throw changedInput('Composition input identity changed. Reopen the editor.', path, 'identity');
         }
       }
     }

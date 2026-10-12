@@ -215,3 +215,50 @@ test(
     );
   },
 );
+
+test(
+  'real terminal diagnoses a concurrent source edit and allows cancellation and a fresh repeated save',
+  { timeout: 240_000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'save-diagnostic-terminal');
+    await f.write(f.paths.shared, {});
+    await f.host.start();
+    const original = await f.send();
+    const terminal = await nativeTerminal(f.host, original.session.id, 'save-diagnostic-terminal');
+    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
+    const propose = async () => {
+      await terminal.command('/compose-configs', 'Compose configs');
+      await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
+      await terminal.choose('Component groups', 'Create definition');
+      await terminal.choose('Create definition', 'New component groups name');
+      await terminal.press('team\r', 'Save new definition in');
+      await terminal.press('\r', 'Save composition definition?');
+    };
+    await propose();
+    const before = await readFile(f.paths.shared, 'utf8');
+    await terminal.press('\x1b', 'Save new definition in');
+    assert.equal(await readFile(f.paths.shared, 'utf8'), before);
+    await terminal.press('\r', 'Save composition definition?');
+    const external = before + '\n// PRIVATE_CONCURRENT_BODY';
+    await writeFile(f.paths.shared, external);
+    await terminal.press('\r', 'Observed content:', 'Save rejected before file writes.');
+    const toast = terminal
+      .text()
+      .split('\n')
+      .map((line) => line.split('┃').at(-2) ?? '')
+      .join('');
+    assert.ok(toast.replace(/\s/g, '').includes(f.paths.shared.replace(/\s/g, '')));
+    assert.doesNotMatch(terminal.text(), /PRIVATE_CONCURRENT_BODY/);
+    assert.equal(await readFile(f.paths.shared, 'utf8'), external);
+    await terminal.press('\x1b', 'New component groups name');
+    await terminal.press('\x1b', 'Component groups');
+    await terminal.press('\x1b', 'Composition definitions');
+    await terminal.press('\x1b', 'Compose configs');
+    await terminal.press('\x1b', 'ctrl+p', 'commands');
+    await propose();
+    await terminal.press('\r', 'Settings saved');
+    assert.deepEqual((await f.document(f.paths.shared)).componentGroups?.team, {});
+    assert.match(await readFile(f.paths.shared, 'utf8'), /PRIVATE_CONCURRENT_BODY/);
+    await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
+  },
+);

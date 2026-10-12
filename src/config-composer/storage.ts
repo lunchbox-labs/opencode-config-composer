@@ -1,3 +1,4 @@
+import { type FileOutcome, changedInput, inputReadFailure, maxFileOutcomes, saveFailure } from './save-diagnostics.ts';
 import { verifySelection, withSelectionLock, withSelectionUpdate } from './composition/selection-state.ts';
 import { modelEditKey, resetModelBindingEdits } from './composition/model-binding-edits.ts';
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
@@ -139,12 +140,16 @@ export function collectFileReads(initial: readonly SourceFile[] = []) {
     const identity = file.canonicalPath ?? file.path;
     const existing = canonical.get(identity);
     if (existing !== undefined && existing.text !== file.text) {
-      throw new SettingsError('A configuration input changed while editing. Reopen the editor.');
+      throw changedInput('A configuration input changed while editing. Reopen the editor.', file.path, 'content');
     }
     const requested = [file.path, ...(file.aliases ?? [])];
     for (const path of requested) {
       if (paths.has(path) && paths.get(path) !== identity) {
-        throw new SettingsError('A configuration input changed identity while editing. Reopen the editor.');
+        throw changedInput(
+          'A configuration input changed identity while editing. Reopen the editor.',
+          path,
+          'identity',
+        );
       }
       paths.set(path, identity);
     }
@@ -303,12 +308,20 @@ async function nativeAgentsFromLayers(
 }
 
 async function sourceFile(root: string, path: string): Promise<SourceFile> {
-  const info = await lstat(path);
-  const rel = relative(root, await realpath(path));
-  if (!info.isFile() || info.isSymbolicLink() || rel.startsWith('..') || isAbsolute(rel) || info.size > 2_000_000) {
-    throw new SettingsError('Settings must be regular files inside this configuration directory, under 2 MB each.');
+  try {
+    const info = await lstat(path);
+    const rel = relative(root, await realpath(path));
+    if (!info.isFile() || info.isSymbolicLink() || rel.startsWith('..') || isAbsolute(rel) || info.size > 2_000_000) {
+      throw changedInput(
+        'Settings must be regular files inside this configuration directory, under 2 MB each.',
+        path,
+        !info.isFile() || info.isSymbolicLink() || rel.startsWith('..') || isAbsolute(rel) ? 'identity' : 'unavailable',
+      );
+    }
+    return { path, text: await readFile(path, 'utf8'), mode: info.mode & 0o777, writable: (info.mode & 0o222) !== 0 };
+  } catch (error) {
+    return inputReadFailure(error, path);
   }
-  return { path, text: await readFile(path, 'utf8'), mode: info.mode & 0o777, writable: (info.mode & 0o222) !== 0 };
 }
 
 async function observedComposition(sources: LoadedSources): Promise<void> {
@@ -323,25 +336,28 @@ async function observedComposition(sources: LoadedSources): Promise<void> {
       throw error;
     });
     if (actual !== expected) {
-      throw new SettingsError('Settings source identity changed. Reopen the editor.');
+      throw changedInput('Settings source identity changed. Reopen the editor.', path, 'identity');
     }
   }
 }
 
 async function observedFile(root: string, original: SourceFile): Promise<SourceFile> {
   for (const alias of original.aliases ?? []) {
-    if ((await realpath(alias)) !== (original.canonicalPath ?? original.path)) {
-      throw new SettingsError('Settings source identity changed. Reopen the editor.');
+    if (
+      (await realpath(alias).catch((error: unknown) => inputReadFailure(error, alias))) !==
+      (original.canonicalPath ?? original.path)
+    ) {
+      throw changedInput('Settings source identity changed. Reopen the editor.', alias, 'identity');
     }
   }
   if (original.writable !== false) {
     return sourceFile(original.writeRoot ?? root, original.path);
   }
-  const canonical = await realpath(original.path);
+  const canonical = await realpath(original.path).catch((error: unknown) => inputReadFailure(error, original.path));
   if (canonical !== (original.canonicalPath ?? original.path)) {
-    throw new SettingsError('Settings source identity changed. Reopen the editor.');
+    throw changedInput('Settings source identity changed. Reopen the editor.', original.path, 'identity');
   }
-  return configurationFile(canonical);
+  return configurationFile(canonical).catch((error: unknown) => inputReadFailure(error, original.path));
 }
 
 function pluginOptions(config: Record<string, unknown>, index: number): unknown {
@@ -411,7 +427,7 @@ export async function loadEditorSnapshot(
   for (const source of sources.documents) {
     const file = await configurationFile(source.id);
     if (file.text !== source.text) {
-      throw new SettingsError('Composition sources changed while loading. Reopen the editor.');
+      throw changedInput('Composition sources changed while loading. Reopen the editor.', source.path, 'content');
     }
     const rel = relative(root, source.id);
     const projectScope =
@@ -572,7 +588,7 @@ export async function loadEditorSnapshot(
   await observedComposition(sources);
   for (const file of reads.files) {
     if ((await observedFile(root, file)).text !== file.text) {
-      throw new SettingsError('Settings changed while loading. Reopen the editor.');
+      throw changedInput('Settings changed while loading. Reopen the editor.', file.path, 'content');
     }
   }
   return {
@@ -1196,8 +1212,13 @@ async function observedSourceList(snapshot: SourceSnapshot): Promise<void> {
     current.files.length !== snapshot.files.length ||
     current.files.some((file) => !snapshot.files.some((old) => old.path === file.path))
   ) {
-    throw new SettingsError(
+    const changed =
+      current.files.find((file) => !snapshot.files.some((old) => old.path === file.path)) ??
+      snapshot.files.find((file) => !current.files.some((next) => next.path === file.path));
+    throw changedInput(
       'The agent list changed: source list changed. Reopen the editor and review affected agents.',
+      changed?.path ?? snapshot.root,
+      'source-list',
     );
   }
 }
@@ -1230,7 +1251,11 @@ async function verifySavedSnapshot(snapshot: SourceSnapshot): Promise<void> {
   await observedComposition(snapshot.sources);
   for (const file of snapshot.files) {
     if ((await observedFile(snapshot.root, file)).text !== file.text) {
-      throw new SettingsError('Settings changed. Reopen the editor before applying. Saved changes are retained.');
+      throw changedInput(
+        'Settings changed. Reopen the editor before applying. Saved changes are retained.',
+        file.path,
+        'content',
+      );
     }
   }
   await observedSourceList(snapshot);
@@ -1250,7 +1275,11 @@ async function persistFilePlan(
     for (const original of collectFileReads([...plan.snapshot.files, ...(plan.reads ?? [])]).files) {
       const current = await observedFile(plan.snapshot.root, original);
       if (current.text !== original.text) {
-        throw new SettingsError('Settings changed while the dialog was open. Reopen it and try again.');
+        throw changedInput(
+          'Settings changed while the dialog was open. Reopen it and try again.',
+          original.path,
+          'content',
+        );
       }
     }
     // Detect newly added agents before approving a group-wide preview.
@@ -1265,7 +1294,7 @@ async function persistFilePlan(
     await observedComposition(plan.snapshot.sources);
     for (const original of collectFileReads([...plan.snapshot.files, ...(plan.reads ?? [])]).files) {
       if ((await observedFile(plan.snapshot.root, original)).text !== original.text) {
-        throw new SettingsError('Settings changed during validation. Reopen the editor.');
+        throw changedInput('Settings changed during validation. Reopen the editor.', original.path, 'content');
       }
     }
     for (const edit of plan.edits) {
@@ -1281,7 +1310,11 @@ async function persistFilePlan(
         (writeRoot !== plan.snapshot.root && (writeRoot !== plan.snapshot.scopeRoot || !projectScope)) ||
         (await realpath(writeRoot)) !== writeRoot
       ) {
-        throw new SettingsError('The composition write directory changed or is outside the selected scope.');
+        throw changedInput(
+          'The composition write directory changed or is outside the selected scope.',
+          writeRoot,
+          'identity',
+        );
       }
       if (edit.create === true) {
         if (!projectScope && edit.file.path !== join(plan.snapshot.root, 'config-composer.jsonc')) {
@@ -1300,12 +1333,20 @@ async function persistFilePlan(
         }
       }
       if (projectScope && (await realpath(dirname(edit.file.path))) !== dirname(edit.file.path)) {
-        throw new SettingsError('The project composition directory is a symbolic link or changed identity.');
+        throw changedInput(
+          'The project composition directory is a symbolic link or changed identity.',
+          dirname(edit.file.path),
+          'identity',
+        );
       }
       if (edit.create !== true) {
         const before = await sourceFile(writeRoot, edit.file.path);
         if (before.text !== edit.file.text || before.mode !== edit.file.mode || before.writable === false) {
-          throw new SettingsError('Settings changed or permissions changed before saving. Reopen the editor.');
+          throw changedInput(
+            'Settings changed or permissions changed before saving. Reopen the editor.',
+            edit.file.path,
+            before.text !== edit.file.text ? 'content' : 'permissions',
+          );
         }
       }
       assertAuthorized?.();
@@ -1315,31 +1356,33 @@ async function persistFilePlan(
     assertAuthorized?.();
     await commit?.();
   } catch (error) {
-    let incomplete = false;
+    const outcomes: FileOutcome[] = [];
+    const recordOutcome = (edit: FileEdit, outcome: FileOutcome['outcome']) => {
+      if (outcomes.length < maxFileOutcomes) {
+        outcomes.push({ path: edit.file.path, outcome });
+      }
+    };
     for (const edit of applied.reverse()) {
       try {
         if ((await readFile(edit.file.path, 'utf8')) !== edit.text) {
-          incomplete = true;
+          recordOutcome(edit, 'external-bytes-preserved');
           continue;
         }
         if (edit.create === true) {
           await unlink(edit.file.path);
+          recordOutcome(edit, 'removed');
         } else {
           await atomicWrite(edit.file.path, edit.file.text, edit.file.mode);
+          recordOutcome(edit, 'restored');
         }
       } catch {
-        incomplete = true;
+        recordOutcome(edit, 'restore-failed');
       }
     }
     for (const directory of createdDirectories.reverse()) {
       await rmdir(directory).catch(() => undefined);
     }
-    if (incomplete) {
-      throw new SettingsError(
-        'Saving failed and rollback was incomplete. Review the affected settings files before continuing.',
-      );
-    }
-    throw error;
+    throw saveFailure(error, outcomes, applied.length);
   }
 }
 
@@ -1353,10 +1396,16 @@ export async function saveFilePlan(
   }
   const lockPath = join(plan.snapshot.root, '.config-composer.lock');
   const lock = await open(lockPath, 'wx').catch(() => {
-    throw new SettingsError('Another settings edit is active, or a stale .config-composer.lock needs attention.');
+    throw saveFailure(
+      new SettingsError('Another settings edit is active, or a stale .config-composer.lock needs attention.'),
+      [],
+      0,
+    );
   });
+  let enteredPersistence = false;
   try {
     if (plan.selection === undefined) {
+      enteredPersistence = true;
       await persistFilePlan(plan, validate, authorize);
       return;
     }
@@ -1365,6 +1414,7 @@ export async function saveFilePlan(
       throw new SettingsError('The server did not publish its selection state location. Restart OpenCode.');
     }
     await withSelectionUpdate(state, plan.selection.profiles, async (commit) => {
+      enteredPersistence = true;
       await persistFilePlan(
         plan,
         async () => {
@@ -1375,6 +1425,11 @@ export async function saveFilePlan(
         commit,
       );
     });
+  } catch (error) {
+    if (enteredPersistence) {
+      throw error;
+    }
+    throw saveFailure(error, [], 0);
   } finally {
     await lock.close();
     await unlink(lockPath);
@@ -1404,13 +1459,13 @@ export async function reloadConfiguration(
     await observedComposition(snapshot.sources);
     for (const file of snapshot.files) {
       if ((await observedFile(snapshot.root, file)).text !== file.text) {
-        throw new SettingsError('Settings changed. Reopen the editor before reloading.');
+        throw changedInput('Settings changed. Reopen the editor before reloading.', file.path, 'content');
       }
     }
     await observedSourceList(snapshot);
     const original = await sourceFile(snapshot.root, snapshot.configFile.path);
     if (original.text !== snapshot.configFile.text) {
-      throw new SettingsError('Settings changed. Reopen the editor before reloading.');
+      throw changedInput('Settings changed. Reopen the editor before reloading.', original.path, 'content');
     }
     if (!Array.isArray(snapshot.config.plugin)) {
       throw new SettingsError('Configure the Config Composer server plugin first.');
@@ -1439,12 +1494,20 @@ export async function reloadConfiguration(
     await observedComposition(snapshot.sources);
     for (const file of snapshot.files) {
       if (file.path !== original.path && (await observedFile(snapshot.root, file)).text !== file.text) {
-        throw new SettingsError('Settings changed during reload. Reopen the editor and check the saved configuration.');
+        throw changedInput(
+          'Settings changed during reload. Reopen the editor and check the saved configuration.',
+          file.path,
+          'content',
+        );
       }
     }
     const current = await sourceFile(snapshot.root, original.path);
     if (current.text !== apiText) {
-      throw new SettingsError('Settings changed during reload. Reopen the editor and check the saved configuration.');
+      throw changedInput(
+        'Settings changed during reload. Reopen the editor and check the saved configuration.',
+        original.path,
+        'content',
+      );
     }
     // The API replaces the plugin array. Restore its original comments and layout with
     // the same new token, after checking that no concurrent edit would be lost.
