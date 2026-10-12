@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { compositionFixture } from './composition-fixture.ts';
 import { nativeTerminal } from './terminal.ts';
 import { reloadFromTerminal } from './terminal-editor.ts';
@@ -143,5 +143,72 @@ test(
     assert.equal(JSON.stringify(await f.host.api('/agent')), running);
     assert.equal(f.host.requests.length, 1);
     assert.match(await readFile(f.paths.shared, 'utf8'), /Preserve fixture comments/);
+  },
+);
+
+test(
+  'real terminal duplicates profiles and presets with cancellation, back navigation and stale guards',
+  { timeout: 240_000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'duplicate-terminal');
+    await f.write(f.paths.shared, {
+      configurationPresets: { base: { model: 'fixture/alpha' }, tuning: { modelRef: 'preset:base' } },
+      componentGroups: { work: { agents: ['worker'] } },
+      profiles: {
+        parent: { layers: [{ componentGroup: 'work' }] },
+        work: { extends: 'parent', layers: [{ configurationPreset: 'tuning', target: { agents: ['worker'] } }] },
+      },
+      activeProfiles: ['work'],
+    });
+    await f.host.start();
+    const original = await f.send();
+    const terminal = await nativeTerminal(f.host, original.session.id, 'duplicate-terminal');
+    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
+    const open = async (registry: string, name: string) => {
+      await terminal.command('/compose-configs', 'Compose configs');
+      await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
+      await terminal.choose(registry, 'Create definition');
+      await terminal.choose(name, `${registry}: ${name}`);
+      await terminal.choose('Duplicate as', 'Duplicate as');
+    };
+    const before = await readFile(f.paths.shared, 'utf8');
+    await open('Profiles', 'work');
+    await terminal.press('\x1b', 'Profiles: work');
+    await terminal.choose('Duplicate as', 'Duplicate as');
+    await terminal.press('work\r', 'That definition already exists');
+    await terminal.press('\x15work-copy\r', 'Save duplicate in');
+    await terminal.press('\x1b', 'Duplicate as');
+    await terminal.press('\r', 'Save duplicate in');
+    await terminal.press('\r', 'Save duplicate definition?');
+    for (const reference of ['profile:parent', 'preset:tuning', 'agent:worker']) {
+      assert.ok(terminal.text().replace(/\s+/g, '').includes(reference));
+    }
+    assert.ok(terminal.text().replace(/\s+/g, '').includes(f.paths.shared.replace(/\s+/g, '')));
+    await terminal.press('\x1b', 'Save duplicate in');
+    assert.equal(await readFile(f.paths.shared, 'utf8'), before);
+    await terminal.press('\r', 'Save duplicate definition?');
+    await terminal.press('\r', 'Settings saved');
+    const saved = await f.document(f.paths.shared);
+    assert.deepEqual(saved.profiles!['work-copy'], saved.profiles!.work);
+    assert.deepEqual(saved.activeProfiles, ['work']);
+    await terminal.choose('Apply on next restart', 'verified');
+    await open('Configuration presets', 'tuning');
+    await terminal.press('tuning-copy\r', 'Save duplicate in');
+    await terminal.press('\r', 'Save duplicate definition?', 'preset:base');
+    await terminal.press('\r', 'Settings saved');
+    assert.deepEqual((await f.document(f.paths.shared)).configurationPresets!['tuning-copy'], {
+      modelRef: 'preset:base',
+    });
+    await terminal.choose('Apply on next restart', 'verified');
+    await open('Configuration presets', 'tuning');
+    await terminal.press('stale-copy\r', 'Save duplicate in');
+    await terminal.press('\r', 'Save duplicate definition?');
+    const concurrent = (await readFile(f.paths.shared, 'utf8')) + '\n// Concurrent edit\n';
+    await writeFile(f.paths.shared, concurrent);
+    await terminal.press('\r', 'Settings changed');
+    assert.equal(await readFile(f.paths.shared, 'utf8'), concurrent);
+    assert.equal((await f.document(f.paths.shared)).configurationPresets!['stale-copy'], undefined);
+    assert.deepEqual((await f.document(f.paths.shared)).activeProfiles, ['work']);
+    assert.equal((await f.send(original.session.id)).captured.model, original.captured.model);
   },
 );
