@@ -1,3 +1,4 @@
+import { diagnosticText, editorErrorText } from './tui/editor-error.ts';
 import { verifySelectionProof } from './composition/selection-state.ts';
 import { readHostComponentInventory, referenceNotices } from './tui/reference-diagnostics.ts';
 import { referenceDescription } from './composition/reference-diagnostics.ts';
@@ -94,6 +95,34 @@ export function registerSettings(
   const navigation = dialogNavigation(api);
   const referenceWarnings = referenceNotices(api, directory);
   let busy = false;
+  let disposed = false;
+  let errorGeneration = 0;
+  let lastEditorError: { message: string; context: string } | undefined;
+  const errorScope = () => ({
+    client: api.client,
+    config: api.state.path.config,
+    directory: (api.state.path as { directory?: string }).directory,
+    worktree: (api.state.path as { worktree?: string }).worktree,
+    state: api.state.path.state,
+  });
+  let scope = errorScope();
+  const clearEditorError = () => {
+    lastEditorError = undefined;
+    errorGeneration++;
+  };
+  const currentErrorScope = () => {
+    const next = errorScope();
+    if ((['client', 'config', 'directory', 'worktree', 'state'] as const).some((key) => next[key] !== scope[key])) {
+      clearEditorError();
+      scope = next;
+    }
+    return !disposed && !api.lifecycle.signal.aborted;
+  };
+  api.lifecycle.signal.addEventListener('abort', clearEditorError, { once: true });
+  const stopErrorEvents = [
+    api.event.on('server.instance.disposed', clearEditorError),
+    api.event.on('server.connected', clearEditorError),
+  ];
   let nativeSaveNeedsRestart = false;
   let lastFailure: (ApplyFailure & { directory: string }) | undefined;
   const native = new WeakMap<Snapshot, NativeModels>();
@@ -177,45 +206,70 @@ export function registerSettings(
     native.set(snapshot, { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model });
   };
   const run = (action: () => void | Promise<void>) => {
-    if (busy || api.lifecycle.signal.aborted) {
+    if (!currentErrorScope() || busy) {
       return;
     }
     busy = true;
+    const generation = errorGeneration;
     return Promise.resolve()
       .then(action)
       .catch((error: unknown) => {
-        if (!api.lifecycle.signal.aborted) {
-          api.ui.toast({
-            variant: 'error',
-            title: 'Agent settings',
-            message:
-              error instanceof SettingsError
-                ? error.message
-                : 'Could not update settings. Check the files and server connection.',
-            duration: 8000,
-          });
+        if (currentErrorScope() && generation === errorGeneration) {
+          const message = editorErrorText(error);
+          lastEditorError = {
+            message,
+            context: diagnosticText(
+              `Project: ${scope.directory ?? scope.worktree ?? directory}\nConfiguration: ${directory}`,
+            ),
+          };
+          api.ui.toast({ variant: 'error', title: 'Agent settings', message, duration: 8000 });
         }
       })
       .finally(() => {
         busy = false;
       });
   };
+  const editorErrorAction: Action = {
+    title: 'Last editor error',
+    value: 'last-editor-error',
+    description: 'Inspect the latest error in this project and instance',
+    run: () => {
+      currentErrorScope();
+      navigation.alert({
+        title: 'Last editor error',
+        message:
+          lastEditorError === undefined
+            ? 'No editor error in this project and instance.'
+            : `${lastEditorError.context}\n\n${lastEditorError.message}`,
+      });
+      api.ui.dialog.setSize('xlarge');
+    },
+  };
   const menu = (title: string, options: Action[] | (() => Action[]), current?: string, root = false) => {
     if (api.lifecycle.signal.aborted) {
       return;
     }
+    const choices = () => {
+      const items = typeof options === 'function' ? options() : options;
+      currentErrorScope();
+      return lastEditorError !== undefined && !items.includes(editorErrorAction)
+        ? [...items, { ...editorErrorAction, value: '\u0000last-editor-error' }]
+        : items;
+    };
     navigation.menu(
       {
         title,
         placeholder: 'Search…',
         current,
         get options() {
-          return typeof options === 'function' ? options() : options;
+          return choices();
         },
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
         onSelect: (option) =>
           run(() =>
-            (typeof options === 'function' ? options() : options).find((item) => item.value === option.value)?.run(),
+            choices()
+              .find((item) => item.value === option.value)
+              ?.run(),
           ),
       },
       root,
@@ -1327,6 +1381,7 @@ export function registerSettings(
     menu(
       'Compose configs',
       [
+        editorErrorAction,
         ...(notices.diagnostics.length === 0 && notices.unavailable === undefined
           ? []
           : [
@@ -1615,6 +1670,9 @@ export function registerSettings(
     ],
   });
   api.lifecycle.onDispose(() => {
+    disposed = true;
+    clearEditorError();
+    stopErrorEvents.forEach((stop) => stop());
     unregister();
     shortcuts.dispose();
   });
