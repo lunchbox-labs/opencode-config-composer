@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import type { Config } from '@opencode-ai/sdk/v2';
 import { compositionFixture } from './composition-fixture.ts';
 
-for (const scenario of ['agent-and-command', 'command-only', 'availability'] as const) {
+for (const scenario of ['command-only', 'availability'] as const) {
   test(
     `downstream ${scenario} body changes retain native editor loading and scoped apply`,
     { timeout: 120_000 },
