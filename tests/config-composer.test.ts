@@ -2346,70 +2346,6 @@ test('a server process change rejects an open selection confirmation before any 
   );
 });
 
-test('selection confirmation requires the server external state filesystem proof', async (t) => {
-  const root = await fixture(t);
-  const ui = uiHarness(root);
-  await ui.command('config-composer.compose');
-  await ui.select('activation');
-  await ui.select('none');
-  const get = ui.api.client.config.get.bind(ui.api.client.config);
-  Reflect.set(ui.api.client.config, 'get', async () => {
-    const response = await get();
-    await rm(join(root, '.state/config-composer/v1/processes/test-server/proof'), { force: true });
-    return response;
-  });
-  await ui.confirm();
-  assert.match(ui.toasts.at(-1)?.message ?? '', /state filesystem/);
-  assert.deepEqual(
-    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
-    ['work'],
-  );
-});
-
-test('compose only shows reference notices while running references need attention', async (t) => {
-  const root = await fixture(t);
-  const ui = uiHarness(root);
-  await ui.command('config-composer.compose');
-  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
-  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
-  await ui.escape();
-  const path = join(root, 'config-composer.jsonc');
-  const value = parseConfig(await readFile(path, 'utf8'));
-  const groups = value.componentGroups as Record<string, Record<string, unknown>>;
-  groups.developers.agents = ['missing-agent'];
-  await writeFile(path, JSON.stringify(value));
-  await ui.command('config-composer.compose');
-  await ui.select('reference-notices');
-  assert.match(ui.message(), /missing-agent/);
-  assert.match(ui.message(), /Group developers/);
-  assert.match(ui.message(), /componentGroups\/developers\/agents\/0/);
-  assert.match(ui.message(), /Valid composition remains active/);
-  assert.equal(ui.toasts.length, 0, 'routine reads do not toast');
-  await ui.escape();
-  groups.developers.agents = ['builtin'];
-  await writeFile(path, JSON.stringify(value));
-  await ui.command('config-composer.compose');
-  assert.ok('options' in ui.dialog);
-  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
-});
-
-test('editor rejects a native baseline replaced during host inventory discovery', async (t) => {
-  const root = await fixture(t);
-  const ui = uiHarness(root);
-  const first = (await ui.api.client.config.get()).data!;
-  const replacement = await editorServerConfig(root, { model: 'example/deep' });
-  let current = first;
-  Object.assign(ui.api.client.config, { get: async () => ({ data: current }) });
-  Object.assign(ui.api.client.app, {
-    skills: async () => {
-      current = replacement;
-      return { data: [] };
-    },
-  });
-  await ui.command();
-  assert.match(ui.toasts.at(-1)?.message ?? '', /instance changed during component discovery/i);
-});
-
 async function newPreset(ui: ReturnType<typeof uiHarness>, root: string, name = 'draft') {
   await ui.command('config-composer.compose');
   await ui.select('registry');
@@ -2571,4 +2507,68 @@ test('leaving a staged preset discards its draft and custom JSON options are val
   assert.deepEqual((await loadSnapshot(root)).sources.registry.configurationPresets?.draft, {
     parameters: { options: { custom: [true, null, 1, 'value'] } },
   });
+});
+
+test('selection confirmation requires the server external state filesystem proof', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  await ui.select('activation');
+  await ui.select('none');
+  const get = ui.api.client.config.get.bind(ui.api.client.config);
+  Reflect.set(ui.api.client.config, 'get', async () => {
+    const response = await get();
+    await rm(join(root, '.state/config-composer/v1/processes/test-server/proof'), { force: true });
+    return response;
+  });
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)?.message ?? '', /state filesystem/);
+  assert.deepEqual(
+    (await loadSnapshot(root, root, { selectionEnvironment: editorSelectionEnvironment(root) })).sources.activeProfiles,
+    ['work'],
+  );
+});
+
+test('compose only shows reference notices while running references need attention', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.compose');
+  assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
+  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
+  await ui.escape();
+  const path = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(path, 'utf8'));
+  const groups = value.componentGroups as Record<string, Record<string, unknown>>;
+  groups.developers.agents = ['missing-agent'];
+  await writeFile(path, JSON.stringify(value));
+  await ui.command('config-composer.compose');
+  await ui.select('reference-notices');
+  assert.match(ui.message(), /missing-agent/);
+  assert.match(ui.message(), /Group developers/);
+  assert.match(ui.message(), /componentGroups\/developers\/agents\/0/);
+  assert.match(ui.message(), /Valid composition remains active/);
+  assert.equal(ui.toasts.length, 0, 'routine reads do not toast');
+  await ui.escape();
+  groups.developers.agents = ['builtin'];
+  await writeFile(path, JSON.stringify(value));
+  await ui.command('config-composer.compose');
+  assert.ok('options' in ui.dialog);
+  assert.ok(!ui.dialog.options.some((option) => option.value === 'reference-notices'));
+});
+
+test('editor rejects a native baseline replaced during host inventory discovery', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  const first = (await ui.api.client.config.get()).data!;
+  const replacement = await editorServerConfig(root, { model: 'example/deep' });
+  let current = first;
+  Object.assign(ui.api.client.config, { get: async () => ({ data: current }) });
+  Object.assign(ui.api.client.app, {
+    skills: async () => {
+      current = replacement;
+      return { data: [] };
+    },
+  });
+  await ui.command();
+  assert.match(ui.toasts.at(-1)?.message ?? '', /instance changed during component discovery/i);
 });
