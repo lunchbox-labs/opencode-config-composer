@@ -1,7 +1,7 @@
 # OpenCode Config Composer
 
 Compose OpenCode configuration with reusable groups, presets and profiles to switch models and permissions
-across your agents. Manage configuration through `/compose`.
+across your agents. Manage selections, edit settings and inspect the result through `/compose`.
 
 Package: **`@lunchbox-labs/opencode-config-composer`** · Supported host: **OpenCode V1 1.19.0**.
 Independently maintained; not affiliated with OpenCode or Anomaly.
@@ -21,7 +21,7 @@ configuration lives in a project.
 
 - [Switch providers](docs/examples/provider-profiles/README.md): keep model profiles for rotating provider subscriptions.
 - [Share permissions by role](docs/examples/role-permissions/README.md): maintain developer, reviewer and orchestrator policies in one place.
-- [Review and programming](docs/examples/review-programming/README.md): combine model profiles and permissions in a complete configuration.
+- [Review and programming](docs/examples/review-programming/README.md): combine model profiles and role-specific permissions in a complete configuration.
 
 ## Compose configuration
 
@@ -31,8 +31,8 @@ provider profiles assign it different model presets. A reviewer group can share 
 
 Define membership under `componentGroups`. A group's `agents` list uses existing agent names, including built-ins
 such as `build` and `plan`; custom agents can also join through `groups` in their Markdown frontmatter. Its optional
-`configuration` applies to member agents when the group is selected. Groups can also bundle declared commands,
-and skills, but the group's settings affect only its agents.
+`configuration` applies to member agents when the group is selected. Groups can also name declared commands
+and skills; group configuration affects only agents.
 
 Put reusable model, variant, parameter and permission settings in `configurationPresets`. A preset has no members
 of its own. It can supply either a `model` or a `modelRef`, never both. Use `opencode:model` or
@@ -165,7 +165,7 @@ Use `overrides.agents` to address individual selected agents; an override does n
 
 Later contributions replace earlier values for the same field. Objects merge by field, while arrays replace
 inside merged values. Profile layers are separate ordered contributions, so a child's layers run after its
-parent's rather than replacing the parent's list. Permissions follow the ordering described below.
+parent's rather than replacing the parent's list. Permission rules follow the matching order described below.
 
 An explicit model or variant in an agent's OpenCode definition takes precedence over Composer defaults and
 group/preset settings. A per-agent override can replace that pin. Within a composition, changing a model or its

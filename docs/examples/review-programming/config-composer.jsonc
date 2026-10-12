@@ -1,15 +1,11 @@
 {
-  "imports": [
-    "./profiles.jsonc"
-  ],
+  "imports": ["./profiles.jsonc"],
   "componentGroups": {
     "review": {
       "agents": ["code-reviewer", "test-auditor"],
-      "configuration": {},
     },
     "programming": {
       "agents": ["implementer", "test-writer"],
-      "configuration": {},
     },
   },
   "configurationPresets": {

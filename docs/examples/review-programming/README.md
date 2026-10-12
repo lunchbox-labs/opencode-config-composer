@@ -1,9 +1,8 @@
 # Review and programming example
 
 This example coordinates two reviewers and two programming agents. Composer profiles apply permissions and
-model settings to them.
-Switching between `claude-coding` and `openai-coding`
-changes models and permissions while keeping the same prompts and commands.
+model settings to them. Switching between `claude-coding` and `openai-coding` changes models and permissions
+while keeping the same agents, instructions and commands.
 
 ## Compose configuration
 
@@ -36,12 +35,12 @@ Both model presets set `maxOutputTokens` to 4,096. The Claude reviewer's final G
 back to OpenCode's permissions.
 
 Select `openai-coding` through `/compose`, or set `"activeProfiles": ["openai-coding"]` and apply or restart.
-The command targets and prompts stay the same. Existing conversations can retain their previous model and
+The command targets and agent instructions stay the same. Existing conversations can retain their previous model and
 variant; use `/models`, then `/variants`, to select the destination model and its variant or **Default**.
 
 Setting `"activeProfiles": []` removes these profiles' model settings and permissions. The
-agents, commands and skills remain available, with the agents' original prompt bodies and the
-OpenCode defaults from `opencode.jsonc`. Any independently configured Composer document defaults or overrides
+agents, commands and skills remain available, with their original instructions and the OpenCode defaults
+from `opencode.jsonc`. Any independently configured Composer document defaults or overrides
 still apply.
 
 See [scope precedence](../../../README.md#shared-project-and-local-settings) for local profile selections and
