@@ -86,7 +86,22 @@ export async function loadNativeProjectSources(root: string, directory = root): 
     }
     for (const entry of (await readdir(path, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
       const file = join(path, entry.name);
-      const info = await lstat(await realpath(file));
+      const target = await realpath(file).catch((error: unknown) => {
+        if (
+          entry.isSymbolicLink() &&
+          !entry.name.endsWith('.md') &&
+          error instanceof Error &&
+          'code' in error &&
+          error.code === 'ENOENT'
+        ) {
+          return undefined;
+        }
+        throw error;
+      });
+      if (target === undefined) {
+        continue;
+      }
+      const info = await lstat(target);
       if (info.isDirectory()) {
         if (!primary) {
           await scan(file, base, primary, batch, new Set([...parents, canonical]));
