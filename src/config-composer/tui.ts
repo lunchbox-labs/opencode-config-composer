@@ -38,7 +38,6 @@ import {
   plannedChoices,
   previewFilePlan,
   saveFilePlan,
-  savePlan,
 } from './storage.ts';
 import { configurationDirectory } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
@@ -626,15 +625,19 @@ export function registerSettings(
       `${plan.description}\n${choiceLabel}${impact}${scope}\nModels to validate: ${modelsPreview === '' ? 'Native fallback' : modelsPreview}\n\n` +
         `${plan.edits.length} file(s) will change. Reload settings after saving to apply them.`,
       async () => {
-        if (native.has(snapshot)) {
-          await refreshNative(snapshot);
-        }
-        const choices = await plannedChoices(plan, context(snapshot).native);
-        if (JSON.stringify(choices) !== JSON.stringify(preview)) {
-          throw new SettingsError(
-            'Effective model defaults changed while the dialog was open. Reopen it and review the new models.',
-          );
-        }
+        const validatePreview = async () => {
+          if (native.has(snapshot)) {
+            await refreshNative(snapshot);
+          }
+          const choices = await plannedChoices(plan, context(snapshot).native);
+          if (JSON.stringify(choices) !== JSON.stringify(preview)) {
+            throw new SettingsError(
+              'Effective model defaults changed while the dialog was open. Reopen it and review the new models.',
+            );
+          }
+          return choices;
+        };
+        const choices = await validatePreview();
         if (choices.some((choice) => typeof choice.model === 'string' && choice.model !== '')) {
           const available = await models();
           for (const choice of choices) {
@@ -644,7 +647,15 @@ export function registerSettings(
         if (api.lifecycle.signal.aborted) {
           return;
         }
-        await save(plan, () => savePlan(plan, () => authorizePlan(plan)));
+        await save(plan, () =>
+          saveFilePlan(
+            plan,
+            async () => {
+              await validatePreview();
+            },
+            () => authorizePlan(plan),
+          ),
+        );
         await offerReload(true);
       },
     );
