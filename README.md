@@ -115,7 +115,7 @@ presets, profiles and other named definitions, but cannot supply `selection`, le
 Importing a profile does not activate it. Duplicate definition names, import cycles and repeated imports of the
 same file are rejected; definitions do not replace one another just because they appear in a later scope.
 
-Configure `selection.defaultProfiles` as ordered profile names and `selection.retainOnRestart` to control
+Configure `selection.defaultProfiles` as ordered configuration profile names and `selection.retainOnRestart` to control
 whether choices survive an OpenCode server restart (default: `true`). See the
 [project selection example](docs/examples/project-selection). Shared, project and local sources provide
 these declarative settings; later supplied fields replace earlier ones, and `[]` selects none.
@@ -124,6 +124,7 @@ these declarative settings; later supplied fields replace earlier ones, and `[]`
 project outside configuration files. Different projects/worktrees remain independent even when they share
 the same configuration. Selecting **Use configured defaults** clears that project's override without
 changing its defaults. Presets remain authored configuration; there is no separate selected-preset state.
+Configuration profile switches do not select or recompose Prompt Composer settings; the packages operate independently.
 
 Existing `activeProfiles` fields remain supported as legacy defaults until `selection.defaultProfiles` is
 configured. Switching profiles never rewrites them. To migrate, move each scoped list to

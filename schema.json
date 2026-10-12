@@ -87,10 +87,11 @@
           },
           "maxItems": 64,
           "uniqueItems": true,
-          "description": "Configured profile defaults, never rewritten by selection changes."
+          "description": "Ordered configuration profile defaults. External project selection never rewrites this list."
         },
         "retainOnRestart": {
           "type": "boolean",
+          "description": "Retain external project selection across server restarts. When false, a fresh server process uses configured defaults; apply within the same process retains selection. New sessions do not reset configuration.",
           "default": true
         }
       }

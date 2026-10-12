@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { compositionFixture } from './composition-fixture.ts';
 
 test(
-  'project selection survives restart independently of another project, while transient selection resets',
+  'project configuration selection survives restart independently, while transient selection resets to configured defaults',
   { timeout: 240_000 },
   async (t) => {
     const f = await compositionFixture(t, 'external-selection');

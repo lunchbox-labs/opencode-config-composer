@@ -1836,7 +1836,7 @@ test('instance apply retains saved native JSON edits and requests restart for th
   );
 });
 
-test('profile activation UI distinguishes local none from inheritance and preserves cancellation', async (t) => {
+test('profile selection UI distinguishes explicit none from configured defaults and preserves cancellation', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);
   await ui.command('config-composer.compose');
@@ -2125,7 +2125,7 @@ async function shortcutFixture(t: TestContext) {
   return { root, path, source, ui };
 }
 
-test('profile shortcuts choose an explicit destination and reuse cancellation, preview, save and pending apply', async (t) => {
+test('profile shortcuts use external project selection with cancellation, preview, save and pending apply', async (t) => {
   const { root, ui } = await shortcutFixture(t);
   assert.ok(ui.commandNames().includes('config-composer.shortcut.quiet'));
   await ui.command('config-composer.shortcut.quiet');

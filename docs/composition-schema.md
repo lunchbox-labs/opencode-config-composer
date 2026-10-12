@@ -17,7 +17,7 @@ explicit imports, reusable model and permission presets, and profiles that compo
 | `profileShortcuts`     | Named actions with ordered `activeProfiles` and optional `description`.                                        |
 | `defaults`             | Runtime `model`, `small_model`, global `permissions` and selected-agent `agents` defaults.                     |
 | `overrides`            | Runtime `model`, `small_model`, global `permissions` and `agents` settings keyed by exact selected agent name. |
-| `selection`            | `defaultProfiles`: ordered profile names; `retainOnRestart`: boolean, default `true`. |
+| `selection`            | `defaultProfiles`: ordered configuration profile names; `retainOnRestart`: boolean, default `true`. |
 | `activeProfiles`       | Legacy configured defaults, used when no `selection.defaultProfiles` is supplied.                                                    |
 | `imports`              | Explicit local `.json` or `.jsonc` definition documents in authored order.                                     |
 
@@ -131,7 +131,8 @@ Without that setting, the last legacy `activeProfiles` list supplies defaults. N
 A saved external project selection overrides configured defaults until **Use configured defaults** is chosen.
 Document defaults/overrides still apply when no profiles are selected. `retainOnRestart` defaults to `true`;
 `false` uses a server-process namespace that survives instance apply but not server restart. There is no
-session reset setting. See [selection storage and migration](../README.md#shared-project-and-local-settings).
+session reset setting or cross-package prompt-profile selection. These settings control configuration only.
+See [selection storage and migration](../README.md#shared-project-and-local-settings).
 
 Imports load explicit definition documents in authored order. They may define components, groups, presets,
 profiles and shortcuts, but cannot supply root `selection`, legacy activation, defaults or overrides.

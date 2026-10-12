@@ -66,7 +66,7 @@ test(
     });
 
     await t.test(
-      'a native source added during asynchronous validation aborts before creating a local selection',
+      'a native source added during asynchronous validation aborts before saving external project selection',
       async () => {
         const late = join(f.host.project, '.opencode/agents/late.md');
         const plan = f.activation.planScope(await f.editor.snapshot(), 'local', {
