@@ -86,6 +86,12 @@ from the destination and applicable defaults. Read-only affected sources block t
 and unchanged-binding edits preserve unrelated controls. This edits declarations; profile switching instead rebuilds
 effective configuration without rewriting reusable definitions.
 
+**Clear group model defaults** removes the selected group’s model, model reference and variant.
+Remaining layers still apply: clearing a later group can reveal an earlier group’s model and variant.
+Agent pins and per-agent overrides retain their precedence. Native fallback applies only where no
+remaining Composer contribution or agent pin supplies the setting; clearing a group does not force it.
+Review the effective models in the save preview before applying the change.
+
 `parameters` supports `temperature` (0–2), `topP` (0–1), positive safe integer `topK` and `maxOutputTokens`,
 and an `options` object containing JSON values. Structural validity does not imply provider support;
 catalog and adapter validation also run before dispatch. Native temperature/top-p and variant authority is retained.

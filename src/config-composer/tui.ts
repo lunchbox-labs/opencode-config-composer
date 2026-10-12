@@ -331,6 +331,9 @@ export function registerSettings(
     return `${choice.modelRef !== undefined && choice.modelRef !== '' ? `${choice.modelRef} → ` : ''}${label(choice)}${suffix}`;
   };
   const describeGroup = (snapshot: Snapshot, choice: GroupChoice) => {
+    if ((choice.model ?? '') === '' && (choice.modelRef ?? '') === '') {
+      return `No group model default${(choice.variant ?? '') !== '' ? ` · variant ${choice.variant}` : ''}`;
+    }
     try {
       return resolvedLabel(snapshot, resolveGroup(choice, context(snapshot)));
     } catch (error) {
@@ -598,7 +601,9 @@ export function registerSettings(
         : '';
     const choiceLabel =
       change.kind === 'group'
-        ? describeGroup(snapshot, change.choice)
+        ? Object.keys(change.choice).length === 0
+          ? 'Clear this group’s model, reference, and variant defaults. Remaining layers and native defaults determine the effective model.'
+          : describeGroup(snapshot, change.choice)
         : change.kind === 'global'
           ? label({ model: change.model })
           : change.kind === 'all' || change.kind === 'preset' || change.kind === 'override'
@@ -693,10 +698,10 @@ export function registerSettings(
       true,
       [
         {
-          title: 'OpenCode fallback',
+          title: 'Clear group model defaults',
           value: '+fallback',
           category: 'Model source',
-          description: 'Leave model selection to OpenCode; this is not a main or small reference',
+          description: "Clear this group's model, reference, and variant defaults",
           run: () => propose(snapshot, { kind: 'group', name, choice: {} }),
         },
         {
@@ -930,7 +935,7 @@ export function registerSettings(
         run: () => selectGroup(snapshot, name),
       },
       {
-        title: 'Use OpenCode fallback',
+        title: 'Clear group model defaults',
         value: '+inherit',
         description: "Clear this group's model, reference, and variant defaults",
         run: () => propose(snapshot, { kind: 'group', name, choice: {} }),

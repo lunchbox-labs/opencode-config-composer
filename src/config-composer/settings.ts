@@ -240,7 +240,9 @@ export function resolveGroup(choice: GroupChoice, context: ResolutionContext = {
     defaults = modelChoice({ model: context.native?.[field] });
   }
   if (defaults.model === undefined || defaults.model === '') {
-    throw new SettingsError(`${selected.modelRef} has no configured model. Set its model or choose OpenCode fallback.`);
+    throw new SettingsError(
+      `${selected.modelRef} has no configured model. Set its model or clear the group model defaults.`,
+    );
   }
   return { modelRef: selected.modelRef, model: defaults.model, variant: selected.variant ?? defaults.variant };
 }
