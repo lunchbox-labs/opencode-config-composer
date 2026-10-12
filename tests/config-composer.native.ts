@@ -27,7 +27,6 @@ test(
     const harness = await nativeHarness(t, 'composition');
     const { configRoot, project, root, installed, requests } = harness;
     await mkdir(join(configRoot, 'agents'), { recursive: true });
-    await mkdir(join(configRoot, 'shared-prompts'));
     await mkdir(join(configRoot, 'skills/included-skill'), { recursive: true });
     const observerProject = join(root, 'observer');
     await mkdir(join(observerProject, '.opencode'), { recursive: true });
@@ -91,13 +90,13 @@ test(
       },
     };
     const composer = {
-      components: { agents: { 'prompt-consumer': { prompt: 'CONSUMER_BASE', mode: 'primary' } } },
+      components: { agents: { 'component-worker': { prompt: 'CONSUMER_BASE', mode: 'primary' } } },
       configurationPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
       defaults: { agents: {} },
       componentGroups: {
         base: { configuration: { model: 'fixture/beta', variant: 'high' } },
         developers: {
-          agents: ['prompt-consumer'],
+          agents: ['component-worker'],
           configuration: { modelRef: 'preset:balanced' },
         },
         primary: { configuration: { modelRef: 'opencode:model', variant: 'low' } },
@@ -119,14 +118,10 @@ test(
       join(configRoot, 'config-composer.jsonc'),
       `// Dedicated settings\n${JSON.stringify(composer, null, 2)}\n`,
     );
-    await writeFile(join(configRoot, 'shared-prompts/default.md'), 'GLOBAL_GUIDANCE');
-    await writeFile(join(configRoot, 'shared-prompts/worker.md'), '{{include:@shared/worker.md}}');
-    await writeFile(join(configRoot, 'shared-prompts/skill.md'), 'SKILL_GUIDANCE {{include:@shared/skill-inner.md}}');
-    await writeFile(join(configRoot, 'shared-prompts/skill-inner.md'), 'NESTED_SKILL_GUIDANCE');
     await writeFile(
       join(configRoot, 'skills/included-skill/SKILL.md'),
-      '---\nname: included-skill\ndescription: Synthetic skill for native composition.\n---\n' +
-        'SKILL_BODY_BEFORE\n{{include:@agent-prompts/skill.md}}\nSKILL_BODY_AFTER\n',
+      '---\nname: included-skill\ndescription: Synthetic native skill.\n---\n' +
+        'SKILL_BODY_BEFORE\nNATIVE_SKILL_BODY\nSKILL_BODY_AFTER\n',
     );
     await writeFile(join(configRoot, 'skills/included-skill/notes.txt'), 'Companion resource');
     await writeFile(
@@ -135,7 +130,7 @@ test(
     );
     await writeFile(
       join(configRoot, 'agents/worker.md'),
-      '---\nmode: primary\ngroups: [base, developers]\n---\nReply briefly.\n{{include:@shared/worker.md}}\n',
+      '---\nmode: primary\ngroups: [base, developers]\n---\nReply briefly.\nNATIVE_WORKER_BODY\n',
     );
     await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [installed.directory] }));
     await writeFile(
@@ -181,10 +176,9 @@ test(
     assert.deepEqual(worker.model, { providerID: 'fixture', modelID: 'alpha' });
     assert.equal(worker.variant, 'low');
     assert.deepEqual(worker.options.groups, ['base', 'developers']);
-    assert.equal(worker.prompt?.includes('{{include:@shared/worker.md}}'), true);
+    assert.equal(worker.prompt?.includes('NATIVE_WORKER_BODY'), true);
     const compactionPrompt = agents.find((agent) => agent.name === 'compaction')?.prompt;
     assert.ok(typeof compactionPrompt === 'string' && compactionPrompt.length > 0);
-    assert.ok(!compactionPrompt.includes('GLOBAL_GUIDANCE'), 'preserve the promptless built-in configuration');
     for (const name of ['main-follower', 'small-follower']) {
       assert.equal(
         agents.find((agent) => agent.name === name)?.model.modelID,
@@ -205,14 +199,11 @@ test(
       return result;
     };
     assert.equal((await request()).info.modelID, 'alpha');
-    const beforeReload = requests.find((body) => JSON.stringify(body).includes('{{include:@shared/worker.md}}'));
-    assert.ok(beforeReload !== undefined, 'send expanded prompt text to the provider');
-    assert.ok(JSON.stringify(beforeReload).includes('{{include:'), 'authored directives pass through');
+    const beforeReload = requests.find((body) => JSON.stringify(body).includes('NATIVE_WORKER_BODY'));
+    assert.ok(beforeReload !== undefined, 'send authored agent text to the provider');
     assert.equal(beforeReload.model, 'alpha');
     assert.equal(beforeReload.reasoning_effort, 'low');
-    const nativeConfig = await api<{ references?: Record<string, unknown> }>('/config');
-    assert.equal(nativeConfig.references?.['agent-prompts'], undefined, 'sources are not native prompt references');
-    const skillSession = await api<{ id: string }>('/session', { title: 'Native skill composition check' });
+    const skillSession = await api<{ id: string }>('/session', { title: 'Native skill check' });
     const skillResult = await api<Message>(`/session/${skillSession.id}/message`, {
       agent: 'worker',
       parts: [{ type: 'text', text: 'Load included-skill now.' }],
@@ -231,21 +222,18 @@ test(
     const skillOutput = skillPart.state.output;
     assert.ok(typeof skillOutput === 'string');
     assert.ok(skillOutput.startsWith('<skill_content name="included-skill">\n# Skill: included-skill\n\n'));
-    assert.ok(skillOutput.includes('SKILL_BODY_BEFORE\n{{include:@agent-prompts/skill.md}}\nSKILL_BODY_AFTER'));
+    assert.ok(skillOutput.includes('SKILL_BODY_BEFORE\nNATIVE_SKILL_BODY\nSKILL_BODY_AFTER'));
     assert.ok(skillOutput.includes('Base directory for this skill:'));
     assert.ok(skillOutput.includes('<skill_files>'));
     assert.ok(skillOutput.includes(join(configRoot, 'skills/included-skill/notes.txt')));
     assert.ok(skillOutput.endsWith('</skill_content>'));
-    assert.ok(skillOutput.includes('{{include:'), 'skill output remains host-owned');
-    assert.ok(!skillOutput.includes('GLOBAL_GUIDANCE'), 'agent prompt defaults do not wrap skill output');
     const skillRequest = requests.find((body) => JSON.stringify(body.messages).includes('<skill_content'));
     assert.ok(skillRequest !== undefined && Array.isArray(skillRequest.messages));
     const toolMessage = skillRequest.messages.find(
       (message: unknown) =>
         message !== null && typeof message === 'object' && 'role' in message && message.role === 'tool',
     ) as { content?: unknown } | undefined;
-    assert.equal(toolMessage?.content, skillOutput, 'the next provider request receives the native expanded result');
-    assert.ok(JSON.stringify(skillRequest).includes('{{include:'), 'skill directives pass through');
+    assert.equal(toolMessage?.content, skillOutput, 'the next provider request receives the native skill result');
     assert.equal((await request('main-follower')).info.modelID, 'beta');
     assert.equal((await request('small-follower')).info.modelID, 'beta');
     for (const name of ['config-composer-explain', 'config-composer-create', 'config-composer-migrate']) {
@@ -320,7 +308,6 @@ test(
     );
     const savedSettings = parse(await readFile(settingsPath, 'utf8')) as typeof composer;
     assert.deepEqual(savedSettings.componentGroups.developers, composer.componentGroups.developers);
-    await writeFile(join(configRoot, 'shared-prompts/worker.md'), 'RELOADED_WORKER_GUIDANCE');
     const reload = () =>
       api(
         '/global/config',
@@ -394,13 +381,10 @@ test(
     assert.equal(refreshed.find((agent) => agent.name === 'worker')?.model.modelID, 'beta');
     assert.equal(refreshed.find((agent) => agent.name === 'worker')?.variant, 'high');
     assert.equal(refreshed.find((agent) => agent.name === 'pinned')?.model.modelID, 'alpha');
-    assert.equal(
-      refreshed.find((agent) => agent.name === 'worker')?.prompt?.includes('{{include:@shared/worker.md}}'),
-      true,
-    );
+    assert.equal(refreshed.find((agent) => agent.name === 'worker')?.prompt?.includes('NATIVE_WORKER_BODY'), true);
     assert.equal((await request()).info.modelID, 'beta');
     const reloadedRequest = requests.findLast((body) => body.model === 'beta');
-    assert.ok(reloadedRequest !== undefined, 'reread fragments after token reload');
+    assert.ok(reloadedRequest !== undefined, 'send the updated model settings after reload');
     assert.equal(reloadedRequest.temperature, 0.35);
     assert.equal(reloadedRequest.top_p, 0.8);
     assert.equal(reloadedRequest.max_tokens, 128);
@@ -410,8 +394,8 @@ test(
       'native selected variant retains precedence over authored provider options',
     );
     assert.equal(reloadedRequest.model, 'beta');
-    assert.ok(JSON.stringify(reloadedRequest).includes('{{include:@shared/worker.md}}'));
-    assert.equal((await request('prompt-consumer')).info.modelID, 'beta');
+    assert.ok(JSON.stringify(reloadedRequest).includes('NATIVE_WORKER_BODY'));
+    assert.equal((await request('component-worker')).info.modelID, 'beta');
     await writeFile(
       join(project, 'opencode.json'),
       JSON.stringify({ model: 'fixture/alpha', small_model: 'fixture/alpha' }),
@@ -512,7 +496,7 @@ test(
     const failedConfig = await api<{ model?: string; agent?: Record<string, unknown> }>('/config');
     const { baseline: repairBaseline } = await editor.runtime();
     assert.equal(failedConfig.model, 'fixture/alpha', 'valid global configuration remains active');
-    assert.ok(failedConfig.agent?.['prompt-consumer'] !== undefined, 'valid component publication continues');
+    assert.ok(failedConfig.agent?.['component-worker'] !== undefined, 'valid component publication continues');
     const { nativeAgentProjection } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/composition/native-baseline.js')).href
     )) as typeof NativeBaseline;
@@ -649,8 +633,8 @@ test(
       'apply retains child conversation records',
     );
     assert.deepEqual(await api('/config', undefined, 'GET', observerProject), otherBeforeDisposal);
-    assert.ok((await api<Agent[]>('/agent')).some((agent) => agent.name === 'prompt-consumer'));
-    assert.equal((await request('prompt-consumer')).info.modelID, 'beta');
+    assert.ok((await api<Agent[]>('/agent')).some((agent) => agent.name === 'component-worker'));
+    assert.equal((await request('component-worker')).info.modelID, 'beta');
     assert.deepEqual(
       await api<Message[]>(`/session/${skillSession.id}/message`),
       skillMessages,
@@ -700,7 +684,7 @@ test(
     const normalizeBundled = await bundledPermissions(harness);
     const enabledRegistry = await api<Agent[]>('/agent');
     const availableSource = await readFile(settingsPath, 'utf8');
-    const disabledNames = ['worker', 'build', 'prompt-consumer'];
+    const disabledNames = ['worker', 'build', 'component-worker'];
     const disabledSource = applyEdits(
       availableSource,
       modify(
@@ -802,7 +786,7 @@ test(
     await writeFile(settingsPath, legacy);
     await reload();
     const rejected = await api<{ agent?: Record<string, unknown>; skills?: { paths?: string[] } }>('/config');
-    assert.equal(rejected.agent?.['prompt-consumer'], undefined, 'legacy rejection applies no component agents');
+    assert.equal(rejected.agent?.['component-worker'], undefined, 'legacy rejection applies no component agents');
     assert.ok(
       (await Promise.all((rejected.skills?.paths ?? []).map((path) => realpath(path)))).includes(
         await realpath(join(installed.directory, 'skills')),

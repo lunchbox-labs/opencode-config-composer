@@ -29,5 +29,3 @@ TUI sessions may retain a previous model and variant after apply. Select the des
 
 Common mistakes: placing native configuration under Composer's `components`, assigning a preset before
 selecting its target, moving native built-ins into custom files, or silently overwriting an imported source.
-
-Prompt composition belongs to `@lunchbox-labs/opencode-prompt-composer`. Do not migrate old prompt operations into config profiles; profile-driven prompt changes have been removed. Preserve ordinary OpenCode agent prompt strings and command templates.

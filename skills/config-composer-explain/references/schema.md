@@ -94,5 +94,3 @@ The `skills` relationship describes intended on-demand use; it does not inject b
 `/compose-configs` can author definitions, memberships, profile selection, parameters, permissions. Save and reload are separate. Invalid active memberships have a repair view; malformed
 JSONC, imports, and profile/preset reference errors need correction in the named source first.
 Read-only imported sources need an explicit writable destination; no tool should silently rewrite them.
-
-Prompt composition belongs to `@lunchbox-labs/opencode-prompt-composer`. Do not migrate old prompt operations into config profiles; profile-driven prompt changes have been removed. Preserve ordinary OpenCode agent prompt strings and command templates.

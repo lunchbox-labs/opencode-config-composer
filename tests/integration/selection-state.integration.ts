@@ -14,8 +14,8 @@ test(
       agent: { worker: { prompt: string } };
       command?: { audit: { template: string } };
     };
-    const prompt = 'NATIVE_WORKER {{include:@shared/guide.md}}';
-    const template = 'NATIVE_COMMAND {{include:@shared/command.md}}';
+    const prompt = 'NATIVE_WORKER ${literal}';
+    const template = 'NATIVE_COMMAND ${literal}';
     native.agent.worker.prompt = prompt;
     native.command = { audit: { template } };
     // Avoid the host's one-time schema insertion before checking byte preservation.

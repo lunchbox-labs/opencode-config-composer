@@ -15,14 +15,11 @@ const validate = new Ajv2020({
 }).compile<CompositionDocument>(schema);
 const migration: Record<string, string> = {
   agent:
-    'Move agent definitions to components.agents, groups to componentGroups, modelPresets to configurationPresets, and move prompt composition to @lunchbox-labs/opencode-prompt-composer.',
+    'Move agent definitions to components.agents, groups to componentGroups, and modelPresets to configurationPresets.',
   command: 'Move command definitions to components.commands.',
   skill: 'Move skill definitions to components.skills.',
   groups: 'Move group memberships and settings to componentGroups; activate them through profiles.',
   modelPresets: 'Move reusable settings to configurationPresets and assign them with targeted profile layers.',
-  promptSources: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see README.md.',
-  promptDefaults: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see README.md.',
-  agentPrompts: 'Move prompt composition to @lunchbox-labs/opencode-prompt-composer; see README.md.',
   model: 'Move the runtime model default to defaults.model.',
   small_model: 'Move the small runtime model default to defaults.small_model.',
   composition:
@@ -106,60 +103,6 @@ function diagnosticError(value: unknown, errors: ErrorObject[]): ErrorObject | u
   return relevant.toSorted((left, right) => right.instancePath.length - left.instancePath.length)[0] ?? errors[0];
 }
 
-/** Reject removed composition fields only at their schema locations; authored text remains opaque. */
-function rejectPromptComposition(value: Record<string, unknown>, sourceId?: string): void {
-  const reject = (object: unknown, keys: string[], pointer: string) => {
-    if (!record(object)) {
-      return;
-    }
-    for (const key of keys) {
-      if (Object.hasOwn(object, key)) {
-        fail(
-          'removed-prompt-composition',
-          'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Move this setting out of Config Composer; see README.md. Authored agent.prompt strings and command templates remain supported.',
-          sourceId,
-          `${pointer}/${pointerPart(key)}`,
-        );
-      }
-    }
-  };
-  const configuration = (object: unknown, pointer: string) => reject(object, ['prompt'], pointer);
-  const overrides = (object: unknown, pointer: string) => {
-    if (record(object) && record(object.agents)) {
-      for (const [name, agent] of Object.entries(object.agents)) {
-        configuration(agent, `${pointer}/agents/${pointerPart(name)}`);
-      }
-    }
-  };
-  reject(value, ['sourceDirectories', 'promptSources', 'promptDefaults', 'agentPrompts'], '');
-  reject(value.components, ['prompts'], '/components');
-  if (record(value.components) && record(value.components.agents)) {
-    for (const [name, agent] of Object.entries(value.components.agents)) {
-      const pointer = `/components/agents/${pointerPart(name)}`;
-      reject(agent, ['promptRefs'], pointer);
-      if (record(agent)) {
-        configuration(agent.configuration, `${pointer}/configuration`);
-      }
-    }
-  }
-  for (const [name, group] of Object.entries(record(value.componentGroups) ? value.componentGroups : {})) {
-    const pointer = `/componentGroups/${pointerPart(name)}`;
-    reject(group, ['prompts'], pointer);
-    if (record(group)) {
-      configuration(group.configuration, `${pointer}/configuration`);
-    }
-  }
-  if (record(value.defaults)) {
-    configuration(value.defaults.agents, '/defaults/agents');
-  }
-  overrides(value.overrides, '/overrides');
-  for (const [name, profile] of Object.entries(record(value.profiles) ? value.profiles : {})) {
-    if (record(profile)) {
-      overrides(profile.overrides, `/profiles/${pointerPart(name)}/overrides`);
-    }
-  }
-}
-
 /** Validate one document without loading imports or resolving cross-document names. */
 export function readCompositionDocument(value: unknown, sourceId?: string): CompositionDocument {
   const copied = copyJson(value, sourceId);
@@ -167,7 +110,6 @@ export function readCompositionDocument(value: unknown, sourceId?: string): Comp
     fail('composition-limit', 'Keep each composition document no larger than 1 MiB.', sourceId);
   }
   if (record(copied)) {
-    rejectPromptComposition(copied, sourceId);
     for (const key of Object.keys(copied)) {
       if (Object.hasOwn(migration, key)) {
         fail(

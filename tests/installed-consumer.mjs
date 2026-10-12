@@ -39,8 +39,7 @@ for (const path of [
 }
 
 const root = join(process.cwd(), 'configuration');
-await mkdir(join(root, 'settings', 'fragments'), { recursive: true });
-await writeFile(join(root, 'settings', 'fragments', 'shared.md'), 'PACKAGED_GUIDANCE');
+await mkdir(join(root, 'settings'), { recursive: true });
 await writeFile(
   join(root, 'settings', 'composer.jsonc'),
   JSON.stringify({
@@ -51,12 +50,11 @@ await writeFile(
 );
 process.env.OPENCODE_CONFIG_DIR = root;
 const hooks = await server.server({}, { configFile: 'settings/composer.jsonc' });
-const config = { agent: { worker: { groups: ['workers'], prompt: '{{include:@shared/shared.md}}' } } };
+const config = { agent: { worker: { groups: ['workers'], prompt: 'PACKAGED_NATIVE_BODY' } } };
 await hooks.config(config);
 await assert.rejects(hooks.config({ agent: { worker: { agent_group: 'workers' } } }), /agent_group is not supported/);
 assert.equal(config.agent.worker.model, 'fixture/model');
-assert.equal(config.agent.worker.prompt, '{{include:@shared/shared.md}}');
-assert.equal(hooks['tool.execute.after'], undefined);
+assert.equal(config.agent.worker.prompt, 'PACKAGED_NATIVE_BODY');
 
 await writeFile(
   join(root, 'config-composer.jsonc'),

@@ -120,12 +120,12 @@ test('validated loader exposes source identity without changing files', async (t
   assert.equal(await readFile(path, 'utf8'), text);
 });
 
-test('definition provenance cannot mask native agents named groups or prompts', () => {
+test('definition provenance cannot mask native agents named groups or modelPresets', () => {
   const result = resolveLegacy(document, {
-    agent: { groups: { model: 'fixture/native' }, prompts: { prompt: 'Native' } },
+    agent: { groups: { model: 'fixture/native' }, modelPresets: { prompt: 'Native' } },
   });
   assert.equal(result.provenance['/agent/groups'].operation, 'native');
-  assert.equal(result.provenance['/agent/prompts'].sourceId, undefined);
+  assert.equal(result.provenance['/agent/modelPresets'].sourceId, undefined);
   assert.equal(result.provenance['/settings/groups/base/modelRef'].pointer, '/agent/groups/base/modelRef');
   assert.equal(result.provenance['/settings/groups/base/modelRef'].sourceId, document.id);
 });

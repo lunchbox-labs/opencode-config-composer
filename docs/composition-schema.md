@@ -137,7 +137,7 @@ Without that setting, the last legacy `activeProfiles` list supplies defaults. N
 A saved external project selection overrides configured defaults until **Use configured defaults** is chosen.
 Document defaults/overrides still apply when no profiles are selected. `retainOnRestart` defaults to `true`;
 `false` uses a server-process namespace that survives instance apply but not server restart. There is no
-session reset setting or cross-package prompt-profile selection. These settings control configuration only.
+session reset setting.
 See [selection storage and migration](../README.md#shared-project-and-local-settings).
 
 Imports load explicit definition documents in authored order. They may define components, groups, presets,
@@ -196,5 +196,5 @@ Migrate a copy of settings; there is no automatic conversion or legacy compatibi
 | File-path `activeProfiles` / `extends`      | Explicit `imports`, named `profiles`, named selections and parents. |
 
 Old `agent`, `command` and `skill` namespaces are rejected even when empty. Diagnostics identify the key and
-suggest its destination. Prompt composition settings are not supported. Preserve native authored pins
+suggest its destination. Preserve native authored pins
 unless you deliberately intend to replace them; compare both selected profiles and fallback behavior after migration.

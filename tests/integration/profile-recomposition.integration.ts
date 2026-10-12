@@ -296,7 +296,7 @@ test(
     assert.equal(componentB.user, undefined, 'A-only transported custom user disappears for B');
     assert.deepEqual(componentB.logit_bias, { '303': 3, '404': 4, '505': 5 });
     assert.deepEqual(componentB.customTree, { base: true, component: true, value: 'b', bOnly: 'b' });
-    assert.ok(!systemPrompt(componentB).includes('A_PROMPT'));
+    assert.match(systemPrompt(componentB), /COMPONENT_BODY/);
     await f.pinnedUnchanged();
 
     const again = await f.select(['a']);
@@ -342,7 +342,6 @@ test(
     ]) {
       assert.deepEqual(cleared[key], f.original.captured[key], `clear restores native request ${key}`);
     }
-    assert.ok(!systemPrompt(cleared).includes('BASE_PROMPT'));
     assert.match(systemPrompt(cleared), /NATIVE_WORKER/, 'clear retains the original native prompt in dispatch');
     const config = await f.host.api<{ agent: Record<string, unknown>; model: string; small_model: string }>('/config');
     assert.equal(config.agent.component, undefined, 'clear removes the profile-selected component agent');

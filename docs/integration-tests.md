@@ -147,8 +147,7 @@ The editor suite also starts the packaged plugin against the real host's public 
 It checks independent selections for two non-Git projects sharing configuration, source-byte
 preservation, retained selection after server restart, and configured-default reset when
 `selection.retainOnRestart` is false. Explicit apply keeps transient selection within the
-same server process. The same case runs on Linux and Windows. These selections control configuration;
-config profiles do not switch the independent Prompt Composer settings.
+same server process. The same case runs on Linux and Windows.
 
 ## Profile switching and native session selections
 

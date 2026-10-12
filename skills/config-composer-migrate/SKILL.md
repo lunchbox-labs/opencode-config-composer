@@ -41,6 +41,5 @@ previous model and variant after apply. Select the destination/base model throug
 variant or `Default` through `/variants`; conversation history is preserved. Report unproven equivalence or
 missing source evidence explicitly rather than silently deleting unknown settings or adding a fallback mode.
 
-Prompt composition belongs to `@lunchbox-labs/opencode-prompt-composer`. Do not migrate old prompt operations into config profiles; profile-driven prompt changes have been removed. Preserve ordinary OpenCode agent prompt strings and command templates.
 
 For selection-state migration, move each scoped `activeProfiles` list to `selection.defaultProfiles` in the same file, preserving order, scope precedence and explicit `[]`. Review all scopes together: any configured `selection.defaultProfiles` takes priority over the legacy fallback. Existing fields remain readable until this explicit migration. Profile switching and shortcuts write external per-project state only. `selection.retainOnRestart` defaults to true; false resets on server restart, not a new session or an attached TUI disconnect.

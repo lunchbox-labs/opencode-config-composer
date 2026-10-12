@@ -24,7 +24,6 @@ test(
     const host = await nativeHarness(t, 'canonical-permissions');
     const { configRoot, project, installed, api } = host;
     await mkdir(join(configRoot, 'agents'), { recursive: true });
-    await mkdir(join(configRoot, 'shared-prompts'));
     await mkdir(join(configRoot, 'skills/included-skill'), { recursive: true });
     const { composePermissions, explainPermission } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/composition/permissions.js')).href
@@ -227,14 +226,10 @@ test(
       join(configRoot, 'config-composer.jsonc'),
       `// Dedicated settings\n${JSON.stringify(composer, null, 2)}\n`,
     );
-    await writeFile(join(configRoot, 'shared-prompts/default.md'), 'GLOBAL_GUIDANCE');
-    await writeFile(join(configRoot, 'shared-prompts/worker.md'), 'INITIAL_WORKER_GUIDANCE');
-    await writeFile(join(configRoot, 'shared-prompts/skill.md'), 'SKILL_GUIDANCE {{include:@shared/skill-inner.md}}');
-    await writeFile(join(configRoot, 'shared-prompts/skill-inner.md'), 'NESTED_SKILL_GUIDANCE');
     await writeFile(
       join(configRoot, 'skills/included-skill/SKILL.md'),
-      '---\nname: included-skill\ndescription: Synthetic skill for native composition.\n---\n' +
-        'SKILL_BODY_BEFORE\n{{include:@agent-prompts/skill.md}}\nSKILL_BODY_AFTER\n',
+      '---\nname: included-skill\ndescription: Synthetic native skill.\n---\n' +
+        'SKILL_BODY_BEFORE\nNATIVE_SKILL_BODY\nSKILL_BODY_AFTER\n',
     );
     await writeFile(join(configRoot, 'skills/included-skill/notes.txt'), 'Companion resource');
     await writeFile(
@@ -243,7 +238,7 @@ test(
     );
     await writeFile(
       join(configRoot, 'agents/worker.md'),
-      '---\nmode: primary\ngroups: [base, developers]\n---\nReply briefly.\n{{include:@shared/worker.md}}\n',
+      '---\nmode: primary\ngroups: [base, developers]\n---\nReply briefly.\nNATIVE_WORKER_BODY\n',
     );
     await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [installed.directory] }));
     await writeFile(
