@@ -1253,7 +1253,7 @@ test('TUI can create a group by reassigning an agent and return it to inherited 
   assert.equal(resolveChoice(agent.settings, snapshot.groups).source, 'native');
 });
 
-test('TUI adds, reorders, and removes memberships with a resolved preview and preserves prompt settings', async (t) => {
+test('TUI adds, reorders, and removes memberships with a resolved preview and preserves native content', async (t) => {
   const root = await dedicatedFixture(t);
   await writeFile(join(root, 'agents/new.md'), `---\ngroups: [developers]\n${prompt}`);
   const original = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
