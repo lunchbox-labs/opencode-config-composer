@@ -2552,3 +2552,19 @@ test('last error inspection returns to an unchanged membership draft without sav
   assert.equal(await readFile(source, 'utf8'), changed);
   await ui.escape();
 });
+
+for (const event of ['server.connected', 'server.instance.disposed'] as const) {
+  test(`an open error inspector clears when ${event} arrives`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    await ui.command();
+    ui.setProviderError(true);
+    await ui.select('developers');
+    await ui.command('config-composer.compose');
+    await ui.select('last-editor-error');
+    assert.match(ui.message(), /Could not load provider models/);
+    ui.emit(event);
+    assert.doesNotMatch(ui.message(), /Could not load provider models/);
+    assert.match(ui.message(), /No editor error/);
+  });
+}

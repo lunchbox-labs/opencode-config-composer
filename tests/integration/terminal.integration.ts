@@ -224,7 +224,8 @@ test(
     await fixture.write(fixture.paths.shared, { componentGroups: { team: {} } });
     const before = await readFile(fixture.paths.shared, 'utf8');
     await fixture.host.start();
-    const terminal = await nativeTerminal(fixture.host, undefined, 'last-editor-error');
+    const session = await fixture.host.api<{ id: string }>('/session', { title: 'Error inspection' });
+    const terminal = await nativeTerminal(fixture.host, session.id, 'last-editor-error');
     await terminal.wait(['ctrl+p', 'commands']);
     await terminal.command('/compose-configs', 'Compose configs');
     await terminal.choose('Last editor error', 'No editor error in this project and instance.');
@@ -243,6 +244,24 @@ test(
     await terminal.choose('Last editor error', 'Last editor error', 'JSON');
     await terminal.press('\x1b', 'Compose configs');
     await terminal.press('\x1b', 'ctrl+p', 'commands');
+    await terminal.command('/agent-groups', 'Agent groups');
+    await terminal.choose('All agents', 'Agents');
+    await terminal.choose('worker', 'Manage groups');
+    await terminal.choose('Manage groups', 'worker: groups');
+    await terminal.choose('Add group', 'Choose a group');
+    await terminal.choose('team', 'worker: groups', '1. team');
+    const nativePath = join(fixture.host.configRoot, 'opencode.jsonc');
+    const changed = (await readFile(nativePath, 'utf8')) + '\n// external change\n';
+    await writeFile(nativePath, changed);
+    await terminal.choose('Save groups', 'Save agent settings?');
+    await terminal.press('\r', 'worker: groups', 'Last editor error');
+    for (let index = 0; index < 2; index++) {
+      await terminal.choose('Last editor error', 'Last editor error', 'changed');
+      await terminal.press('\x1b', 'worker: groups');
+    }
+    await terminal.press('\x15', '1. team');
+    await terminal.press('\x1b', 'Manage groups');
+    assert.equal(await readFile(nativePath, 'utf8'), changed);
     assert.equal(await readFile(fixture.paths.shared, 'utf8'), before);
     assert.equal(fixture.host.requests.length, 0);
   },
