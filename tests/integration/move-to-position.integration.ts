@@ -81,6 +81,7 @@ for (const kind of ['layers', 'permissions'] as const) {
           ? [layers[0], layers[1], layers[3], layers[2]]
           : [permissions[0], permissions[1], permissions[3], permissions[2]],
       );
+      await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
       await open();
       await terminal.choose(last, `${item} 4`);
       await terminal.choose('Move to position', 'Move to position (1–4)');
