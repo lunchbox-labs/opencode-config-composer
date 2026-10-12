@@ -35,7 +35,10 @@ const suites = {
     'tests/integration/selection-state.integration.ts',
   ],
   cleanup: ['tests/integration/cleanup.integration.mjs'],
-  'content-terminal': ['tests/integration/content-terminal.integration.ts'],
+  'content-terminal': [
+    'tests/integration/content-terminal.integration.ts',
+    'tests/integration/move-to-position.integration.ts',
+  ],
   content: ['tests/integration/parameters.integration.ts', 'tests/integration/permission-editor.integration.ts'],
   permissions: [
     'tests/canonical-permissions.native.ts',
