@@ -74,7 +74,7 @@
         "$ref": "#/$defs/profileShortcut"
       },
       "maxProperties": 128,
-      "description": "Named TUI profile actions. Each invocation chooses its save destination; declaration never activates profiles."
+      "description": "Named TUI profile actions. Each invocation saves the current project selection in external state; declaration never activates profiles."
     },
     "selection": {
       "type": "object",
