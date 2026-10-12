@@ -2407,3 +2407,62 @@ test('editor rejects a native baseline replaced during host inventory discovery'
   await ui.command();
   assert.match(ui.toasts.at(-1)?.message ?? '', /instance changed during component discovery/i);
 });
+
+for (const stale of [false, true]) {
+  test(`preset target editing through registered TUI reviews, cancels and ${stale ? 'rejects stale writes' : 'saves without applying'}`, async (t) => {
+    const root = await fixture(t);
+    const path = join(root, 'config-composer.jsonc');
+    const document = parseConfig(await readFile(path, 'utf8'));
+    document.configurationPresets = { balanced: { model: 'example/fast' } };
+    document.profiles = {
+      work: {
+        layers: [
+          { componentGroup: 'developers' },
+          {
+            configurationPreset: 'balanced',
+            target: { agents: ['builtin', 'missing'], componentGroups: ['developers'] },
+          },
+          { componentGroup: 'reviewers' },
+        ],
+      },
+    };
+    await writeFile(path, JSON.stringify(document));
+    const before = await readFile(path, 'utf8');
+    const ui = uiHarness(root);
+    await ui.command('config-composer.compose');
+    for (const value of [
+      'registry',
+      'profiles',
+      'work',
+      'layers',
+      '1',
+      'targets',
+      'group:reviewers',
+      '+save',
+      '\u0000back',
+      '+save',
+    ]) {
+      await ui.select(value);
+    }
+    assert.equal(ui.title(), 'Save composition definition?');
+    await ui.cancel();
+    assert.equal(await readFile(path, 'utf8'), before);
+    await ui.select('+save');
+    if (stale) {
+      await writeFile(path, before + '\n// Concurrent change');
+    }
+    await ui.confirm();
+    if (stale) {
+      assert.equal(await readFile(path, 'utf8'), before + '\n// Concurrent change');
+      assert.ok(ui.toasts.some((toast) => toast.message.includes('Settings changed')));
+    } else {
+      assert.equal(ui.title(), 'Settings saved');
+      const current = await loadSnapshot(root);
+      assert.deepEqual(current.sources.registry.profiles?.work.layers?.[1], {
+        configurationPreset: 'balanced',
+        target: { agents: ['builtin', 'missing'], componentGroups: ['developers', 'reviewers'] },
+      });
+    }
+    assert.equal(ui.updates, 0);
+  });
+}
