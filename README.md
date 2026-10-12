@@ -1,7 +1,7 @@
 # OpenCode Config Composer
 
 Compose OpenCode configuration with reusable groups, presets and profiles to switch models and permissions
-across your agents. Manage configuration through `/compose`.
+across your agents. Manage selections, edit settings and inspect the result through `/compose`.
 
 Package: **`@lunchbox-labs/opencode-config-composer`** · Supported host: **OpenCode V1 1.19.0**.
 Independently maintained; not affiliated with OpenCode or Anomaly.
@@ -21,7 +21,7 @@ configuration lives in a project.
 
 - [Switch providers](docs/examples/provider-profiles/README.md): keep model profiles for rotating provider subscriptions.
 - [Share permissions by role](docs/examples/role-permissions/README.md): maintain developer, reviewer and orchestrator policies in one place.
-- [Review and programming](docs/examples/review-programming/README.md): combine model profiles and permissions in a complete configuration.
+- [Review and programming](docs/examples/review-programming/README.md): combine model profiles and role-specific permissions in a complete configuration.
 
 ## Compose configuration
 
@@ -31,8 +31,8 @@ provider profiles assign it different model presets. A reviewer group can share 
 
 Define membership under `componentGroups`. A group's `agents` list uses existing agent names, including built-ins
 such as `build` and `plan`; custom agents can also join through `groups` in their Markdown frontmatter. Its optional
-`configuration` applies to member agents when the group is selected. Groups can also bundle declared commands,
-and skills, but the group's settings affect only its agents.
+`configuration` applies to member agents when the group is selected. Groups can also reference OpenCode commands
+and skills by name without repeating their definitions; group configuration affects only agents.
 
 Put reusable model, variant, parameter and permission settings in `configurationPresets`. A preset has no members
 of its own. It can supply either a `model` or a `modelRef`, never both. Use `opencode:model` or
@@ -75,10 +75,15 @@ configuration names, not file paths. To address selected agents directly instead
 
 A preset target must already be selected when that layer runs, usually by a preceding group layer. Targeting a
 group does not select it, enable its agents, load its commands or skills, or apply its own configuration. The target group
-need not have been selected as long as its agent members have been. Unknown names and unselected agent targets
-are errors. This is why the provider example selects the coding group before assigning its model preset.
+need not have been selected as long as its available agent members have been. Missing or disabled component
+references are skipped with notices while valid configuration continues. References that cannot yet be verified
+remain pending; inspect them in **Compose → Reference notices**. Unknown profile, group or preset names still
+produce errors, as does targeting an available agent that has not been selected. This is why the provider
+example selects the coding group before assigning its model preset. See the [component reference guide](docs/native-component-discovery.md)
+for discovery timing, skill-access behavior and headless validation limits.
 
-Choose ordered profiles in Compose; configured startup defaults use `selection.defaultProfiles`. Several profiles run from left to right. A profile can name
+Choose an ordered profile selection in `/compose`; several profiles run from left to right. Configure the
+initial selection with `selection.defaultProfiles`. A profile can name
 one parent with `extends` to reuse its layers and overrides before adding its own. `profileShortcuts` gives a saved profile
 selection a named action in the UI. For profiles that also control which agents are enabled, `agentAvailability`
 maps agent names to booleans: `true` selects and enables an agent before that profile's layers, while `false`
@@ -115,42 +120,28 @@ presets, profiles and other named definitions, but cannot supply `selection`, le
 Importing a profile does not activate it. Duplicate definition names, import cycles and repeated imports of the
 same file are rejected; definitions do not replace one another just because they appear in a later scope.
 
-Configure `selection.defaultProfiles` as ordered configuration profile names and `selection.retainOnRestart` to control
-whether choices survive an OpenCode server restart (default: `true`). See the
-[project selection example](docs/examples/project-selection). Shared, project and local sources provide
-these declarative settings; later supplied fields replace earlier ones, and `[]` selects none.
+Configured profile defaults come from `selection.defaultProfiles`. Later scopes replace earlier supplied fields;
+profile lists are not combined. Legacy `activeProfiles` supplies defaults only when no scope sets
+`selection.defaultProfiles`. To configure an empty default selection:
 
-**Compose → Profile activation and scope files** and profile shortcuts save one selection for the current
-project outside configuration files. Different projects/worktrees remain independent even when they share
-the same configuration. Selecting **Use configured defaults** clears that project's override without
-changing its defaults. Presets remain authored configuration; there is no separate selected-preset state.
-Configuration profile switches do not select or recompose Prompt Composer settings; the packages operate independently.
+```jsonc
+"selection": { "defaultProfiles": [] }
+```
 
-Existing `activeProfiles` fields remain supported as legacy defaults until `selection.defaultProfiles` is
-configured. Switching profiles never rewrites them. To migrate, move each scoped list to
-`selection.defaultProfiles` in the same file, preserving precedence and `[]`; remove the old key as a separate
-configuration edit. Do not partially migrate a mixed set of scopes without reviewing the resulting defaults.
+A selection saved through `/compose` or a profile shortcut overrides these defaults for the current project.
+It is stored outside configuration files, so changing a default list—including setting it to `[]`—does not
+replace a saved choice. Save **Select no profiles** to override the defaults with an empty selection. Save
+**Use configured defaults** to remove the override and follow the configured list again. Apply the saved change
+when the instance is idle.
 
-State uses OpenCode's XDG state directory on Linux and Windows, in `config-composer/v1/`. It is keyed by the
-canonical composition root and base-source path, not Git remote identity. Moving a checkout or changing
-its base source starts a separate selection. With restart retention disabled, selections survive apply/reload
-within that server process, then reset to defaults in a new process. This temporary namespace does not erase
-an earlier retained selection; re-enabling retention restores that retained choice. Closing an attached TUI
-alone does not restart its server. New or resumed sessions do not reset composition: it remains project-wide.
+Saved selections survive server restarts by default. With `selection.retainOnRestart: false`, a choice lasts
+for that server process, including apply/reload, and a new process starts from configured defaults. This does
+not erase an earlier retained choice; turning retention back on restores it. Selections are independent across
+projects, while sessions in the same project share the applied configuration.
 
-Concurrent saves reject stale selections; running instances keep their applied revision until explicitly
-reloaded. Invalid state is reported with its path and is never silently overwritten. Restore the state file
-or remove it to return to defaults. Remove a reported stale `.lock` only after confirming no save/apply is
-running. Renaming a selected profile updates this project's selection; other projects sharing the definitions
-may need their saved selections repaired. Composer does not read or modify OpenCode's private database.
-
-
-Native agents, commands and skills can be referenced by their OpenCode names without duplicate Composer
-component mappings. Skill names come from `SKILL.md` frontmatter. Skills and final commands validate after
-bootstrap; missing references are skipped while valid composition stays active. `/compose` shows **Reference
-notices** when references are missing, disabled or unverified. Correct the source and reload to refresh them.
-Group/agent skill references do not grant or restrict skill access. See the [component reference guide](docs/native-component-discovery.md)
-for ownership, validation timing and the headless SDK limitation.
+Selecting no profiles removes profile contributions; document defaults and overrides still apply. See
+[files, imports and activation](docs/composition-schema.md#files-imports-and-activation) for the full rules and
+the [project selection example](docs/examples/project-selection/README.md) for retained and temporary choices.
 
 ## How settings combine
 
@@ -165,7 +156,7 @@ Use `overrides.agents` to address individual selected agents; an override does n
 
 Later contributions replace earlier values for the same field. Objects merge by field, while arrays replace
 inside merged values. Profile layers are separate ordered contributions, so a child's layers run after its
-parent's rather than replacing the parent's list. Permissions follow the ordering described below.
+parent's rather than replacing the parent's list. Permission rules follow the matching order described below.
 
 An explicit model or variant in an agent's OpenCode definition takes precedence over Composer defaults and
 group/preset settings. A per-agent override can replace that pin. Within a composition, changing a model or its
@@ -197,7 +188,7 @@ focused editors. Save changes, then apply when the current instance is idle, or 
 that instance; changes to OpenCode configuration or agent files require a restart. Editing requires shared
 filesystem access, and some sources are read-only.
 
-Profile switches preserve conversation history. OpenCode 1.19.0 can retain a conversation's previous model
+Profile switches preserve conversation history. OpenCode can retain a conversation's previous model
 and variant, including after clearing profiles. Use `/models`, then `/variants`, to select the destination or
 inherited base settings.
 
@@ -216,7 +207,7 @@ guidance skills.
 
 Development requires Node 22.18 or newer and npm. Run `npm ci` and `npm run check` for typechecking, lint,
 formatting, unit tests and the installed-package test. `npm run test:native` uses `OPENCODE_BIN`, Python 3 and
-a Unix pseudo-terminal to test against OpenCode 1.19.0. See the [integration guide](docs/integration-tests.md)
+a Unix pseudo-terminal to test against the version pinned in `package.json`. See the [integration guide](docs/integration-tests.md)
 for the Linux/Windows integration suite and coverage.
 
 This project is licensed under MIT. See [LICENSE](LICENSE).

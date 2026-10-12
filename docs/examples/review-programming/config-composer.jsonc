@@ -1,15 +1,11 @@
 {
-  "imports": [
-    "./profiles.jsonc"
-  ],
+  "imports": ["./profiles.jsonc"],
   "componentGroups": {
     "review": {
       "agents": ["code-reviewer", "test-auditor"],
-      "configuration": {},
     },
     "programming": {
       "agents": ["implementer", "test-writer"],
-      "configuration": {},
     },
   },
   "configurationPresets": {
@@ -34,6 +30,6 @@
       ],
     },
   },
-  // Imports define profiles; this ordered selection activates one explicitly.
+  // Configured default; a saved project selection takes precedence.
   "activeProfiles": ["claude-coding"],
 }

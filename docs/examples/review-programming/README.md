@@ -1,9 +1,8 @@
 # Review and programming example
 
 This example coordinates two reviewers and two programming agents. Composer profiles apply permissions and
-model settings to them.
-Switching between `claude-coding` and `openai-coding`
-changes models and permissions while keeping the same prompts and commands.
+model settings to them. Switching between `claude-coding` and `openai-coding` changes models and permissions
+while keeping the same agents, instructions and commands.
 
 ## Compose configuration
 
@@ -18,7 +17,8 @@ changes models and permissions while keeping the same prompts and commands.
 In `profiles.jsonc`, `base-workflow` selects the review and programming groups, then assigns their permission
 presets. Both child profiles extend that setup: `claude-coding` applies `claude-code` to all four agents, while
 `openai-coding` applies `openai-code`. The Claude profile also adds a final Git allow for `code-reviewer`.
-The root file's `activeProfiles` selects `claude-coding`; the import itself does not activate a profile.
+The root file's legacy `activeProfiles` supplies `claude-coding` as the configured default; a saved project
+selection takes precedence. The import itself does not activate a profile.
 
 ## Result and profile switching
 
@@ -35,14 +35,18 @@ Both model presets set `maxOutputTokens` to 4,096. The Claude reviewer's final G
 `ask` for Git without affecting the npm denial. Removing that override restores `ask`. Other requests fall
 back to OpenCode's permissions.
 
-Select `openai-coding` through `/compose`, or set `"activeProfiles": ["openai-coding"]` and apply or restart.
-The command targets and prompts stay the same. Existing conversations can retain their previous model and
-variant; use `/models`, then `/variants`, to select the destination model and its variant or **Default**.
+Select `openai-coding` through `/compose`, then save and apply. This saves a project selection outside the
+configuration files. Editing `selection.defaultProfiles` or the legacy `activeProfiles` list changes configured
+defaults, but does not replace a saved selection—even after apply or a retained restart. Choose **Use configured
+defaults**, then save and apply, to follow those defaults again.
 
-Setting `"activeProfiles": []` removes these profiles' model settings and permissions. The
-agents, commands and skills remain available, with the agents' original prompt bodies and the
-OpenCode defaults from `opencode.jsonc`. Any independently configured Composer document defaults or overrides
-still apply.
+The command targets and agent instructions stay the same. Existing conversations can retain their previous
+model and variant; use `/models`, then `/variants`, to select the destination model and its variant or **Default**.
+
+Choose **Select no profiles**, then save and apply, to remove these profiles' model settings and permissions.
+This explicit empty selection also overrides configured defaults. Agents, commands and skills remain available,
+with their original instructions and the OpenCode defaults from `opencode.jsonc`. Independently configured
+Composer document defaults and overrides still apply.
 
 See [scope precedence](../../../README.md#shared-project-and-local-settings) for local profile selections and
 [editing and applying](../../../README.md#edit-apply-and-inspect) for the save/apply flow and its limits.
