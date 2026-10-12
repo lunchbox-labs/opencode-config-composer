@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { compositionFixture } from './composition-fixture.ts';
-import { systemPrompt } from './content-editor.ts';
 import { nativeTerminal } from './terminal.ts';
 import { reloadFromTerminal } from './terminal-editor.ts';
 
@@ -144,78 +142,6 @@ test(
     ]);
     assert.equal(JSON.stringify(await f.host.api('/agent')), running);
     assert.equal(f.host.requests.length, 1);
-    assert.match(await readFile(f.paths.shared, 'utf8'), /Preserve fixture comments/);
-  },
-);
-
-test(
-  'real terminal saves multiline prompt operations, renames aliases and edits repeated prompt references',
-  { timeout: 240_000 },
-  async (t) => {
-    const f = await compositionFixture(t, 'prompt-terminal');
-    await mkdir(join(f.host.configRoot, 'snippets'));
-    await writeFile(join(f.host.configRoot, 'snippets/context.md'), 'TERMINAL_CONTEXT');
-    await f.write(f.paths.shared, {
-      sourceDirectories: { notes: './snippets' },
-      components: {
-        prompts: { context: { text: '{{include:@notes/context.md}}' } },
-        agents: { consumer: { mode: 'primary', prompt: 'TERMINAL_BASE', promptRefs: ['context'] } },
-      },
-      componentGroups: { work: { agents: ['consumer'] } },
-      profiles: { work: { layers: [{ componentGroup: 'work' }] } },
-      activeProfiles: ['work'],
-    });
-    await f.host.start();
-    const original = await f.send(undefined, 'consumer');
-    const terminal = await nativeTerminal(f.host, original.session.id, 'prompt-terminal');
-    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
-    await terminal.command('/compose', 'Compose');
-    await terminal.choose('Prompt operations and inheritance', 'Prompt destination');
-    await terminal.press('\r', 'Prompt target');
-    await terminal.choose('Component definition: consumer', 'Component definition: consumer: prompt operations');
-    await terminal.choose('Ordered append fragments', 'append fragments');
-    await terminal.choose('Add multiline fragment or include', 'Prompt text: multiline');
-    // Native bracketed paste inserts one multiline input; Enter submits the completed text.
-    await terminal.press('\x1b[200~TERMINAL_FIRST\nTERMINAL_SECOND\x1b[201~', 'TERMINAL_FIRST', 'TERMINAL_SECOND');
-    await terminal.press('\r', '1. TERMINAL_FIRST');
-    await terminal.choose('Save ordered fragments', 'Save prompt operations?', 'TERMINAL_FIRST', 'TERMINAL_SECOND');
-    await terminal.press('\r', 'Settings saved');
-    assert.deepEqual((await f.document(f.paths.shared)).components!.agents!.consumer.configuration!.prompt!.append, [
-      'TERMINAL_FIRST\nTERMINAL_SECOND',
-    ]);
-    await reloadFromTerminal(f, terminal);
-    assert.ok(
-      systemPrompt((await f.send(original.session.id, 'consumer')).captured).includes(
-        'TERMINAL_FIRST\nTERMINAL_SECOND',
-      ),
-    );
-    const assets = async () => {
-      await terminal.command('/compose', 'Compose');
-      await terminal.choose('Reusable prompts and include source aliases', 'Prompt components and source aliases');
-    };
-    await assets();
-    await terminal.choose('Include source aliases', 'Include source aliases');
-    await terminal.choose('notes', 'notes: declaring definition');
-    await terminal.choose('Rename with reference review', 'New definition name');
-    await terminal.press('\x15shared\r', 'Save prompt source definition?', 'Known reference consumers');
-    await terminal.press('\r', 'Settings saved');
-    await reloadFromTerminal(f, terminal);
-    const renamed = await f.document(f.paths.shared);
-    assert.equal(renamed.sourceDirectories!.shared, './snippets');
-    assert.equal(renamed.sourceDirectories!.notes, undefined);
-    assert.equal(renamed.components!.prompts!.context.text, '{{include:@shared/context.md}}');
-    await assets();
-    await terminal.choose('Ordered agent prompt references', 'Composer agent component');
-    await terminal.choose('consumer', 'consumer: ordered prompt references');
-    await terminal.choose('Append reusable prompt', 'Prompt component');
-    await terminal.choose('context', '2. context');
-    await terminal.choose('Save ordered references', 'Save prompt source definition?');
-    await terminal.press('\r', 'Settings saved');
-    await reloadFromTerminal(f, terminal);
-    const repeated = systemPrompt((await f.send(original.session.id, 'consumer')).captured);
-    assert.ok(repeated.includes('TERMINAL_BASE\n\nTERMINAL_CONTEXT\n\nTERMINAL_CONTEXT'));
-    assert.equal(repeated.split('TERMINAL_FIRST').length - 1, 1, 'reload never duplicates saved operations');
-    assert.ok((await f.history(original.session.id)).some((message) => message.info.id === original.message.info.id));
     assert.match(await readFile(f.paths.shared, 'utf8'), /Preserve fixture comments/);
   },
 );

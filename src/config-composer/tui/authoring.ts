@@ -68,7 +68,7 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
         })),
     ]);
   };
-  const members = (name: string, kind: 'agents' | 'skills' | 'commands' | 'prompts') => {
+  const members = (name: string, kind: 'agents' | 'skills' | 'commands') => {
     const pending = [...(snapshot.sources.registry.componentGroups?.[name][kind] ?? [])];
     const available =
       kind === 'agents'
@@ -220,7 +220,7 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
     const actions: Action[] = [];
     if (registry === 'componentGroups') {
       actions.push(
-        ...(['agents', 'skills', 'commands', 'prompts'] as const).map((kind) => ({
+        ...(['agents', 'skills', 'commands'] as const).map((kind) => ({
           title: `Edit ${kind}`,
           value: kind,
           run: () => members(name, kind),

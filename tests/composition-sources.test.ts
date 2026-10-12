@@ -25,7 +25,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   await writeFile(
     join(root, 'shared/profiles/work.jsonc'),
     JSON.stringify({
-      components: { prompts: { scope: { file: './scope.md' } } },
+      components: { commands: { scope: { file: './scope.md' } } },
       profiles: {
         base: { layers: [{ componentGroup: 'review' }] },
         review: { extends: 'base', layers: [{ configurationPreset: 'model', target: { agents: ['build'] } }] },
@@ -45,10 +45,10 @@ test('explicit imports assemble named registries with declaring-file paths and i
     result.orderedProfiles.map((profile) => profile.name),
     ['base', 'review'],
   );
-  assert.equal(result.registry.components?.prompts?.scope.file, join(f.root, 'shared/profiles/scope.md'));
-  const origin = result.provenance['/components/prompts/scope/file'];
+  assert.equal(result.registry.components?.commands?.scope.file, join(f.root, 'shared/profiles/scope.md'));
+  const origin = result.provenance['/components/commands/scope/file'];
   assert.equal(origin.sourceId, join(f.root, 'shared/profiles/work.jsonc'));
-  assert.equal(origin.pointer, '/components/prompts/scope/file');
+  assert.equal(origin.pointer, '/components/commands/scope/file');
   assert.equal(result.documents.length, 2);
   assert.equal(Object.isFrozen(result.documents[0].value), true);
   assert.equal(Object.isFrozen(result.documents[0].value.componentGroups?.review), true);
@@ -147,7 +147,7 @@ test('import aliases keep declaring-directory paths and are never advertised wri
     '{"imports":["./aliases/work.jsonc"],"componentGroups":{"review":{},"coding":{}},"configurationPresets":{"model":{"model":"fixture/alpha"}}}',
   );
   const loaded = await loadCompositionSources(f.context);
-  assert.equal(loaded.registry.components?.prompts?.scope.file, join(f.root, 'shared/aliases/scope.md'));
+  assert.equal(loaded.registry.components?.commands?.scope.file, join(f.root, 'shared/aliases/scope.md'));
   assert.equal(loaded.documents.find((source) => source.id.endsWith('/profiles/work.jsonc'))?.writable, false);
 });
 
@@ -164,7 +164,7 @@ test('source loading enforces import-depth and aggregate text limits', async (t)
   for (let i = 0; i < 9; i++) {
     await writeFile(
       join(f.root, `shared/profiles/p${i}.jsonc`),
-      JSON.stringify({ components: { prompts: { [`prompt${i}`]: { text: 'a'.repeat(950_000) } } } }),
+      JSON.stringify({ components: { commands: { [`command${i}`]: { template: 'a'.repeat(950_000) } } } }),
     );
   }
   await writeFile(

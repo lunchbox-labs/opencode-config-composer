@@ -38,6 +38,7 @@ export async function installPackage(root: string) {
     'skills/config-composer-migrate/examples/before.jsonc',
     'skills/config-composer-migrate/examples/after.jsonc',
     'skills/config-composer-migrate/examples/worker.md',
+    'docs/prompt-migration.md',
     'src/server.ts',
     'src/tui.ts',
     'tsconfig.json',
@@ -55,10 +56,14 @@ export async function installPackage(root: string) {
   for (const path of files) {
     assert.match(
       path,
-      /^(?:dist\/.*\.(?:js|d\.ts)|src\/.*\.ts|tsconfig(?:\.build)?\.json|package\.json|schema\.json|skills\/config-composer-(?:explain|create|migrate)\/(?:SKILL\.md|references\/schema\.md|examples\/(?:review\.jsonc|before\.jsonc|after\.jsonc|worker\.md))|README\.md|LICENSE)$/,
+      /^(?:dist\/.*\.(?:js|d\.ts)|src\/.*\.ts|tsconfig(?:\.build)?\.json|package\.json|schema\.json|skills\/config-composer-(?:explain|create|migrate)\/(?:SKILL\.md|references\/schema\.md|examples\/(?:review\.jsonc|before\.jsonc|after\.jsonc|worker\.md))|docs\/prompt-migration\.md|README\.md|LICENSE)$/,
       `unexpected published file: ${path}`,
     );
   }
+  assert.ok(
+    !files.some((path) => /(?:^|\/)(?:prompts|prompt-sources|prompt-authoring)\.(?:ts|js|d\.ts)$/.test(path)),
+    'tarball must not retain removed prompt modules',
+  );
   const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8')) as { name: string };
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   await exec(

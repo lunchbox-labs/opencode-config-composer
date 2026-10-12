@@ -17,15 +17,6 @@
       "uniqueItems": true,
       "description": "Explicit local JSON/JSONC files, relative to the declaring document; no automatic directory discovery. Imported documents contribute definitions, never activation."
     },
-    "sourceDirectories": {
-      "type": "object",
-      "propertyNames": {
-        "$ref": "#/$defs/name"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/path"
-      }
-    },
     "components": {
       "$ref": "#/$defs/components"
     },
@@ -233,32 +224,6 @@
       "required": ["tool", "action"],
       "description": "Ordered rule. Omitted pattern means *. Last matching Composer contribution wins, including a looser action. Only no Composer match falls back to native globals, then native defaults."
     },
-    "prompt": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "prepend": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 256
-        },
-        "append": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 256
-        },
-        "inheritDefaults": {
-          "type": "boolean"
-        },
-        "inheritGroups": {
-          "type": "boolean"
-        }
-      }
-    },
     "configurationPreset": {
       "type": "object",
       "additionalProperties": false,
@@ -313,9 +278,6 @@
             "$ref": "#/$defs/permissionRule"
           },
           "maxItems": 256
-        },
-        "prompt": {
-          "$ref": "#/$defs/prompt"
         }
       },
       "not": {
@@ -341,13 +303,6 @@
         "disable": {
           "type": "boolean"
         },
-        "promptRefs": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/componentName"
-          },
-          "maxItems": 256
-        },
         "skills": {
           "type": "array",
           "items": {
@@ -368,7 +323,7 @@
           "required": ["prompt"]
         }
       ],
-      "description": "Exactly one file or inline prompt. promptRefs append named prompt bodies in order. skills records intended on-demand relationships, without injecting bodies or granting exclusive access."
+      "description": "Exactly one file or inline prompt. skills records intended on-demand relationships, without injecting bodies or granting exclusive access."
     },
     "skill": {
       "type": "object",
@@ -409,26 +364,6 @@
         }
       ]
     },
-    "promptComponent": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "file": {
-          "$ref": "#/$defs/path"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "oneOf": [
-        {
-          "required": ["file"]
-        },
-        {
-          "required": ["text"]
-        }
-      ]
-    },
     "components": {
       "type": "object",
       "additionalProperties": false,
@@ -462,16 +397,6 @@
             "$ref": "#/$defs/command"
           },
           "maxProperties": 1024
-        },
-        "prompts": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/componentName"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/promptComponent"
-          },
-          "maxProperties": 1024
         }
       }
     },
@@ -497,14 +422,6 @@
           "uniqueItems": true
         },
         "commands": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/componentName"
-          },
-          "maxItems": 256,
-          "uniqueItems": true
-        },
-        "prompts": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/componentName"
@@ -630,8 +547,12 @@
       "properties": {
         "agentAvailability": {
           "type": "object",
-          "propertyNames": { "$ref": "#/$defs/componentName" },
-          "additionalProperties": { "type": "boolean" },
+          "propertyNames": {
+            "$ref": "#/$defs/componentName"
+          },
+          "additionalProperties": {
+            "type": "boolean"
+          },
           "maxProperties": 256,
           "description": "Enable or disable named workflow agents without deleting definitions. Later profile occurrences win; internal title, summary and compaction agents cannot be toggled."
         },

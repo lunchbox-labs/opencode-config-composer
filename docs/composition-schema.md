@@ -10,7 +10,7 @@ explicit imports, reusable model and permission presets, and profiles that compo
 | Field                  | Meaning                                                                                                        |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `$schema`              | Optional schema location for your editor; use the schema matching your installed package.                      |
-| `components`           | Named `agents`, `skills`, `commands` and `prompts`. A definition alone does not select it.                     |
+| `components`           | Named `agents`, `skills` and `commands`. A definition alone does not select it.                     |
 | `componentGroups`      | Named bundles with any subset of component kinds and optional member-agent `configuration`.                    |
 | `configurationPresets` | Reusable model, variant, parameters or permissions, independent of membership.                                 |
 | `profiles`             | Named profiles with one optional `extends` parent, ordered `layers`, `agentAvailability` and `overrides`.      |
@@ -19,20 +19,18 @@ explicit imports, reusable model and permission presets, and profiles that compo
 | `overrides`            | Runtime `model`, `small_model`, global `permissions` and `agents` settings keyed by exact selected agent name. |
 | `activeProfiles`       | Ordered profile names. Absence inherits; `[]` selects none.                                                    |
 | `imports`              | Explicit local `.json` or `.jsonc` definition documents in authored order.                                     |
-| `sourceDirectories`    | Named prompt-include directory aliases, relative to their declaring document.                                  |
 
 An agent supplies exactly one `file` or inline `prompt`. Optional fields are `description`, `mode`
-(`primary`, `subagent` or `all`), `disable`, `promptRefs`, `skills` and `configuration`.
+(`primary`, `subagent` or `all`), `disable`, `skills` and `configuration`.
 A command supplies exactly one `file` or inline `template`, and may specify `agent`, `description` and `subtask`.
-A prompt supplies exactly one `file` or inline `text`. A skill supplies `file`, pointing to a native `SKILL.md`.
+A skill supplies `file`, pointing to a native `SKILL.md`.
 File-backed agents and commands require YAML object frontmatter. Skill files must be named `SKILL.md` with
-a frontmatter `name` exactly matching their component key and a string `description`. Prompt files are plain text.
+a frontmatter `name` exactly matching their component key and a string `description`.
 
-Agent `promptRefs` appends named prompt bodies in order. Agent `skills` records intended on-demand relationships;
+Agent `skills` records intended on-demand relationships;
 it neither injects skill bodies nor grants exclusive access. Agent settings belong in `configuration`.
-A group's `prompts` membership alone does not append prompt bodies; configure relationships or prompt operations.
-Selected command templates support native variables and Composer includes. Command `agent` targets are explicit.
-Native skill composition preserves OpenCode's wrapper, metadata, resources and base directory.
+Command `agent` targets are explicit. Command templates pass through unchanged, including native variables.
+Skill bodies, wrappers, metadata, resources and base directories remain owned by OpenCode.
 
 ## Agent membership and availability
 
@@ -70,8 +68,7 @@ Ordinary objects merge by field and ordinary arrays replace within merged values
 replay separately. Duplicate definitions are rejected; defaults and overrides express deliberate settings changes.
 
 A preset accepts `model` or `modelRef` (never both), optional `variant`, `parameters` and `permissions`.
-An agent/group configuration additionally accepts `prompt`. Presets cannot contain component membership or
-prompt operations. Model references are `opencode:model`, `opencode:small_model` or `preset:NAME`.
+Agent/group configurations use the same fields as presets. Presets cannot contain component membership. Model references are `opencode:model`, `opencode:small_model` or `preset:NAME`.
 Native references resolve against final effective workspace defaults; model preset reference cycles are rejected.
 Referencing a preset's model settings does not also apply its permissions; use a targeted preset layer for those.
 
@@ -91,23 +88,6 @@ effective configuration without rewriting reusable definitions.
 `parameters` supports `temperature` (0–2), `topP` (0–1), positive safe integer `topK` and `maxOutputTokens`,
 and an `options` object containing JSON values. Structural validity does not imply provider support;
 catalog and adapter validation also run before dispatch. Native temperature/top-p and variant authority is retained.
-
-## Prompt composition and includes
-
-Agent `prompt` configuration supports `prepend` and `append` string arrays, plus `inheritDefaults` and
-`inheritGroups`. Assembly order is default prepend, ordered group prepend, agent prepend, authored body,
-default append, ordered group append, agent append. Setting an inheritance flag to false suppresses that
-inherited prompt layer. Built-ins without an authored prompt retain native prompts.
-
-Use `{{include:@alias/path.md}}` under a `sourceDirectories` alias. Files may contain nested includes;
-a preceding backslash escapes a literal directive. Relative aliases and component paths resolve from the
-declaring document. Includes accept contained `.md` or `.txt` UTF-8 files. Unsafe paths, escaping symlinks,
-cycles, invalid text and excessive content are rejected. Limits are 64 KiB per snippet, 256 KiB per composed
-prompt, 32 include levels and 256 expansions. Truncated native skill output is rejected before composition.
-
-Declared component files are read and validated during resolution even when their profiles are inactive.
-Native skills remain available for OpenCode's on-demand loading. A custom lazy prompt loader is feasibility
-research, not a production capability. Loaded text is not guaranteed permanent context after compaction.
 
 ## Permission ordering and fallback
 
@@ -148,7 +128,7 @@ missing file or a malformed/unreadable file is an error. The highest scope suppl
 earlier selections. Omission inherits; `[]` activates no profiles while document defaults/overrides still apply.
 
 Imports load explicit definition documents in authored order. They may define components, groups, presets,
-profiles, shortcuts and source directories, but cannot supply root activation/default/override scopes.
+profiles and shortcuts, but cannot supply root activation/default/override scopes.
 Importing never activates profiles. Paths retain the declaring reference directory, including alias-relative
 paths. Canonical file identities detect cycles and repeated imports; aliases are read-only for editing.
 Duplicate registry names identify both source locations. Automatic directory discovery remains deferred.
@@ -198,12 +178,10 @@ Migrate a copy of settings; there is no automatic conversion or legacy compatibi
 | ------------------------------------------- | ------------------------------------------------------------------- |
 | `agent.groups` or root `groups`             | `componentGroups`, with explicit members and profile selection.     |
 | `agent.modelPresets` or root `modelPresets` | `configurationPresets`, assigned by targeted profile layers.        |
-| `agent.prompts.defaults`                    | `defaults.agents.prompt`.                                           |
-| `agent.prompts.overrides.<name>`            | `overrides.agents.<name>.prompt`.                                   |
 | Agent/command/skill definitions             | `components.agents`, `components.commands`, `components.skills`.    |
 | Root `model` / `small_model`                | `defaults.model` / `defaults.small_model`.                          |
 | File-path `activeProfiles` / `extends`      | Explicit `imports`, named `profiles`, named selections and parents. |
 
 Old `agent`, `command` and `skill` namespaces are rejected even when empty. Diagnostics identify the key and
-suggest its destination. `sourceDirectories` retains its include-alias meaning. Preserve native authored pins
+suggest its destination. Removed prompt settings fail with a migration error; see [prompt migration](prompt-migration.md). Preserve native authored pins
 unless you deliberately intend to replace them; compare both selected profiles and fallback behavior after migration.

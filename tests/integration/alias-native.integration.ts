@@ -15,7 +15,7 @@ test(
     const f = await compositionFixture(t, 'native-configuration-alias');
     await f.write(f.paths.shared, {
       componentGroups: {
-        work: { agents: ['worker'], configuration: { model: 'fixture/beta', prompt: { append: ['ALIAS_COMPOSER'] } } },
+        work: { agents: ['worker'], configuration: { model: 'fixture/beta' } },
       },
       profiles: { work: { layers: [{ componentGroup: 'work' }] } },
       activeProfiles: [],
@@ -77,7 +77,6 @@ test(
     assert.deepEqual(await f.history(original.session.id), history);
     const continued = await f.send(original.session.id);
     assert.equal(continued.captured.model, 'beta');
-    assert.match(JSON.stringify(continued.captured.messages), /ALIAS_COMPOSER/);
     assert.ok(JSON.stringify(continued.captured.messages).includes('verified'));
     await writeFile(nativePath, nativeBefore + '\n// Actual saved native JSON change\n');
     const beforeRejection = server.requests.length;

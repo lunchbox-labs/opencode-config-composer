@@ -227,7 +227,7 @@ test('unused definitions can be created and deleted in every registry without ch
   }
 });
 
-test('mixed bundle membership patches retain configuration and reusable prompts while activating commands', async (t) => {
+test('mixed bundle membership patches retain configuration while activating commands', async (t) => {
   const root = await fixture(t);
   await writeFile(
     join(root, 'config-composer.jsonc'),
@@ -235,15 +235,11 @@ test('mixed bundle membership patches retain configuration and reusable prompts 
       imports: ['./definitions.jsonc'],
       components: {
         commands: { check: { template: 'Check this' } },
-        prompts: { guidance: { text: 'Extra guidance' } },
       },
       activeProfiles: ['work'],
     }),
   );
-  for (const [kind, member] of [
-    ['commands', 'check'],
-    ['prompts', 'guidance'],
-  ] as const) {
+  for (const [kind, member] of [['commands', 'check']] as const) {
     await save(
       planDefinition(await loadSnapshot(root), {
         operation: 'patch',
@@ -257,8 +253,6 @@ test('mixed bundle membership patches retain configuration and reusable prompts 
   const current = await loadSnapshot(root);
   assert.equal(current.sources.registry.componentGroups?.work.configuration?.modelRef, 'preset:balanced');
   assert.equal(current.resolved.commands.check.template, 'Check this');
-  assert.deepEqual(current.sources.registry.componentGroups.work.prompts, ['guidance']);
-  assert.deepEqual(current.sources.registry.components?.prompts?.guidance, { text: 'Extra guidance' });
 });
 
 for (const kind of ['env', 'file'] as const) {

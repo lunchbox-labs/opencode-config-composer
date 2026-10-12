@@ -66,7 +66,7 @@ async function profileFixture(t: TestContext, name: string) {
     profiles: {
       a: {
         layers: [{ componentGroup: 'members' }, { configurationPreset: 'a', target: { componentGroups: ['members'] } }],
-        overrides: { agents: { component: { prompt: { append: ['A_PROMPT'] } } } },
+        overrides: { agents: { component: {} } },
       },
       b: {
         layers: [{ componentGroup: 'members' }, { configurationPreset: 'b', target: { componentGroups: ['members'] } }],
@@ -83,7 +83,6 @@ async function profileFixture(t: TestContext, name: string) {
           topP: 0.8,
           options: { baseOnly: true, customTree: { base: true, value: 'base' }, logit_bias: { '404': 4 } },
         },
-        prompt: { prepend: ['BASE_PROMPT'] },
       },
     },
   });
@@ -249,7 +248,7 @@ test(
       aOnly: 'a',
       protected: 'composer',
     });
-    assert.match(systemPrompt(firstComponentA), /A_PROMPT/);
+    assert.match(systemPrompt(firstComponentA), /COMPONENT_BODY/);
     await f.pinnedUnchanged();
 
     const b = await f.select(['b']);

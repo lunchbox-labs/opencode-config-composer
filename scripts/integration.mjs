@@ -31,11 +31,7 @@ const suites = {
   editor: ['tests/integration/activation.integration.ts', 'tests/integration/authoring.integration.ts'],
   cleanup: ['tests/integration/cleanup.integration.mjs'],
   'content-terminal': ['tests/integration/content-terminal.integration.ts'],
-  content: [
-    'tests/integration/parameters.integration.ts',
-    'tests/integration/permission-editor.integration.ts',
-    'tests/integration/prompt-editor.integration.ts',
-  ],
+  content: ['tests/integration/parameters.integration.ts', 'tests/integration/permission-editor.integration.ts'],
   permissions: [
     'tests/canonical-permissions.native.ts',
     'tests/integration/permission-runtime.integration.ts',

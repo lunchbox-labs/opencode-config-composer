@@ -154,7 +154,6 @@ test(
       },
     };
     const reference = {
-      sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
       agent: {
         permission: {
           'sk*': { '*': 'deny' },
@@ -167,7 +166,7 @@ test(
         } satisfies PermissionPolicy,
         overrides: { build: { permission: { skill: { '*': 'allow' } } satisfies PermissionPolicy } },
         modelPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
-        prompts: { defaults: { append: ['{{include:@shared/default.md}}'] } },
+
         groups: {
           ...Object.fromEntries(
             permissionCases.flatMap(({ name, layers }) =>
@@ -177,7 +176,7 @@ test(
           base: { model: 'fixture/beta', variant: 'high' },
           developers: {
             modelRef: 'preset:balanced',
-            prompt: { append: ['GROUP_GUIDANCE'] },
+
             permission: { skill: 'allow' },
           },
           primary: { modelRef: 'opencode:model', variant: 'low' },
@@ -194,10 +193,8 @@ test(
           : Object.entries(value).map(([pattern, action]) => ({ tool, pattern, action })),
       );
     const composer: CompositionDocument = {
-      sourceDirectories: reference.sourceDirectories,
       defaults: {
         permissions: rules(reference.agent.permission),
-        agents: { prompt: reference.agent.prompts.defaults },
       },
       configurationPresets: reference.agent.modelPresets,
       componentGroups: Object.fromEntries(

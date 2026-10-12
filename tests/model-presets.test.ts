@@ -100,16 +100,10 @@ async function fixture(t: TestContext): Promise<string> {
 test('references are explicit, flat, validated, and separate from native fallback', () => {
   assert.deepEqual(readSettings({ agent: options }), {
     ...options,
-    promptSources: {},
-    promptDefaults: {},
-    agentPrompts: {},
   });
   assert.deepEqual(readSettings({}), {
     groups: {},
     modelPresets: {},
-    promptSources: {},
-    promptDefaults: {},
-    agentPrompts: {},
   });
   assert.deepEqual(resolveGroup({}, context), {});
   assert.deepEqual(resolveGroup({ modelRef: 'opencode:model' }, context), {

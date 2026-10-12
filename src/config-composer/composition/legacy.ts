@@ -1,11 +1,8 @@
 import { createHash } from 'node:crypto';
-import { dirname } from 'node:path';
-import { configurationPath } from '../configuration.ts';
 import {
   type AgentSettings,
   type GroupChoice,
   type GroupOptions,
-  type PromptOperations,
   agentGroups,
   readSettings,
   record,
@@ -110,57 +107,9 @@ function modelOrigins(
   }
 }
 
-function promptOrigins(
-  name: string,
-  agent: AgentSettings,
-  pointer: string,
-  settings: GroupOptions,
-  source: SourceDocument,
-  provenance: Record<string, FieldOrigin>,
-): void {
-  if (typeof agent.prompt !== 'string' || agent.prompt.trim() === '') {
-    return;
-  }
-  const policy = settings.agentPrompts[name] ?? {};
-  const operations: { pointer: string; value: PromptOperations }[] = [];
-  if (policy.inheritDefaults !== false) {
-    operations.push({ pointer: '/agent/prompts/defaults', value: settings.promptDefaults });
-  }
-  if (policy.inheritGroups !== false) {
-    for (const group of agentGroups(agent, settings.groups)) {
-      operations.push({
-        pointer: `/agent/groups/${escapePointer(group)}/prompt`,
-        value: settings.groups[group].prompt ?? {},
-      });
-    }
-  }
-  operations.push({ pointer: `/agent/prompts/overrides/${escapePointer(name)}`, value: policy });
-  const references = (field: 'prepend' | 'append'): string[] =>
-    operations.flatMap((item) => (item.value[field] ?? []).map((_, index) => `${item.pointer}/${field}/${index}`));
-  const prepend = references('prepend');
-  const append = references('append');
-  if (prepend.length + append.length === 0) {
-    return;
-  }
-  const last = append.at(-1) ?? prepend.at(-1);
-  if (last !== undefined) {
-    replace(provenance, `${pointer}/prompt`, {
-      ...origin(last, source.id),
-      operation: 'merge',
-      references: [...prepend, `${pointer}/prompt`, ...append],
-    });
-  }
-}
-
-/** Normalize the single-file baseline without applying it or reading prompt includes. */
+/** Normalize the single-file baseline without applying it. */
 export function resolveLegacy(source: SourceDocument, native: NativeInput): ResolvedComposition {
   const settings = readSettings(source.value);
-  settings.promptSources = Object.fromEntries(
-    Object.entries(settings.promptSources).map(([alias, path]) => [
-      alias,
-      configurationPath(path, dirname(source.path)),
-    ]),
-  );
   const provenance: Record<string, FieldOrigin> = {};
   fields(native, '', provenance);
   // Map normalized settings separately from native agents (an agent can be named
@@ -168,9 +117,6 @@ export function resolveLegacy(source: SourceDocument, native: NativeInput): Reso
   for (const [key, pointer] of [
     ['groups', '/agent/groups'],
     ['modelPresets', '/agent/modelPresets'],
-    ['promptSources', '/sourceDirectories'],
-    ['promptDefaults', '/agent/prompts/defaults'],
-    ['agentPrompts', '/agent/prompts/overrides'],
   ] as const) {
     const value = pointer
       .slice(1)
@@ -184,7 +130,6 @@ export function resolveLegacy(source: SourceDocument, native: NativeInput): Reso
     }
     const pointer = `/agent/${escapePointer(name)}`;
     modelOrigins(agent, pointer, settings, source, native, provenance);
-    promptOrigins(name, agent, pointer, settings, source, provenance);
   }
   return {
     settings,

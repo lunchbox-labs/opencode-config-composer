@@ -94,7 +94,7 @@ async function fixture(
               { componentGroup: 'members' },
               { configurationPreset: 'a', target: { componentGroups: ['members'] } },
             ],
-            overrides: { agents: { worker: { prompt: { append: ['A_PROMPT'] } } } },
+            overrides: { agents: { worker: {} } },
           },
           b: {
             layers: [
@@ -116,7 +116,6 @@ async function fixture(
           ...globals,
           agents: {
             parameters: { topP: 0.8, topK: 2, options: { baseOnly: true, nested: { base: 'base', value: 'base' } } },
-            prompt: { prepend: ['BASE_PROMPT'] },
           },
         },
       }),
@@ -181,8 +180,8 @@ function assertB(value: Awaited<ReturnType<typeof effective>>, native: Config) {
   assert.equal(value.agent?.build?.model, 'fixture/shared');
   assert.equal(value.agent.build.variant, undefined, 'B omits A’s variant despite using the same model');
   assert.equal(value.agent.worker?.variant, undefined);
-  assert.equal(value.agent.worker?.prompt, 'BASE_PROMPT\n\nCOMPONENT_BODY');
-  assert.deepEqual(value.agent.plan, { ...native.agent?.plan, prompt: 'BASE_PROMPT\n\nNATIVE_PLAN' });
+  assert.equal(value.agent.worker?.prompt, 'COMPONENT_BODY');
+  assert.deepEqual(value.agent.plan, { ...native.agent?.plan, prompt: 'NATIVE_PLAN' });
   assert.deepEqual(value.build, {
     temperature: 1,
     topP: 0.5,
@@ -235,7 +234,7 @@ for (const retainAgentReferences of [false, true]) {
     assert.equal(firstA.build.maxOutputTokens, 96);
     assert.equal(firstA.build.topK, 4);
     assert.equal(firstA.worker?.options.aOnly, true);
-    assert.match(firstA.agent.worker?.prompt ?? '', /A_PROMPT/);
+    assert.equal(firstA.agent.worker?.prompt, 'COMPONENT_BODY');
     assertB(await apply(['b']), f.native);
     assert.deepEqual(await apply(['a']), firstA, 'returning to A must exactly restore A without B-only values');
     const none = await apply([]);

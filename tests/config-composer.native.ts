@@ -5,8 +5,6 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type * as Parameters from '../src/config-composer/composition/parameter-authoring.ts';
 import type * as Permissions from '../src/config-composer/composition/permission-authoring.ts';
-import type * as Prompts from '../src/config-composer/composition/prompt-authoring.ts';
-import type * as PromptSources from '../src/config-composer/composition/prompt-sources.ts';
 import type * as Authoring from '../src/config-composer/composition/authoring.ts';
 import type * as NativeBaseline from '../src/config-composer/composition/native-baseline.ts';
 import type * as Apply from '../src/config-composer/composition/apply.ts';
@@ -23,7 +21,7 @@ import { applyEdits, modify, parse } from 'jsonc-parser';
 
 // Real V1 configuration loading, provider dispatch, and cache invalidation; only the remote model is synthetic.
 test(
-  'OpenCode composes ordered groups and prompts from dedicated settings and dispatches changes after reload',
+  'OpenCode composes ordered groups from dedicated settings and dispatches changes after reload',
   { timeout: 180_000 },
   async (t) => {
     const harness = await nativeHarness(t, 'composition');
@@ -93,15 +91,14 @@ test(
       },
     };
     const composer = {
-      sourceDirectories: { shared: './shared-prompts', 'agent-prompts': './shared-prompts' },
       components: { agents: { 'prompt-consumer': { prompt: 'CONSUMER_BASE', mode: 'primary' } } },
       configurationPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
-      defaults: { agents: { prompt: { append: ['{{include:@shared/default.md}}'] } } },
+      defaults: { agents: {} },
       componentGroups: {
         base: { configuration: { model: 'fixture/beta', variant: 'high' } },
         developers: {
           agents: ['prompt-consumer'],
-          configuration: { modelRef: 'preset:balanced', prompt: { append: ['GROUP_GUIDANCE'] } },
+          configuration: { modelRef: 'preset:balanced' },
         },
         primary: { configuration: { modelRef: 'opencode:model', variant: 'low' } },
         small: { configuration: { modelRef: 'opencode:small_model', variant: 'low' } },
@@ -123,7 +120,7 @@ test(
       `// Dedicated settings\n${JSON.stringify(composer, null, 2)}\n`,
     );
     await writeFile(join(configRoot, 'shared-prompts/default.md'), 'GLOBAL_GUIDANCE');
-    await writeFile(join(configRoot, 'shared-prompts/worker.md'), 'INITIAL_WORKER_GUIDANCE');
+    await writeFile(join(configRoot, 'shared-prompts/worker.md'), '{{include:@shared/worker.md}}');
     await writeFile(join(configRoot, 'shared-prompts/skill.md'), 'SKILL_GUIDANCE {{include:@shared/skill-inner.md}}');
     await writeFile(join(configRoot, 'shared-prompts/skill-inner.md'), 'NESTED_SKILL_GUIDANCE');
     await writeFile(
@@ -184,9 +181,7 @@ test(
     assert.deepEqual(worker.model, { providerID: 'fixture', modelID: 'alpha' });
     assert.equal(worker.variant, 'low');
     assert.deepEqual(worker.options.groups, ['base', 'developers']);
-    assert.match(worker.prompt ?? '', /INITIAL_WORKER_GUIDANCE/);
-    assert.match(worker.prompt ?? '', /GROUP_GUIDANCE/);
-    assert.match(worker.prompt ?? '', /GLOBAL_GUIDANCE/);
+    assert.equal(worker.prompt?.includes('{{include:@shared/worker.md}}'), true);
     const compactionPrompt = agents.find((agent) => agent.name === 'compaction')?.prompt;
     assert.ok(typeof compactionPrompt === 'string' && compactionPrompt.length > 0);
     assert.ok(!compactionPrompt.includes('GLOBAL_GUIDANCE'), 'preserve the promptless built-in configuration');
@@ -210,9 +205,9 @@ test(
       return result;
     };
     assert.equal((await request()).info.modelID, 'alpha');
-    const beforeReload = requests.find((body) => JSON.stringify(body).includes('INITIAL_WORKER_GUIDANCE'));
+    const beforeReload = requests.find((body) => JSON.stringify(body).includes('{{include:@shared/worker.md}}'));
     assert.ok(beforeReload !== undefined, 'send expanded prompt text to the provider');
-    assert.ok(!JSON.stringify(beforeReload).includes('{{include:'), 'never send unresolved directives');
+    assert.ok(JSON.stringify(beforeReload).includes('{{include:'), 'authored directives pass through');
     assert.equal(beforeReload.model, 'alpha');
     assert.equal(beforeReload.reasoning_effort, 'low');
     const nativeConfig = await api<{ references?: Record<string, unknown> }>('/config');
@@ -236,12 +231,12 @@ test(
     const skillOutput = skillPart.state.output;
     assert.ok(typeof skillOutput === 'string');
     assert.ok(skillOutput.startsWith('<skill_content name="included-skill">\n# Skill: included-skill\n\n'));
-    assert.ok(skillOutput.includes('SKILL_BODY_BEFORE\nSKILL_GUIDANCE NESTED_SKILL_GUIDANCE\nSKILL_BODY_AFTER'));
+    assert.ok(skillOutput.includes('SKILL_BODY_BEFORE\n{{include:@agent-prompts/skill.md}}\nSKILL_BODY_AFTER'));
     assert.ok(skillOutput.includes('Base directory for this skill:'));
     assert.ok(skillOutput.includes('<skill_files>'));
     assert.ok(skillOutput.includes(join(configRoot, 'skills/included-skill/notes.txt')));
     assert.ok(skillOutput.endsWith('</skill_content>'));
-    assert.ok(!skillOutput.includes('{{include:'), 'expand directives in the native skill result');
+    assert.ok(skillOutput.includes('{{include:'), 'skill output remains host-owned');
     assert.ok(!skillOutput.includes('GLOBAL_GUIDANCE'), 'agent prompt defaults do not wrap skill output');
     const skillRequest = requests.find((body) => JSON.stringify(body.messages).includes('<skill_content'));
     assert.ok(skillRequest !== undefined && Array.isArray(skillRequest.messages));
@@ -250,7 +245,7 @@ test(
         message !== null && typeof message === 'object' && 'role' in message && message.role === 'tool',
     ) as { content?: unknown } | undefined;
     assert.equal(toolMessage?.content, skillOutput, 'the next provider request receives the native expanded result');
-    assert.ok(!JSON.stringify(skillRequest).includes('{{include:'), 'never send raw skill directives to the provider');
+    assert.ok(JSON.stringify(skillRequest).includes('{{include:'), 'skill directives pass through');
     assert.equal((await request('main-follower')).info.modelID, 'beta');
     assert.equal((await request('small-follower')).info.modelID, 'beta');
     for (const name of ['config-composer-explain', 'config-composer-create', 'config-composer-migrate']) {
@@ -387,56 +382,6 @@ test(
         'inactive rules do not affect active agents',
       );
     });
-    const { planPrompt, promptTargets } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/prompt-authoring.js')).href
-    )) as typeof Prompts;
-    const promptSnapshot = await editor.snapshot();
-    const promptTarget = promptTargets(promptSnapshot, settingsId).find(
-      (target) => target.label === 'Group: developers',
-    );
-    assert.ok(promptTarget !== undefined);
-    const promptPlan = await planPrompt(promptSnapshot, promptTarget, {
-      field: 'append',
-      value: ['AUTHORED_PROMPT_FIRST\nAUTHORED_PROMPT_SECOND'],
-    });
-    await saveFilePlan(promptPlan, async () => {
-      const preview = await previewFilePlan(promptPlan);
-      assert.match(
-        String(preview.resolved.agent.worker.prompt),
-        /RELOADED_WORKER_GUIDANCE[\s\S]*AUTHORED_PROMPT_FIRST\nAUTHORED_PROMPT_SECOND/,
-      );
-    });
-    const { planPromptAsset, planPromptReferences, validatePromptAssets } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/prompt-sources.js')).href
-    )) as typeof PromptSources;
-    await writeFile(join(configRoot, 'shared-prompts/authored.md'), 'REUSABLE_NATIVE_PROMPT');
-    for (const change of [
-      {
-        registry: 'sourceDirectories',
-        name: 'authored',
-        operation: 'create',
-        sourceId: settingsId,
-        value: './shared-prompts',
-      },
-      {
-        registry: 'prompts',
-        name: 'notes',
-        operation: 'create',
-        sourceId: settingsId,
-        value: { text: '{{include:@authored/authored.md}}' },
-      },
-      { registry: 'sourceDirectories', name: 'authored', operation: 'rename', nextName: 'reusable' },
-    ] as const) {
-      const snapshot = await editor.snapshot();
-      const plan = await planPromptAsset(snapshot, change);
-      await saveFilePlan(plan, async () => {
-        await validatePromptAssets(plan);
-      });
-    }
-    const references = await planPromptReferences(await editor.snapshot(), 'prompt-consumer', ['notes', 'notes']);
-    await saveFilePlan(references, async () => {
-      await validatePromptAssets(references);
-    });
     await reload();
     let refreshed = agents;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -449,15 +394,13 @@ test(
     assert.equal(refreshed.find((agent) => agent.name === 'worker')?.model.modelID, 'beta');
     assert.equal(refreshed.find((agent) => agent.name === 'worker')?.variant, 'high');
     assert.equal(refreshed.find((agent) => agent.name === 'pinned')?.model.modelID, 'alpha');
-    assert.match(refreshed.find((agent) => agent.name === 'worker')?.prompt ?? '', /RELOADED_WORKER_GUIDANCE/);
     assert.equal(
-      refreshed.find((agent) => agent.name === 'worker')?.prompt?.includes('INITIAL_WORKER_GUIDANCE'),
-      false,
+      refreshed.find((agent) => agent.name === 'worker')?.prompt?.includes('{{include:@shared/worker.md}}'),
+      true,
     );
     assert.equal((await request()).info.modelID, 'beta');
-    const reloadedRequest = requests.find((body) => JSON.stringify(body).includes('RELOADED_WORKER_GUIDANCE'));
+    const reloadedRequest = requests.findLast((body) => body.model === 'beta');
     assert.ok(reloadedRequest !== undefined, 'reread fragments after token reload');
-    assert.match(JSON.stringify(reloadedRequest), /AUTHORED_PROMPT_FIRST\\nAUTHORED_PROMPT_SECOND/);
     assert.equal(reloadedRequest.temperature, 0.35);
     assert.equal(reloadedRequest.top_p, 0.8);
     assert.equal(reloadedRequest.max_tokens, 128);
@@ -467,14 +410,8 @@ test(
       'native selected variant retains precedence over authored provider options',
     );
     assert.equal(reloadedRequest.model, 'beta');
-    assert.ok(!JSON.stringify(reloadedRequest).includes('INITIAL_WORKER_GUIDANCE'));
+    assert.ok(JSON.stringify(reloadedRequest).includes('{{include:@shared/worker.md}}'));
     assert.equal((await request('prompt-consumer')).info.modelID, 'beta');
-    const reusableRequest = requests.find((body) => JSON.stringify(body).includes('REUSABLE_NATIVE_PROMPT'));
-    assert.ok(reusableRequest !== undefined);
-    assert.match(
-      JSON.stringify(reusableRequest),
-      /CONSUMER_BASE\\n\\nREUSABLE_NATIVE_PROMPT\\n\\nREUSABLE_NATIVE_PROMPT/,
-    );
     await writeFile(
       join(project, 'opencode.json'),
       JSON.stringify({ model: 'fixture/alpha', small_model: 'fixture/alpha' }),
@@ -728,10 +665,7 @@ test(
     assert.ok(
       requests
         .filter((body) => !JSON.stringify(body.messages).includes('Load config-composer-'))
-        .every(
-          (body) =>
-            !/agent_group|modelRef|modelPresets|configFile|promptSources|sourceDirectories/.test(JSON.stringify(body)),
-        ),
+        .every((body) => !/agent_group|modelRef|modelPresets|configFile/.test(JSON.stringify(body))),
     );
     assert.match(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), /^\/\/ Native integration fixture/);
     assert.match(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8'), /^\/\/ Dedicated settings/);
@@ -893,10 +827,7 @@ test(
     assert.match(harness.stderr, /Legacy composition keys are not supported/);
     for (const body of requests) {
       const { messages: _messages, tools: _tools, ...parameters } = body;
-      assert.doesNotMatch(
-        JSON.stringify(parameters),
-        /agent_group|modelRef|modelPresets|configFile|promptSources|sourceDirectories/,
-      );
+      assert.doesNotMatch(JSON.stringify(parameters), /agent_group|modelRef|modelPresets|configFile/);
     }
   },
 );

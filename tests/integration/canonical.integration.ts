@@ -108,13 +108,8 @@ test(
       '---\nagent: reviewer\ndescription: Imported command\n---\nCOMMAND_BODY $ARGUMENTS {{include:@external/fragment.md}}',
     );
     await writeDocument(external, {
-      sourceDirectories: { external: './snippets' },
       configurationPresets: { 'shared-read-only': { model: 'fixture/beta' } },
       components: {
-        prompts: {
-          reference: { file: './snippets/reference.md' },
-          'inline-reference': { text: 'INLINE_PROMPT_REFERENCE' },
-        },
         skills: { 'included-skill': { file: './included-skill/SKILL.md' } },
         commands: { 'fixture-review': { file: './review.md' } },
       },
@@ -125,11 +120,11 @@ test(
         agents: {
           reviewer: {
             file: relativeFile(components, reviewerPath),
-            promptRefs: ['reference', 'inline-reference'],
+
             skills: ['included-skill'],
           },
           twin: { file: relativeFile(components, reviewerPath) },
-          inline: { prompt: 'INLINE_AGENT_BODY', mode: 'primary', promptRefs: ['reference'] },
+          inline: { prompt: 'INLINE_AGENT_BODY', mode: 'primary' },
         },
       },
     });
@@ -150,15 +145,15 @@ test(
       defaults: {
         model: 'fixture/alpha',
         small_model: 'fixture/alpha',
-        agents: { prompt: { prepend: ['DEFAULT_PREFIX'] } },
+        agents: {},
       },
       componentGroups: {
         primary: {
           agents: ['build', 'plan', 'explore', 'inline'],
           commands: ['fixture-review'],
           skills: ['included-skill'],
-          prompts: ['reference'],
-          configuration: { modelRef: 'preset:tuned', prompt: { append: ['BASE_APPEND'] } },
+
+          configuration: { modelRef: 'preset:tuned' },
         },
         focus: {
           agents: ['build', 'reviewer', 'inline'],
@@ -253,18 +248,9 @@ test(
       assert.notEqual(captured.temperature, 0.2, 'model change clears parameters from the inherited alpha model');
       assert.notEqual(captured.max_tokens, 96);
       const text = JSON.stringify(captured.messages);
-      for (const marker of [
-        'DEFAULT_PREFIX',
-        'IMPORTED_REVIEWER',
-        'ORIGIN_RELATIVE_FRAGMENT',
-        'NAMED_PROMPT_REFERENCE',
-        'INLINE_PROMPT_REFERENCE',
-        'BASE_APPEND',
-      ]) {
-        assert.ok(text.includes(marker), marker);
-      }
-      assert.ok(!text.includes('CANONICAL_SKILL_BODY'), 'skill relationships do not inject their bodies');
-      assert.ok(!text.includes('{{include:'));
+      assert.ok(text.includes('IMPORTED_REVIEWER'));
+      assert.ok(!text.includes('{{include:@external/skill.md}}'), 'skill relationships do not inject their bodies');
+      assert.ok(text.includes('{{include:'), 'include syntax remains authored text');
       assert.deepEqual(
         await readdir(join(configRoot, 'agents')),
         ['pinned.md'],
@@ -357,7 +343,7 @@ test(
       await reload();
     });
 
-    await t.test('imported commands execute and native skills expand only when called', async () => {
+    await t.test('imported commands execute and native skills load with unchanged text', async () => {
       const session = await api<{ id: string }>('/session', { title: 'Command integration' });
       const result = await api<Message>(`/session/${session.id}/command`, {
         command: 'fixture-review',
@@ -365,7 +351,9 @@ test(
       });
       assert.equal(result.info.error, undefined);
       assert.ok(
-        JSON.stringify(requests.at(-1)?.messages).includes('COMMAND_BODY fixture-input ORIGIN_RELATIVE_FRAGMENT'),
+        JSON.stringify(requests.at(-1)?.messages).includes(
+          'COMMAND_BODY fixture-input {{include:@external/fragment.md}}',
+        ),
       );
       await api<Message>(`/session/${session.id}/message`, {
         agent: 'reviewer',
@@ -374,8 +362,8 @@ test(
       const messages = await api<Message[]>(`/session/${session.id}/message`);
       const skill = messages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
       assert.equal(skill?.state?.status, 'completed', JSON.stringify(messages));
-      assert.match(skill.state.output ?? '', /CANONICAL_SKILL_BODY/);
-      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('CANONICAL_SKILL_BODY'));
+      assert.ok((skill.state.output ?? '').includes('{{include:@external/skill.md}}'));
+      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('{{include:@external/skill.md}}'));
     });
 
     await t.test('automatic title and manual compaction dispatch use their configured utility parameters', async () => {
@@ -438,7 +426,7 @@ test(
       assert.notEqual(captured.max_tokens, 96);
       assert.equal(captured.reasoning_effort, 'high');
       await reload();
-      assert.equal((await findAgent('reviewer'))!.prompt!.split('NAMED_PROMPT_REFERENCE').length - 1, 1);
+      assert.equal((await findAgent('reviewer'))!.prompt!.split('IMPORTED_REVIEWER').length - 1, 1);
       await storage.savePlan(
         storage.planChange(await snapshot(), {
           kind: 'preset',
@@ -474,10 +462,9 @@ test(
         }),
       );
       const after = (await document(settings)).componentGroups!.primary;
-      for (const key of ['agents', 'commands', 'skills', 'prompts'] as const) {
+      for (const key of ['agents', 'commands', 'skills'] as const) {
         assert.deepEqual(after[key], before[key]);
       }
-      assert.deepEqual(after.configuration!.prompt, before.configuration!.prompt);
       await reload();
       assert.equal((await send()).captured.model, 'beta');
       assert.notEqual((await send()).captured.temperature, 0.2);

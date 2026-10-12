@@ -84,12 +84,12 @@ test('packaged creation example resolves native built-ins, mixed components, and
   assert.equal(resolved.agent.explore.prompt, undefined);
   const prompt = resolved.agent.reviewer.prompt;
   assert.ok(typeof prompt === 'string');
-  assert.match(prompt, /REVIEW_GUIDANCE/);
+  assert.match(prompt, /Review the requested changes/);
   assert.equal(resolved.commands.review.agent, 'reviewer');
   assert.deepEqual(resolved.permissionWarnings, []);
 });
 
-test('packaged migration retains native Markdown bytes and pins while mapping legacy prompt and group settings', async (t) => {
+test('packaged migration retains native Markdown bytes and pins while mapping legacy group settings', async (t) => {
   const f = await fixture(t);
   const base = join(bundledSkillDirectory, 'config-composer-migrate/examples');
   const before = await readFile(join(base, 'before.jsonc'), 'utf8');
@@ -105,10 +105,7 @@ test('packaged migration retains native Markdown bytes and pins while mapping le
   assert.deepEqual(snapshot.sources.activeProfiles, ['migrated']);
   assert.equal(snapshot.resolved.agent.worker.model, 'fixture/pinned');
   assert.deepEqual(snapshot.resolved.agent.worker.permission, { bash: 'ask' });
-  assert.equal(
-    snapshot.resolved.agent.worker.prompt,
-    'Review carefully.\n\nKeep this native body.\n\nCheck your changes.',
-  );
+  assert.equal(snapshot.resolved.agent.worker.prompt, 'Keep this native body.');
   assert.equal(await readFile(agentFile, 'utf8'), native);
 });
 

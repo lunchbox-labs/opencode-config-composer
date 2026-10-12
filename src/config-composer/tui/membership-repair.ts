@@ -113,7 +113,7 @@ export function openMembershipRepair(snapshot: RepairSnapshot, ui: RepairUi): vo
       run: () =>
         ui.menu(
           `Repair group: ${group}`,
-          (['agents', 'skills', 'commands', 'prompts'] as const).map((kind) => ({
+          (['agents', 'skills', 'commands'] as const).map((kind) => ({
             title: `Edit ${kind}`,
             value: kind,
             run: () => members(group, kind),

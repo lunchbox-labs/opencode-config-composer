@@ -171,15 +171,11 @@ export async function loadComponents(
 ) {
   const components = sources.registry.components;
   const agents: Record<string, AgentSettings> = {};
-  const prompts: Record<string, string> = {};
   const commands: Record<
     string,
     { template: string; agent?: string; model?: string; description?: string; subtask?: boolean }
   > = {};
   const skills: Record<string, string> = {};
-  for (const [name, value] of Object.entries(components?.prompts ?? {})) {
-    prompts[name] = value.file === undefined ? value.text : await text(value.file, overlays);
-  }
   for (const [name, value] of Object.entries(components?.skills ?? {})) {
     if (basename(value.file) !== 'SKILL.md') {
       throw new SettingsError(`Skill ${name} must name its native SKILL.md file.`);
@@ -215,14 +211,7 @@ export async function loadComponents(
         throw new SettingsError(`Agent ${name} names missing skill ${skill}.`);
       }
     }
-    const parts = [file.body];
-    for (const prompt of value.promptRefs ?? []) {
-      if (!Object.hasOwn(prompts, prompt)) {
-        throw new SettingsError(`Agent ${name} names missing prompt ${prompt}.`);
-      }
-      parts.push(prompts[prompt]);
-    }
-    agents[name] = { ...nativeAgent(metadata), prompt: parts.join('\n\n') };
+    agents[name] = { ...nativeAgent(metadata), prompt: file.body };
   }
   for (const [name, value] of Object.entries(components?.commands ?? {})) {
     const file =
@@ -244,5 +233,5 @@ export async function loadComponents(
       ...(typeof metadata.subtask === 'boolean' ? { subtask: metadata.subtask } : {}),
     };
   }
-  return { agents, prompts, commands, skills };
+  return { agents, commands, skills };
 }

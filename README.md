@@ -1,280 +1,195 @@
 # OpenCode Config Composer
 
-Compose OpenCode agents, skills, commands and prompts into reusable workflows. Component groups bundle related
-components, configuration presets supply reusable settings, and profiles select a setup for the whole project.
-Use `/compose` to inspect, edit, save and apply your setup.
+Compose OpenCode configuration with reusable groups, presets and profiles to switch models and permissions
+across your agents. Manage configuration through `/compose`.
 
-This project is independently maintained and is not affiliated with OpenCode or Anomaly.
-The package is **`@lunchbox-labs/opencode-config-composer`**. Supported host: **OpenCode V1 1.18.34**.
+Package: **`@lunchbox-labs/opencode-config-composer`** · Supported host: **OpenCode V1 1.18.34**.
+Independently maintained; not affiliated with OpenCode or Anomaly.
 
-## Install
+## Add Composer
 
-Register the same package version in both native configuration files, retaining other plugin entries.
-Replace `VERSION` with your chosen version.
-
-`opencode.jsonc`:
+Add the package to `plugin` in both `opencode.jsonc` and `tui.jsonc`:
 
 ```jsonc
 { "plugin": ["@lunchbox-labs/opencode-config-composer@VERSION"] }
 ```
 
-`tui.jsonc`:
+The editors need the server plugin registered in the shared `opencode.jsonc`, even when the Composer
+configuration lives in a project.
+
+## Examples
+
+- [Switch providers](docs/examples/provider-profiles/README.md): keep model profiles for rotating provider subscriptions.
+- [Share permissions by role](docs/examples/role-permissions/README.md): maintain developer, reviewer and orchestrator policies in one place.
+- [Review and programming](docs/examples/review-programming/README.md): combine model profiles and permissions in a complete configuration.
+
+## Compose configuration
+
+Keep agent, command and skill definitions in their OpenCode files, then use Composer to choose which agents
+share settings and when those settings apply. For example, a coding group can keep the same members while
+provider profiles assign it different model presets. A reviewer group can share permissions across several agents.
+
+Define membership under `componentGroups`. A group's `agents` list uses existing agent names, including built-ins
+such as `build` and `plan`; custom agents can also join through `groups` in their Markdown frontmatter. Its optional
+`configuration` applies to member agents when the group is selected. Groups can also bundle declared commands,
+and skills, but the group's settings affect only its agents.
+
+Put reusable model, variant, parameter and permission settings in `configurationPresets`. A preset has no members
+of its own. It can supply either a `model` or a `modelRef`, never both. Use `opencode:model` or
+`opencode:small_model` to follow the effective workspace default, or `preset:NAME` to reuse another preset's model
+settings. That model reference does not bring along the referenced preset's permissions.
+
+For example, these two sections define a group and a preset without selecting either:
 
 ```jsonc
-{ "plugin": ["@lunchbox-labs/opencode-config-composer@VERSION"] }
-```
-
-OpenCode selects the server and TUI entrypoints. Register one Composer entry in each file.
-For a local build, run `npm ci`, `npm run build` and `npm pack`, install the printed tarball in a separate
-directory, then use the absolute installed package directory in both plugin lists.
-
-## Components, groups, presets and profiles
-
-| Concept              | Configuration key      | Purpose                                                                           |
-| -------------------- | ---------------------- | --------------------------------------------------------------------------------- |
-| Component            | `components`           | An agent, skill, command or prompt.                                               |
-| Component group      | `componentGroups`      | A named bundle of related components, optionally with settings for member agents. |
-| Configuration preset | `configurationPresets` | Reusable model, variant, parameters or permissions, independent of membership.    |
-| Profile              | `profiles`             | Ordered group and preset layers, an optional parent profile, and final overrides. |
-
-Define components under `agents`, `skills`, `commands` and `prompts`. An agent supplies an inline `prompt` or
-Markdown `file`; a skill names a native `SKILL.md`; a command supplies a `template` or Markdown `file`; a prompt
-supplies inline `text` or a `file`. Each definition uses exactly one of its supported content forms.
-
-Definitions alone do not activate a workflow. Profile layers select a `componentGroup`, or assign a
-`configurationPreset` to a `target` of agent names, component group names, or both. Presets configure already
-selected agents. Group targets apply settings to member agents, not to skill or command bodies.
-
-Relationships are explicit. A command's `agent` names its target. An agent's `promptRefs` appends named prompt
-bodies in order. An agent's `skills` records intended on-demand relationships; it does not load skill bodies
-or restrict access. A group's `prompts` list alone does not inject those prompts into every agent.
-
-## Complete review and programming example
-
-Copy the complete [example directory](docs/examples/review-programming) together, keeping relative paths.
-Place its `config-composer.jsonc`, `profiles.jsonc` and `skills/` in your OpenCode configuration directory,
-or put them in the project's `.opencode/` directory. All referenced resources are supplied.
-
-| Group         | Agents                          | Skills                           | Commands                     |
-| ------------- | ------------------------------- | -------------------------------- | ---------------------------- |
-| `review`      | `code-reviewer`, `test-auditor` | `code-review`, `test-audit`      | `review-code`, `audit-tests` |
-| `programming` | `implementer`, `test-writer`    | `implementation`, `test-writing` | `implement`, `write-tests`   |
-
-[config-composer.jsonc](docs/examples/review-programming/config-composer.jsonc) defines the four agents,
-four skills, explicit command targets, prompt relationships, groups and reusable presets.
-[profiles.jsonc](docs/examples/review-programming/profiles.jsonc) is explicitly imported and contains:
-
-- `base-workflow`: selects `review`, then `programming`, and assigns each group's permission preset.
-- `claude-coding`: extends `base-workflow`, assigns `claude-code` to all four agents, then allows `git *`
-  for `code-reviewer` in its final override.
-- `openai-coding`: extends the same parent and assigns `openai-code` to the same agents.
-
-Model presets use `anthropic/claude-sonnet-4-5` and `openai/gpt-5` with `maxOutputTokens: 4096`.
-Replace IDs with models available in your connected catalog as needed. Provider access and parameter support
-are checked at dispatch; the example supplies no credentials.
-
-With no additional overrides, native authored model pins or session-selected models, the configured result is:
-
-| Agent           | Claude profile model | OpenAI profile model | `git status`: Claude / OpenAI | `npm test`: both |
-| --------------- | -------------------- | -------------------- | ----------------------------- | ---------------- |
-| `code-reviewer` | Claude Sonnet 4.5    | GPT-5                | allow / ask                   | deny             |
-| `test-auditor`  | Claude Sonnet 4.5    | GPT-5                | ask / ask                     | deny             |
-| `implementer`   | Claude Sonnet 4.5    | GPT-5                | allow / allow                 | ask              |
-| `test-writer`   | Claude Sonnet 4.5    | GPT-5                | allow / allow                 | ask              |
-
-All four agents receive the 4,096-token output limit. Removing the Claude reviewer's final Git override
-restores `ask` while retaining its earlier npm denial. Unmatched requests use native permission fallback.
-These rules describe Git and npm requests, not a blanket read-only or full-access policy.
-Switching profiles reuses components and command targets; it does not duplicate or preload skills.
-
-## Built-in and custom agent membership
-
-Groups can name built-in agents directly. This complete minimal document selects a built-in workflow:
-
-```jsonc
-{
-  "componentGroups": { "coding": { "agents": ["build", "plan", "explore"] } },
-  "profiles": { "coding": { "layers": [{ "componentGroup": "coding" }] } },
-  "activeProfiles": ["coding"],
+"componentGroups": {
+  "coding": { "agents": ["build", "plan"] }
+},
+"configurationPresets": {
+  "workspace-model": { "modelRef": "opencode:model" }
 }
 ```
 
-The pinned host also has `general`, `compaction`, `title` and `summary`. Composer retains native prompts,
-modes, permissions and model pins unless a supported explicit override changes them. Hidden agents remain hidden.
-Ordinary availability controls exclude internal `compaction`, `title` and `summary` agents.
+A profile brings membership and settings together through an ordered `layers` list. Each layer takes one of two forms:
 
-Existing custom agents may also declare memberships in native Markdown frontmatter:
+- `componentGroup` names a group to select and applies its configuration to its member agents.
+- `configurationPreset` names a preset to apply, with a required `target` identifying the agents to receive it.
 
-```yaml
----
-description: Review the current change
-mode: subagent
-groups: [review]
----
-Review the diff and report actionable findings.
+Inside a profile, these layers select `coding` before applying `workspace-model` to its agents:
+
+```jsonc
+"layers": [
+  { "componentGroup": "coding" },
+  {
+    "configurationPreset": "workspace-model",
+    "target": { "componentGroups": ["coding"] }
+  }
+]
 ```
 
-JSONC member names keep authored order; frontmatter-only members follow in lexical name order. A name present
-through both paths occurs once. Native `options.groups` is supported; direct `groups` takes precedence when
-both exist. Selecting the group applies its configuration once per member, in profile layer order.
-Unknown or unavailable members produce diagnostics. `/compose` offers membership repair before activation.
+Within `target`, use `agents` for a nonempty list of agent names, `componentGroups` for a nonempty list of group
+names, or both. Agent names resolve against available built-in and custom agents; group names resolve against
+`componentGroups` and expand to their agent members. Both lists together form one set of targets. These are
+configuration names, not file paths. To address selected agents directly instead, the preset layer can use
+`"target": { "agents": ["build", "plan"] }`.
 
-Native project agents in `opencode.json(c)` and `.opencode/agent(s)/*.md` are included. Keep one Markdown
-identity per native directory. The editor treats native project sources as read-only: add JSONC memberships
-without shadow agent files; edit native pins or frontmatter in their declaring files.
+A preset target must already be selected when that layer runs, usually by a preceding group layer. Targeting a
+group does not select it, enable its agents, load its commands or skills, or apply its own configuration. The target group
+need not have been selected as long as its agent members have been. Unknown names and unselected agent targets
+are errors. This is why the provider example selects the coding group before assigning its model preset.
+
+Select profiles by name in `activeProfiles`; several profiles run from left to right. A profile can name
+one parent with `extends` to reuse its layers and overrides before adding its own. `profileShortcuts` gives a saved profile
+selection a named action in the UI. For profiles that also control which agents are enabled, `agentAvailability`
+maps agent names to booleans: `true` selects and enables an agent before that profile's layers, while `false`
+disables it without discarding its definition. Selection for composition and availability in OpenCode are separate;
+selecting a group does not itself enable a disabled agent.
+
+With a `coding` profile already defined, a child can reuse it and add a targeted preset layer:
+
+```jsonc
+"profiles": {
+  "workspace-coding": {
+    "extends": "coding",
+    "layers": [
+      { "configurationPreset": "workspace-model", "target": { "componentGroups": ["coding"] } }
+    ]
+  }
+},
+"activeProfiles": ["workspace-coding"]
+```
 
 ## Shared, project and local settings
 
-Composer loads these scopes in order:
+Composer reads these files in order:
 
-| Scope   | File                                                                                           |
-| ------- | ---------------------------------------------------------------------------------------------- |
-| Shared  | `config-composer.jsonc` in the OpenCode configuration directory, or the selected `configFile`. |
-| Project | `.opencode/config-composer.jsonc` under the current project/worktree root.                     |
-| Local   | `.opencode/config-composer.local.jsonc` under the same root.                                   |
+| Scope   | File                                                                                          |
+| ------- | --------------------------------------------------------------------------------------------- |
+| Shared  | `config-composer.jsonc` in the OpenCode configuration directory, or the selected `configFile` |
+| Project | `.opencode/config-composer.jsonc` under the current project/worktree root                     |
+| Local   | `.opencode/config-composer.local.jsonc` under the same root                                   |
 
-The shared directory uses `OPENCODE_CONFIG_DIR` when set, otherwise an absolute `XDG_CONFIG_HOME/opencode`,
-otherwise `~/.config/opencode`. Relative `OPENCODE_CONFIG_DIR` resolves from the process working directory.
-A relative `configFile` resolves from the shared directory. Select a custom file with the server options tuple:
+Use explicit `imports` to split definitions across local JSON or JSONC files. Imports can contribute groups,
+presets, profiles and other named definitions, but cannot supply `activeProfiles`, document `defaults` or document
+`overrides`. Relative paths resolve from the declaring document, including paths in imported definitions.
+Importing a profile does not activate it. Duplicate definition names, import cycles and repeated imports of the
+same file are rejected; definitions do not replace one another just because they appear in a later scope.
 
-```jsonc
-{
-  "plugin": [["@lunchbox-labs/opencode-config-composer@VERSION", { "configFile": "settings/custom.jsonc" }]],
-}
-```
-
-Missing default shared/project/local files are allowed; an explicitly selected `configFile` must exist.
-Invalid or unreadable settings produce errors. Use the [schema](schema.json) matching the installed package;
-the raw GitHub schema URL tracks its named branch. `$schema` may point to a local copy.
-
-`imports` lists explicit local `.json` or `.jsonc` definition files. Imports, component files and
-`sourceDirectories` aliases resolve from their declaring document. Imported definitions do not activate
-profiles and cannot contain root `activeProfiles`, `defaults` or `overrides`. Duplicate named definitions,
-import cycles and repeated canonical identities are rejected. Automatic directory discovery remains deferred.
-
-`activeProfiles` contains ordered names, not filenames. The highest scope supplying the key replaces the
-earlier selection. Omit the key to inherit; `[]` selects none. A local selection can replace the example's
-shared or project `claude-coding` selection:
+The last scope supplying `activeProfiles` replaces the earlier selection. Omit the key to inherit, or use an empty
+list to clear profiles:
 
 ```jsonc
-{ "activeProfiles": ["openai-coding"] }
+"activeProfiles": []
 ```
 
-Removing that local key restores inheritance. Selecting none leaves independent document defaults and
-overrides in effect. Keep personal local selections out of version control. Different worktrees can select
-different profiles; running instances do not automatically reload one another.
+Document defaults and overrides still apply when no profile is selected. See
+[files, imports and activation](docs/composition-schema.md#files-imports-and-activation) for the full rules.
 
-## Precedence, prompts and permissions
+## How settings combine
 
-Shared, project and local defaults establish the baseline. Active profiles replay left to right; each parent
-chain replays before that profile's layers and overrides. A and B extending Base replay Base → A → Base → B.
-Shared, project and local document overrides apply last. Ordinary objects merge by field; ordinary arrays
-replace inside merged values. Parent and child layer lists replay separately.
+Composer starts from OpenCode's configuration and applies document defaults in shared, project, then local order.
+`defaults.model` and `defaults.small_model` set workspace defaults; `defaults.agents` supplies settings for agents
+selected for composition. Leaving a field out preserves the applicable earlier or OpenCode value.
 
-Model settings support `model` or `modelRef`, plus `variant` and typed `parameters`. References are
-`opencode:model`, `opencode:small_model` and `preset:NAME`. Native references use final effective workspace
-defaults. Native authored agent model/variant pins take precedence over defaults and group/preset layers;
-explicit per-agent overrides can change pins. Session selections remain native authority. Parameters apply
-only to their bound dispatched model. Within one ordered replay, changing the resolved model or authored model reference clears inherited
-Composer parameters and variant, even when different references resolve to the same model. Unchanged bindings
-and parameter-only layers retain earlier contributions; omitted values fall back to native settings or remain unset. Switching profiles starts a fresh replay and removes previous-profile-only settings even when the
-model is unchanged. Model/reference edits clear stale authored variants and parameters in the edited definition and affected dependents,
-including inactive profiles. Explicit new values and destination/base defaults remain authoritative. A read-only
-affected source blocks the whole save; unrelated settings and reusable definitions are preserved.
+The active profiles run next, from left to right. For each profile, its full parent chain runs first, followed by
+its own layers in order and then its per-agent overrides. A shared parent runs each time: if A and B both extend
+Base, selecting A then B runs Base → A → Base → B. Shared, project and local document overrides apply last.
+Use `overrides.agents` to address individual selected agents; an override does not select its target.
 
-Prompt assembly is default prepend, ordered group prepend, agent prepend, authored body, default append,
-ordered group append, agent append. `inheritDefaults: false` and `inheritGroups: false` suppress inherited
-prompt layers. Built-ins without an authored prompt retain native prompts. `{{include:@shared/path.md}}`
-expands a file under a declared `sourceDirectories.shared` alias in agent prompts, fragments, commands or
-native skill bodies. A preceding backslash escapes the directive. Includes may nest; unsafe paths, escaping
-symlinks, cycles, invalid UTF-8 and oversized content are rejected. Native skill wrappers and resources are retained.
+Later contributions replace earlier values for the same field. Objects merge by field, while arrays replace
+inside merged values. Profile layers are separate ordered contributions, so a child's layers run after its
+parent's rather than replacing the parent's list. Permissions follow the ordering described below.
 
-Permission arrays contain ordered rules with `tool`, optional `pattern`, and `action` (`allow`, `ask` or `deny`).
-Omitted patterns mean `*`. **Later matching Composer contributions win, even when looser.** A later nonmatch
-leaves an earlier match intact. Partial object merges preserve earlier rules for keys the later object does
-not replace. Deny Git, then allow every tool/target, then ask for npm: Git is allowed and npm asks. Removing
-that broad allow restores Git's denial. There is no implicit deny-wins or specificity priority.
+An explicit model or variant in an agent's OpenCode definition takes precedence over Composer defaults and
+group/preset settings. A per-agent override can replace that pin. Within a composition, changing a model or its
+authored model reference clears inherited Composer variant and parameter settings; parameter-only layers retain
+other settings for the same binding. Omitted values then fall back to OpenCode settings or remain unset.
 
-When no Composer rule matches, evaluation uses native globals and defaults; an explicit `ask` is a match.
-If a scope's policy cannot be represented faithfully in OpenCode, Composer warns clearly and skips that
-scope's Composer permission contributions. An affected agent retains native agent permissions plus the applied
-global policy; an affected global scope retains native globals while independent agent scopes may still compile.
-**The fallback can be more permissive.** Other configuration continues. Warnings appear in stderr and the native
-TUI, identify affected sources, and recur on affected session use. Composer adds no blocking policy or session
-permission overlays. See the [configuration reference](docs/composition-schema.md) for exact ordering.
+Switching profiles rebuilds the result from the original base configuration. It removes settings supplied only
+by the previous selection, even when the destination resolves to the same model. Clearing profiles does the same
+rebuild without profile contributions; it does not clear document defaults or overrides. Conversation model
+selections are separate from this configuration, as described below. See
+[profiles and model settings](docs/composition-schema.md#profiles-and-model-settings) for model references and
+parameter behavior in detail.
 
-## Save, switch and apply
+### Permissions
 
-`/compose` shows the saved composition preview, sources, profiles, memberships, settings, permissions,
-prompts and availability. Saved values can differ from running configuration. `/agent-models` and
-`/agent-groups` open focused editors; `/reload-configs` opens the same current-instance apply flow.
+Permission rules name a `tool`, an optional `pattern` and an `action` of `allow`, `ask` or `deny`. Put global
+rules in `defaults.permissions` or `overrides.permissions`, and agent rules in the corresponding agent settings,
+groups or presets. Agent contributions follow global contributions.
 
-Choose **Compose → Running configuration inspector** to read current server `model`, `small_model` and
-`default_agent` defaults, running agent settings, and separately labeled applied Composer model parameters.
-**Refresh** rereads the server. Saved edits awaiting apply remain in **Saved composition preview**;
-the running inspector is available even when saved composition is invalid. Missing or stale applied metadata
-is labeled unavailable rather than replaced with saved values.
+The last matching Composer permission rule wins, even if it is less restrictive; a more specific pattern or a
+`deny` does not automatically take priority. A later rule that does not match leaves the earlier match intact.
+Unmatched requests fall back to OpenCode's permissions. If OpenCode cannot represent a scope's policy, Composer warns and skips that scope's
+permission contributions; the fallback can be more permissive. See [permission ordering and fallback](docs/composition-schema.md#permission-ordering-and-fallback).
 
-**Recorded conversation** separates stored session fallback, the latest recorded request and response, and an
-earlier completed response when applicable. These records do not predict the next request. OpenCode's public APIs
-do not expose the current unsent TUI model/variant selection or complete final provider request parameters;
-configured parameters are settings, not verified request values. Values under credential-like option keys are redacted.
-Inspection sends no model request and does not save, apply, select models or modify conversation history.
+## Edit, apply and inspect
 
-Review the scope and proposed diff before saving. The editor preserves comments and unrelated fields, verifies
-shared filesystem access, and rejects stale snapshots and symlinked write targets. Imported definitions are
-edited in their declaring file only when writable within the configuration directory; outside sources and
-aliases are read-only. Remote filesystem editing is unsupported.
+Open `/compose` to inspect sources, edit settings or select profiles. `/agent-models` and `/agent-groups` open
+focused editors. Save changes, then apply when the current instance is idle, or restart. Applying affects only
+that instance; changes to OpenCode configuration or agent files require a restart. Editing requires shared
+filesystem access, and some sources are read-only.
 
-Saving and applying are separate. Apply when the current instance is idle, or restart. Apply rechecks reviewed
-inputs after checking activity, reboots the current instance and verifies the requested revision before reporting
-success. It does not apply to every workspace on the server. Other instances may retain older settings.
-Native JSON or native-agent edits require restart; instance apply uses the running native baseline and does not
-prove the host loaded edited native files.
-If apply fails, saved changes remain available for retry or restart.
+Profile switches preserve conversation history. OpenCode 1.18.34 can retain a conversation's previous model
+and variant, including after clearing profiles. Use `/models`, then `/variants`, to select the destination or
+inherited base settings.
 
-Profile switching applies project-wide and rebuilds effective settings from the original native/base configuration
-plus the newly selected profiles in their declared order. Contributions from deselected profiles are removed,
-restoring base values when present. Reusable definitions, base files and conversation history are preserved.
+**Compose → Running configuration inspector** shows running settings separately from the saved preview.
+Recorded conversation values do not reveal the next request or the current unsent TUI model selection.
+The [configuration reference](docs/composition-schema.md#files-imports-and-activation) covers editing, applying
+and inspection in detail.
 
-**Native selection limitation (OpenCode 1.18.34):** Existing conversations can retain the previous TUI model/variant;
-clearing profiles can also retain a recorded session model. In the existing TUI conversation, use `/models` to select
-the destination model, then `/variants` to select its destination/base variant, or **Default** when none is configured.
-These native selections preserve conversation history. Select the inherited base model when clearing profiles.
+Prompt composition is maintained separately. Existing users should read the [migration notes](docs/prompt-migration.md) before updating.
 
-Automatic selection requires compatible host behavior. A new selection/reset API alone would require Composer
-integration and native verification.
+## Reference and development
 
-`agentAvailability` decisions replay with profiles: later explicit true/false decisions win and absence inherits.
-Activation must retain a visible enabled primary agent and a valid default. If a session's old agent is unavailable
-after apply, continue with an enabled agent; explicit headless requests naming a disabled agent fail before dispatch.
+See the [configuration reference](docs/composition-schema.md) and [schema.json](schema.json) for field constraints
+and migration. Composer includes `config-composer-create`, `config-composer-explain` and `config-composer-migrate`
+guidance skills.
 
-`profileShortcuts` names saved profile selections. Each declared name becomes a palette action and slash
-command with that name. These actions use the same preview/save/apply path; they do not execute prompt commands
-or make model requests. Collisions are reported; refresh shortcuts in `/compose` after editing definitions.
-An empty shortcut selection returns to no active profiles.
+Development requires Node 22.18 or newer and npm. Run `npm ci` and `npm run check` for typechecking, lint,
+formatting, unit tests and the installed-package test. `npm run test:native` uses `OPENCODE_BIN`, Python 3 and
+a Unix pseudo-terminal to test against OpenCode 1.18.34. See the [integration guide](docs/integration-tests.md)
+for the Linux/Windows integration suite and coverage.
 
-## Skills and supported surface
-
-The package includes native `config-composer-create`, `config-composer-explain` and `config-composer-migrate`
-guidance skills. Composer registers installed paths and respects colliding native skill names.
-Native skills load on demand through OpenCode. A custom lazy prompt loader remains feasibility research;
-Composer's declared component files are read during resolution. Loaded text is not guaranteed to remain in
-context after compaction.
-
-Public exports are the root/server plugin, the TUI plugin and `schema.json`. Internal modules are not supported
-imports. The package provides no executable CLI. Runtime installation does not require TypeScript or OpenTUI
-packages. Development requires Node 22.18 or newer, npm, and the pinned host types.
-
-For local checks, use `npm ci` and `npm run check`. `npm run test:native` uses the binary selected by
-`OPENCODE_BIN` and requires Python 3 and a Unix pseudo-terminal. Scripts verify the exact host baseline.
-
-See the [configuration reference](docs/composition-schema.md) for field constraints and migration.
 This project is licensed under MIT. See [LICENSE](LICENSE).
-
-## Integration tests
-
-Run `npm run test:integration` for the installed-package native suite on Linux or Windows x64.
-It uses OpenCode 1.18.34 and a deterministic local provider. See the
-[integration guide and coverage matrix](docs/integration-tests.md) for setup, assertions,
-diagnostics, and remaining feature coverage.

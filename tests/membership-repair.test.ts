@@ -195,15 +195,14 @@ test('membership failure on a reused config preserves last applied fields and th
   });
 });
 
-test('repair observes newly reachable prompt inputs and native agents across asynchronous validation', async (t) => {
+test('repair observes component inputs and native agents across asynchronous validation', async (t) => {
   const f = await fixture(t);
   const value = parseCompositionDocument(await readFile(f.file, 'utf8'), f.file);
-  value.sourceDirectories = { snippets: '.' };
-  value.components = { agents: { helper: { prompt: 'Authored base' } } };
-  value.defaults = { agents: { prompt: { append: ['{{include:@snippets/guide.md}}'] } } };
+  value.components = { agents: { helper: { file: './guide.md' } } };
+  value.defaults = { agents: {} };
   await writeFile(f.file, JSON.stringify(value));
   const snippet = join(f.root, 'guide.md');
-  await writeFile(snippet, 'Original guidance');
+  await writeFile(snippet, '---\ndescription: Helper\n---\nOriginal guidance');
   const createPlan = async () =>
     planMembershipRepair(await loadEditorSnapshot(f.root), {
       members: [{ group: 'work', kind: 'agents', members: ['helper'] }],
@@ -211,7 +210,7 @@ test('repair observes newly reachable prompt inputs and native agents across asy
   const before = await readFile(f.file, 'utf8');
   await assert.rejects(
     saveFilePlan(await createPlan(), async () => {
-      await writeFile(snippet, 'Concurrent guidance');
+      await writeFile(snippet, '---\ndescription: Helper\n---\nConcurrent guidance');
     }),
     /changed/,
   );

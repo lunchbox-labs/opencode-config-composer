@@ -7,7 +7,6 @@ import { test } from 'node:test';
 import { loadConfiguration } from '../src/config-composer/configuration.ts';
 import { resolveLegacy } from '../src/config-composer/composition/legacy.ts';
 import type { NativeInput, SourceDocument } from '../src/config-composer/composition/types.ts';
-import { composePrompts } from '../src/config-composer/prompts.ts';
 import { SettingsError, applyDefaults, readSettings, resolveChoice } from '../src/config-composer/settings.ts';
 
 function source(value: Record<string, unknown> = {}): SourceDocument {
@@ -25,12 +24,11 @@ function source(value: Record<string, unknown> = {}): SourceDocument {
 const document = source({
   agent: {
     groups: {
-      base: { modelRef: 'preset:balanced', prompt: { prepend: ['Base'] } },
-      developers: { model: 'fixture/next', prompt: { append: ['Developer'] } },
+      base: { modelRef: 'preset:balanced' },
+      developers: { model: 'fixture/next' },
       reviewers: { modelRef: 'opencode:small_model', variant: 'low' },
     },
     modelPresets: { balanced: { model: 'fixture/fast', variant: 'high' } },
-    prompts: { defaults: { prepend: ['Default'] }, overrides: { 'team/lead': { append: ['Lead'] } } },
   },
 });
 
@@ -98,24 +96,6 @@ test('legacy settings retain group order and explicit pins with overwritten refe
   assert.equal(result.provenance['/agent/pinned/model'].sourceId, undefined);
 });
 
-test('repeated prompt composition retains baseline text, inheritance and escaped origin paths', async () => {
-  const before = structuredClone(native);
-  const first = resolveLegacy(document, native);
-  const second = resolveLegacy(document, native);
-  const expected = {
-    worker: 'Default\n\nBase\n\nWorker\n\nDeveloper',
-    'team/lead': 'Default\n\nBase\n\nLeader\n\nLead',
-  };
-  assert.deepEqual(await composePrompts(native.agent ?? {}, first.settings), expected);
-  assert.deepEqual(await composePrompts(native.agent ?? {}, second.settings), expected);
-  assert.deepEqual(native, before);
-  const origin = first.provenance['/agent/team~1lead/prompt'];
-  assert.equal(origin.operation, 'merge');
-  assert.ok(origin.references.includes('/agent/prompts/overrides/team~1lead/append/0'));
-  assert.ok(origin.references.includes('/agent/groups/base/prompt/prepend/0'));
-  assert.equal(origin.overwritten[0].operation, 'native');
-});
-
 test('disabled agents and pinned agents preserve legacy validation boundaries', () => {
   assert.doesNotThrow(() => resolveLegacy(source(), { agent: { off: { disable: true, groups: ['missing'] } } }));
   assert.throws(() => resolveLegacy(source(), { agent: { on: { groups: ['missing'] } } }), SettingsError);
@@ -123,11 +103,11 @@ test('disabled agents and pinned agents preserve legacy validation boundaries', 
   assert.doesNotThrow(() => resolveLegacy(missing, { agent: { pinned: { groups: ['base'], model: 'fixture/pin' } } }));
 });
 
-test('validated loader exposes source identity without changing files or relative prompt behavior', async (t) => {
+test('validated loader exposes source identity without changing files', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'composition-contracts-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, 'config-composer.jsonc');
-  const text = '// preserved\n{"sourceDirectories":{"shared":"./references"},"agent":{}}\n';
+  const text = '// preserved\n{"agent":{}}\n';
   await writeFile(path, text);
   const loaded = await loadConfiguration({}, root);
   assert.notEqual(loaded.source, undefined);
@@ -137,7 +117,6 @@ test('validated loader exposes source identity without changing files or relativ
   assert.equal(loaded.source.fingerprint, createHash('sha256').update(text).digest('hex'));
   assert.equal(loaded.source.writable, true);
   assert.deepEqual(resolveLegacy(loaded.source, {}).settings, loaded.settings);
-  assert.equal(loaded.settings.promptSources.shared, join(root, 'references'));
   assert.equal(await readFile(path, 'utf8'), text);
 });
 
@@ -159,25 +138,6 @@ test('native variant without a group has no fabricated overwrite', () => {
 test('implicit empty settings do not claim an authored source location', () => {
   const result = resolveLegacy(source(), {});
   assert.deepEqual(result.provenance, {});
-});
-
-test('prompt inheritance exclusions retain only the contributing reference paths', async () => {
-  const custom = source({
-    agent: {
-      groups: { base: { prompt: { prepend: ['Group'] } } },
-      prompts: {
-        defaults: { prepend: ['Default'] },
-        overrides: { worker: { inheritDefaults: false, inheritGroups: false, append: ['Own'] } },
-      },
-    },
-  });
-  const agents = { worker: { groups: ['base'], prompt: 'Body' } };
-  const result = resolveLegacy(custom, { agent: agents });
-  assert.deepEqual(await composePrompts(agents, result.settings), { worker: 'Body\n\nOwn' });
-  assert.deepEqual(result.provenance['/agent/worker/prompt'].references, [
-    '/agent/worker/prompt',
-    '/agent/prompts/overrides/worker/append/0',
-  ]);
 });
 
 test('unresolved native agent defaults do not invent an effective agent model', () => {

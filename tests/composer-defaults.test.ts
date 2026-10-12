@@ -90,7 +90,7 @@ test('hooks stage overlays, restore removed defaults, and retain external change
     defaults: {
       model: 'composer/main',
       small_model: 'composer/small',
-      agents: { prompt: { append: ['After'] } },
+      agents: {},
     },
     componentGroups: {
       main: { configuration: { modelRef: 'opencode:model' } },
@@ -108,7 +108,7 @@ test('hooks stage overlays, restore removed defaults, and retain external change
   assert.equal(config.small_model, 'composer/small');
   assert.equal(config.agent!.main!.model, 'composer/main');
   assert.equal(config.agent!.small!.model, 'composer/small');
-  assert.equal(config.agent!.main!.prompt, 'Authored\n\nAfter');
+  assert.equal(config.agent!.main!.prompt, 'Authored');
   assert.equal(config.agent!.pinned!.model, 'pin/model');
   assert.equal(config.agent!.pinned!.variant, 'high');
   // Removing only one default restores its underlying value independently.
@@ -158,7 +158,7 @@ test('hooks stage overlays, restore removed defaults, and retain external change
       ...composition,
       defaults: {
         ...composition.defaults,
-        agents: { prompt: { append: ['{{include:@missing/file.md}}'] } },
+        agents: { modelRef: 'preset:missing' },
       },
     }),
   );

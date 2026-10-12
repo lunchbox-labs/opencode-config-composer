@@ -19,8 +19,6 @@ export type {
   PresetTarget,
   ProfileLayer,
   ProfileShortcut,
-  PromptComponent,
-  PromptConfiguration,
   SkillComponent,
 } from './document-types.ts';
 

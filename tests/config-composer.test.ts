@@ -125,17 +125,16 @@ async function dedicatedFixture(t: TestContext): Promise<string> {
     '// Preserve dedicated comments.\n' +
       JSON.stringify(
         {
-          sourceDirectories: { shared: './references' },
           configurationPresets: { shared: { model: 'example/fast', variant: 'medium' } },
           componentGroups: {
-            developers: { configuration: { modelRef: 'preset:shared', prompt: { append: ['DEVELOPMENT_GUIDANCE'] } } },
+            developers: { configuration: { modelRef: 'preset:shared' } },
             reviewers: { configuration: { model: 'example/deep', variant: 'high' } },
             'custom-team': {},
-            'instructions-only': { configuration: { prompt: { prepend: ['COMMON_GUIDANCE'] } } },
+            'instructions-only': { configuration: {} },
           },
-          defaults: { agents: { prompt: { append: ['GLOBAL_GUIDANCE'] } } },
+          defaults: { agents: {} },
           overrides: {
-            agents: { 'nested/pinned': { prompt: { inheritDefaults: false, append: ['PINNED_GUIDANCE'] } } },
+            agents: { 'nested/pinned': {} },
           },
           components: { skills: {}, commands: {} },
           profiles: {
@@ -149,7 +148,7 @@ async function dedicatedFixture(t: TestContext): Promise<string> {
         2,
       ).replace(
         '"prompt": {',
-        '// Keep prompt boundary.\n        "prompt": {\n          // Keep fragment operations.',
+        '// Preserve dedicated comments.\n        "prompt": {\n          // Preserve dedicated comments.',
       ) +
       '\n',
   );
@@ -180,7 +179,7 @@ test('bare and empty-options registrations edit the default file and reload with
   }
 });
 
-test('dedicated model edits preserve prompt composition, typed namespaces, comments, and native settings', async (t) => {
+test('dedicated model edits preserve typed namespaces, comments, and native settings', async (t) => {
   const root = await dedicatedFixture(t);
   const originalNative = await readFile(join(root, 'opencode.jsonc'), 'utf8');
   const originalAgent = await readFile(join(root, 'agents/nested/pinned.md'), 'utf8');
@@ -190,18 +189,16 @@ test('dedicated model edits preserve prompt composition, typed namespaces, comme
   await savePlan(planChange(snapshot, { kind: 'group', name: 'developers', choice: { model: 'other/new' } }));
   const after = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
   assert.deepEqual(after.components, before.components);
-  assert.deepEqual(after.sourceDirectories, before.sourceDirectories);
   assert.deepEqual(after.defaults, before.defaults);
   assert.deepEqual(after.overrides, before.overrides);
   assert.equal(after.groups, undefined, 'editor must not create a flat group section');
   assert.equal(after.modelPresets, undefined, 'editor must not create a flat preset section');
   assert.deepEqual((await loadSnapshot(root)).groups.developers, {
     model: 'other/new',
-    prompt: { append: ['DEVELOPMENT_GUIDANCE'] },
   });
   assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Preserve dedicated comments/);
-  assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Keep fragment operations/);
-  assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Keep prompt boundary/);
+  assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Preserve dedicated comments/);
+  assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Preserve dedicated comments/);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), originalNative);
   assert.equal(await readFile(join(root, 'agents/nested/pinned.md'), 'utf8'), originalAgent);
 });
@@ -1213,7 +1210,7 @@ test('TUI adds, reorders, and removes memberships with a resolved preview and pr
   assert.ok((await readFile(join(root, 'agents/new.md'), 'utf8')).endsWith(prompt));
 });
 
-test('TUI model edits save to the dedicated file while retaining shared prompt operations', async (t) => {
+test('TUI model edits save to the dedicated file while retaining source comments', async (t) => {
   const root = await dedicatedFixture(t);
   const originalNative = await readFile(join(root, 'opencode.jsonc'), 'utf8');
   const original = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
@@ -1228,13 +1225,11 @@ test('TUI model edits save to the dedicated file while retaining shared prompt o
   assert.deepEqual(snapshot.groups.developers, {
     model: 'example/next',
     variant: 'low',
-    prompt: { append: ['DEVELOPMENT_GUIDANCE'] },
   });
   const saved = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
   assert.deepEqual(saved.defaults, original.defaults);
   assert.deepEqual(saved.overrides, original.overrides);
-  assert.deepEqual(saved.sourceDirectories, original.sourceDirectories);
-  assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Keep fragment operations/);
+  assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Preserve dedicated comments/);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), originalNative);
 });
 
@@ -2112,143 +2107,6 @@ test('permission agent previews cannot collide with local-definition navigation 
   await ui.enter('git status');
   assert.match(ui.message(), /allow: bash/);
   assert.match(ui.message(), /componentGroups\/reviewers/);
-});
-
-test('prompt UI preserves multiline fragment order and cancellation before saving', async (t) => {
-  const root = await fixture(t);
-  const path = join(root, 'config-composer.jsonc');
-  const original = await readFile(path, 'utf8');
-  const ui = uiHarness(root);
-  await ui.command('config-composer.compose');
-  await ui.select('prompts');
-  await ui.select(path);
-  await ui.select(JSON.stringify(['componentGroups', 'developers', 'configuration']));
-  await ui.select('append');
-  await ui.select('+add');
-  await ui.enter('First\nSecond');
-  await ui.select('+add');
-  await ui.enter('Last');
-  await ui.select('1');
-  await ui.select('earlier');
-  await ui.select('1');
-  await ui.select('edit');
-  await ui.enter('First\nRevised second');
-  await ui.select('+save');
-  assert.match(ui.message(), /Last.*First\\nRevised second/s);
-  await ui.cancel();
-  assert.equal(await readFile(path, 'utf8'), original);
-  await ui.select('+save');
-  await ui.confirm();
-  assert.deepEqual(
-    (await loadSnapshot(root)).sources.registry.componentGroups?.developers.configuration?.prompt?.append,
-    ['Last', 'First\nRevised second'],
-  );
-  assert.equal(ui.updates, 0);
-});
-
-test('prompt UI validates includes before writing and resets local inheritance controls', async (t) => {
-  const root = await fixture(t);
-  const path = join(root, 'config-composer.jsonc');
-  const original = await readFile(path, 'utf8');
-  const ui = uiHarness(root);
-  const target = JSON.stringify(['overrides', 'agents', 'nested/pinned']);
-  const open = async () => {
-    await ui.command('config-composer.compose');
-    await ui.select('prompts');
-    await ui.select(path);
-    await ui.select(target);
-  };
-  await open();
-  await ui.select('append');
-  await ui.select('+add');
-  await ui.enter('{{include:@missing/file.md}}');
-  await ui.select('+save');
-  assert.match(ui.toasts.at(-1)!.message, /source.*does not exist/);
-  assert.equal(await readFile(path, 'utf8'), original);
-  await open();
-  await ui.select('inheritGroups');
-  await ui.select('false');
-  await ui.confirm();
-  assert.equal(
-    (await loadSnapshot(root)).sources.scopes[0].value.overrides?.agents?.['nested/pinned'].prompt?.inheritGroups,
-    false,
-  );
-  await open();
-  await ui.select('reset');
-  await ui.confirm();
-  assert.equal(
-    (await loadSnapshot(root)).sources.scopes[0].value.overrides?.agents?.['nested/pinned']?.prompt,
-    undefined,
-  );
-});
-
-test('prompt source UI creates aliases and reusable multiline bodies with cancellation and ordered references', async (t) => {
-  const root = await fixture(t);
-  const path = join(root, 'config-composer.jsonc');
-  await mkdir(join(root, 'snippets'));
-  const document = parseConfig(await readFile(path, 'utf8'));
-  document.components = { agents: { authored: { prompt: 'Authored base' } } };
-  const groups = document.componentGroups as Record<string, { agents?: string[] }>;
-  groups.developers.agents = ['authored'];
-  await writeFile(path, JSON.stringify(document));
-  const ui = uiHarness(root);
-  const open = async (registry: string) => {
-    await ui.command('config-composer.compose');
-    await ui.select('prompt-sources');
-    await ui.select(registry);
-  };
-  await open('sourceDirectories');
-  await ui.select('+create');
-  await ui.enter('snippets');
-  await ui.select(path);
-  await ui.enter('./snippets');
-  await ui.confirm();
-  assert.equal((await loadSnapshot(root)).sources.registry.sourceDirectories?.snippets, join(root, 'snippets'));
-  await open('prompts');
-  await ui.select('+create');
-  await ui.enter('notes');
-  await ui.select(path);
-  await ui.select('text');
-  await ui.enter('First\nSecond');
-  await ui.cancel();
-  assert.equal((await loadSnapshot(root)).sources.registry.components?.prompts?.notes, undefined);
-  await ui.enter('First\nSecond');
-  await ui.confirm();
-  await open('references');
-  await ui.select('agent:authored');
-  await ui.select('+add');
-  await ui.select('prompt:notes');
-  await ui.select('+add');
-  await ui.select('prompt:notes');
-  await ui.select('1');
-  await ui.select('earlier');
-  await ui.select('+save');
-  assert.match(ui.message(), /Authored base/);
-  await ui.confirm();
-  assert.equal(
-    (await loadSnapshot(root)).resolved.agent.authored.prompt,
-    'Authored base\n\nFirst\nSecond\n\nFirst\nSecond',
-  );
-  await open('prompts');
-  await ui.select('asset:notes');
-  await ui.select('rename');
-  await ui.enter('review/notes');
-  assert.match(ui.message(), /authored\/promptRefs/);
-  await ui.confirm();
-  assert.deepEqual((await loadSnapshot(root)).sources.registry.components?.agents?.authored.promptRefs, [
-    'review/notes',
-    'review/notes',
-  ]);
-  await open('references');
-  await ui.select('agent:authored');
-  await ui.select('+reset');
-  await ui.confirm();
-  await open('prompts');
-  await ui.select('asset:review/notes');
-  await ui.select('delete');
-  await ui.confirm();
-  assert.equal((await loadSnapshot(root)).sources.registry.components?.prompts?.['review/notes'], undefined);
-  assert.equal(ui.updates, 0);
 });
 
 async function shortcutFixture(t: TestContext) {

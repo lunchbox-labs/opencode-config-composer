@@ -4,7 +4,7 @@ import { planDefinition } from './authoring.ts';
 import { type CompositionScope, type ScopeChange, planScope } from './activation.ts';
 import { parseCompositionDocument } from './document.ts';
 
-export type MemberKind = 'agents' | 'skills' | 'commands' | 'prompts';
+export type MemberKind = 'agents' | 'skills' | 'commands';
 export interface MembershipRepairDraft {
   members?: { group: string; kind: MemberKind; members: string[] }[];
   groups?: { name: string; sourceId: string }[];

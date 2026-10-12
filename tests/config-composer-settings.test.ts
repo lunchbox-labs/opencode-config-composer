@@ -18,32 +18,18 @@ async function directory(t: TestContext): Promise<string> {
   return root;
 }
 
-test('dedicated settings normalize typed groups and reject unsupported namespaces and malformed prompt settings', () => {
+test('dedicated settings normalize typed groups and reject unsupported namespaces', () => {
   const settings = readSettings({
     agent: {
-      groups: { developers: { modelRef: 'preset:balanced', prompt: { append: ['Guidance'] } } },
+      groups: { developers: { modelRef: 'preset:balanced' } },
       modelPresets: { balanced: { model: 'fixture/fast', variant: 'high' } },
-      prompts: { overrides: { 'team/lead': { inheritDefaults: false, append: ['Lead'] } } },
     },
     command: {},
     skill: {},
-    sourceDirectories: { shared: './references' },
   });
   assert.equal(settings.groups.developers.modelRef, 'preset:balanced');
-  assert.deepEqual(settings.groups.developers.prompt, { append: ['Guidance'] });
-  assert.deepEqual(settings.promptDefaults, {});
-  assert.deepEqual(settings.agentPrompts['team/lead'], { inheritDefaults: false, append: ['Lead'] });
   assert.throws(() => readSettings({ command: { groups: { build: {} } } }), /reserved/);
   assert.throws(() => readSettings({ skill: { groups: { reviewer: {} } } }), /reserved/);
-  assert.throws(() => readSettings({ agent: { prompts: { defaults: { append: 'wrong' } } } }), /arrays/);
-  assert.throws(
-    () => readSettings({ agent: { prompts: { defaults: { inheritDefaults: false } } } }),
-    /Prompt settings/,
-  );
-  assert.throws(
-    () => readSettings({ agent: { prompts: { overrides: { lead: { inheritGroups: 'wrong' } } } } }),
-    /boolean/,
-  );
   assert.throws(
     () => readSettings({ agent: { groups: { reviewer: { modelRef: 'preset:absent' } } } }),
     /does not exist/,
@@ -54,36 +40,19 @@ test('dedicated settings reject misplaced flat fields and malformed entity secti
   for (const invalid of [
     { groups: { agents: {} } },
     { modelPresets: {} },
-    { promptSources: {} },
-    { promptDefaults: {} },
-    { agentPrompts: {} },
     { agent: null },
     { agent: [] },
     { agent: { groups: null } },
     { agent: { modelPresets: [] } },
-    { agent: { promptDefaults: {} } },
-    { agent: { prompts: null } },
-    { agent: { prompts: [] } },
-    { agent: { prompts: { agentPrompts: {} } } },
-    { agent: { prompts: { defaults: null } } },
-    { agent: { prompts: { overrides: [] } } },
-    { sourceDirectories: null },
-    { sourceDirectories: [] },
-    { sourceDirectories: { shared: null } },
-    { sourceDirectories: { shared: ' ' } },
-    { sourceDirectories: { shared: '\0' } },
     { command: null },
     { skill: [] },
   ]) {
     assert.throws(() => readSettings(invalid));
   }
-  const defaults = readSettings({ sourceDirectories: {}, agent: { prompts: {} }, command: {}, skill: {} });
+  const defaults = readSettings({ agent: {}, command: {}, skill: {} });
   assert.deepEqual(defaults, {
     groups: {},
     modelPresets: {},
-    promptSources: {},
-    promptDefaults: {},
-    agentPrompts: {},
   });
 });
 
@@ -130,18 +99,12 @@ test('ordered memberships merge fields and explicit agent models keep their prec
 test('loader resolves paths from the dedicated file and rereads external edits without a cache', async (t) => {
   const root = await directory(t);
   const path = join(root, 'config-composer.jsonc');
-  await writeFile(
-    path,
-    '// Keep comments.\n{"agent":{"groups":{}},"command":{},"skill":{},"sourceDirectories":{"shared":"./references"},}\n',
-  );
+  await writeFile(path, '// Keep comments.\n{"agent":{"groups":{}},"command":{},"skill":{},}\n');
   const initial = await loadConfiguration({ configFile: 'config-composer.jsonc', reloadToken: 'token' }, root);
   assert.equal(initial.file.path, path);
   assert.match(initial.file.text, /Keep comments/);
-  assert.equal(initial.settings.promptSources.shared, join(root, 'references'));
-  await writeFile(path, '{"agent":{"prompts":{"defaults":{"append":["Updated"]}}}}');
-  assert.deepEqual((await loadConfiguration({ configFile: path }, '/unused')).settings.promptDefaults, {
-    append: ['Updated'],
-  });
+  await writeFile(path, '{"model":"fixture/updated"}');
+  assert.equal((await loadConfiguration({ configFile: path }, '/unused')).settings.model, 'fixture/updated');
   assert.deepEqual(configurationDirectory({ OPENCODE_CONFIG_DIR: root, XDG_CONFIG_HOME: '/unused' }), root);
   assert.equal(configurationDirectory({ XDG_CONFIG_HOME: root }), join(root, 'opencode'));
   assert.equal(configurationDirectory({ XDG_CONFIG_HOME: 'relative' }), configurationDirectory({}));
@@ -154,10 +117,7 @@ test('loader resolves paths from the dedicated file and rereads external edits w
 test('JSONC parser rejects duplicate keys at any depth and invalid root objects', () => {
   assert.deepEqual(parseConfiguration('{"agent":{"groups":{},},}'), { agent: { groups: {} } });
   assert.throws(() => parseConfiguration('{"agent":{},"agent":{}}'), /duplicate/);
-  assert.throws(
-    () => parseConfiguration('{"agent":{"prompts":{"overrides":{"lead":{"append":[],"append":[]}}}}}'),
-    /duplicate/,
-  );
+  assert.throws(() => parseConfiguration('{"agent":{"groups":{"lead":{"model":"a/b","model":"a/c"}}}}'), /duplicate/);
   assert.throws(() => parseConfiguration('[]'), /invalid/);
   assert.throws(() => parseConfiguration('{'), /invalid/);
 });
@@ -168,7 +128,6 @@ test('omitted configFile loads the default file and rejects obsolete inline sett
   await writeFile(
     path,
     JSON.stringify({
-      sourceDirectories: { shared: './references' },
       agent: { groups: { workers: { model: 'fixture/default' } } },
     }),
   );
@@ -176,7 +135,6 @@ test('omitted configFile loads the default file and rejects obsolete inline sett
     const loaded = await loadConfiguration(options, root);
     assert.equal(loaded.file.path, path);
     assert.equal(loaded.settings.groups.workers.model, 'fixture/default');
-    assert.equal(loaded.settings.promptSources.shared, join(root, 'references'));
   }
   for (const obsolete of [{ groups: {} }, { modelPresets: {} }, { configFile: 'custom.jsonc', groups: {} }]) {
     await assert.rejects(loadConfiguration(obsolete, root), /only configFile/);

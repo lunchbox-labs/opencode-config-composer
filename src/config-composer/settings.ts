@@ -2,15 +2,7 @@ export interface ModelChoice {
   model?: string;
   variant?: string;
 }
-export interface PromptOperations {
-  prepend?: string[];
-  append?: string[];
-}
-export interface AgentPrompt extends PromptOperations {
-  inheritDefaults?: boolean;
-  inheritGroups?: boolean;
-}
-export type GroupChoice = ModelChoice & { modelRef?: string; prompt?: PromptOperations };
+export type GroupChoice = ModelChoice & { modelRef?: string };
 export type Groups = Record<string, GroupChoice>;
 export type ModelPresets = Record<string, ModelChoice>;
 export interface NativeModels {
@@ -26,9 +18,6 @@ export interface ResolutionContext {
 export interface GroupOptions extends NativeModels {
   groups: Groups;
   modelPresets: ModelPresets;
-  promptSources: Record<string, string>;
-  promptDefaults: PromptOperations;
-  agentPrompts: Record<string, AgentPrompt>;
 }
 export type AgentSettings = ModelChoice & {
   groups?: string[];
@@ -105,69 +94,32 @@ export function modelReference(value: unknown): string {
   throw new SettingsError('Select opencode:model, opencode:small_model, or preset:<name> as the model reference.');
 }
 
-export function promptOperations(value: unknown, perAgent = false): AgentPrompt {
-  const keys = perAgent ? ['prepend', 'append', 'inheritDefaults', 'inheritGroups'] : ['prepend', 'append'];
-  if (!record(value) || Object.keys(value).some((key) => !keys.includes(key))) {
-    throw new SettingsError('Prompt settings support prepend and append arrays and per-agent inheritance options.');
-  }
-  const result: AgentPrompt = {};
-  for (const key of ['prepend', 'append'] as const) {
-    const items: unknown = value[key];
-    if (items === undefined) {
-      continue;
-    }
-    if (!Array.isArray(items) || items.length > 256 || !items.every((item) => typeof item === 'string')) {
-      throw new SettingsError('Prompt prepend and append values must be arrays of up to 256 strings.');
-    }
-    result[key] = items.map((item: string) => item);
-  }
-  for (const key of ['inheritDefaults', 'inheritGroups'] as const) {
-    if (value[key] !== undefined) {
-      if (typeof value[key] !== 'boolean') {
-        throw new SettingsError('Prompt inheritance options must be boolean values.');
-      }
-      result[key] = value[key];
-    }
-  }
-  return result;
-}
-
 export function groupChoice(value: unknown): GroupChoice {
-  if (!record(value) || Object.keys(value).some((key) => !['model', 'modelRef', 'variant', 'prompt'].includes(key))) {
-    throw new SettingsError('Group defaults support only model, modelRef, variant, and prompt.');
+  if (record(value) && Object.hasOwn(value, 'prompt')) {
+    throw new SettingsError(
+      'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Remove these settings from Config Composer; see docs/prompt-migration.md.',
+    );
   }
-  const prompt = value.prompt === undefined ? {} : { prompt: promptOperations(value.prompt) };
+  if (!record(value) || Object.keys(value).some((key) => !['model', 'modelRef', 'variant'].includes(key))) {
+    throw new SettingsError('Group defaults support only model, modelRef, and variant.');
+  }
   if (value.modelRef === undefined) {
-    return { ...modelChoice({ model: value.model, variant: value.variant }), ...prompt };
+    return { ...modelChoice({ model: value.model, variant: value.variant }) };
   }
   if (value.model !== undefined) {
     throw new SettingsError('Choose either a model or a model reference, not both.');
   }
   const modelRef = modelReference(value.modelRef);
   const variant = variantName(value.variant);
-  return { modelRef, ...(variant !== undefined ? { variant } : {}), ...prompt };
-}
-
-function configuredName(value: string): string {
-  if (
-    value.length === 0 ||
-    value.length > 256 ||
-    /[\s\\]/.test(value) ||
-    value.split('/').some((part) => ['.', '..', '__proto__', 'constructor', 'prototype', ''].includes(part))
-  ) {
-    throw new SettingsError('Use a valid configured agent name.');
-  }
-  return value;
+  return { modelRef, ...(variant !== undefined ? { variant } : {}) };
 }
 
 function normalizedSettings(options: Record<string, unknown>, rawGroups: unknown): GroupOptions {
   if (
     (rawGroups !== undefined && !record(rawGroups)) ||
-    ['modelPresets', 'promptSources', 'agentPrompts'].some((key) => options[key] !== undefined && !record(options[key]))
+    ['modelPresets'].some((key) => options[key] !== undefined && !record(options[key]))
   ) {
-    throw new SettingsError(
-      'Config Composer settings must contain valid group, model preset, source directory, and prompt override objects.',
-    );
+    throw new SettingsError('Config Composer settings must contain valid group and model preset objects.');
   }
   const rawPresets = record(options.modelPresets) ? options.modelPresets : {};
   const modelPresets = Object.fromEntries(
@@ -189,49 +141,34 @@ function normalizedSettings(options: Record<string, unknown>, rawGroups: unknown
       );
     }
   }
-  const promptSources = Object.fromEntries(
-    Object.entries(record(options.promptSources) ? options.promptSources : {}).map(([name, value]) => {
-      if (typeof value !== 'string' || value.trim() === '' || value.includes('\0')) {
-        throw new SettingsError('Each sourceDirectories entry requires a directory path.');
-      }
-      return [settingName(name, 'sourceDirectories alias'), value];
-    }),
-  );
-  const agentPrompts = Object.fromEntries(
-    Object.entries(record(options.agentPrompts) ? options.agentPrompts : {}).map(([name, value]) => [
-      configuredName(name),
-      promptOperations(value, true),
-    ]),
-  );
   return {
     groups,
     modelPresets,
-    promptSources,
-    promptDefaults: promptOperations(options.promptDefaults === undefined ? {} : options.promptDefaults),
-    agentPrompts,
   };
 }
 
 export function readSettings(value: unknown): GroupOptions {
   if (
-    !record(value) ||
-    Object.keys(value).some(
-      (key) => !['$schema', 'model', 'small_model', 'sourceDirectories', 'agent', 'command', 'skill'].includes(key),
+    record(value) &&
+    (['sourceDirectories', 'promptSources', 'promptDefaults', 'agentPrompts'].some((key) =>
+      Object.hasOwn(value, key),
     ) ||
+      (record(value.agent) && Object.hasOwn(value.agent, 'prompts')))
+  ) {
+    throw new SettingsError(
+      'Prompt composition moved to @lunchbox-labs/opencode-prompt-composer. Remove these settings from Config Composer; see docs/prompt-migration.md.',
+    );
+  }
+  if (
+    !record(value) ||
+    Object.keys(value).some((key) => !['$schema', 'model', 'small_model', 'agent', 'command', 'skill'].includes(key)) ||
     (value.$schema !== undefined && typeof value.$schema !== 'string')
   ) {
     throw new SettingsError('Use a valid Config Composer configuration object.');
   }
-  if (value.sourceDirectories !== undefined && !record(value.sourceDirectories)) {
-    throw new SettingsError('Config Composer sourceDirectories must map source aliases to directory paths.');
-  }
   const agent = value.agent === undefined ? {} : value.agent;
-  if (!record(agent) || Object.keys(agent).some((key) => !['groups', 'modelPresets', 'prompts'].includes(key))) {
-    throw new SettingsError('Config Composer agent settings support only groups, modelPresets, and prompts.');
-  }
-  const prompts = agent.prompts === undefined ? {} : agent.prompts;
-  if (!record(prompts) || Object.keys(prompts).some((key) => !['defaults', 'overrides'].includes(key))) {
-    throw new SettingsError('Config Composer agent prompts support only defaults and overrides.');
+  if (!record(agent) || Object.keys(agent).some((key) => !['groups', 'modelPresets'].includes(key))) {
+    throw new SettingsError('Config Composer agent settings support only groups and modelPresets.');
   }
   for (const namespace of ['command', 'skill']) {
     const entries: unknown = value[namespace];
@@ -253,9 +190,6 @@ export function readSettings(value: unknown): GroupOptions {
     ...normalizedSettings(
       {
         modelPresets: agent.modelPresets,
-        promptSources: value.sourceDirectories,
-        promptDefaults: prompts.defaults,
-        agentPrompts: prompts.overrides,
       },
       agent.groups,
     ),
