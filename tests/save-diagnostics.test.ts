@@ -170,7 +170,7 @@ test('bounded outcomes still roll back every applied file', async (t) => {
   for (let index = 0; index < 12; index++) {
     const path = join(root, `input-${index}.jsonc`);
     await writeFile(path, '{}');
-    edits.push({ file: { path, text: '{}', mode: 0o600 }, text: '{}\n' });
+    edits.push({ file: { path, text: '{}', mode: (await fs.promises.stat(path)).mode & 0o777 }, text: '{}\n' });
   }
   edits.push({ file: { path: join(root, 'missing.jsonc'), text: '{}', mode: 0o600 }, text: '{}\n' });
   await assert.rejects(
