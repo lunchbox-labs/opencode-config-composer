@@ -1795,6 +1795,7 @@ test('new configuration presets choose model settings before saving a valid defi
   await ui.select('+create');
   await ui.enter('quick');
   await ui.select(join(root, 'config-composer.jsonc'));
+  await ui.select('+model');
   await ui.select('example/fast');
   await ui.select('');
   assert.equal(ui.title(), 'Save composition definition?');
@@ -1812,6 +1813,7 @@ test('inactive preset creation rechecks provider availability before saving', as
   await ui.select('+create');
   await ui.enter('quick');
   await ui.select(join(root, 'config-composer.jsonc'));
+  await ui.select('+model');
   await ui.select('example/fast');
   await ui.select('');
   ui.setProviderError(true);
@@ -2406,4 +2408,167 @@ test('editor rejects a native baseline replaced during host inventory discovery'
   });
   await ui.command();
   assert.match(ui.toasts.at(-1)?.message ?? '', /instance changed during component discovery/i);
+});
+
+async function newPreset(ui: ReturnType<typeof uiHarness>, root: string, name = 'draft') {
+  await ui.command('config-composer.compose');
+  await ui.select('registry');
+  await ui.select('configurationPresets');
+  await ui.select('+create');
+  await ui.enter(name);
+  await ui.select(join(root, 'config-composer.jsonc'));
+}
+
+for (const reference of ['opencode:model', 'opencode:small_model', 'preset:shared']) {
+  test(`preset creation preserves exact ${reference} and inherited binding without activation`, async (t) => {
+    const root = await dedicatedFixture(t);
+    const path = join(root, 'config-composer.jsonc');
+    const document = parseConfig(await readFile(path, 'utf8'));
+    document.defaults = { small_model: 'example/deep' };
+    await writeFile(path, '// Preserve dedicated comments\n' + JSON.stringify(document));
+    const before = await loadSnapshot(root);
+    const ui = uiHarness(root);
+    await newPreset(ui, root);
+    await ui.select('+reference');
+    await ui.select(reference);
+    assert.equal(ui.title(), 'Save composition definition?');
+    assert.match(ui.message(), /Preset: draft/);
+    await ui.cancel();
+    assert.equal((await loadSnapshot(root)).sources.registry.configurationPresets?.draft, undefined);
+    await ui.select(reference);
+    await ui.confirm();
+    const saved = await loadSnapshot(root);
+    assert.deepEqual(saved.sources.registry.configurationPresets?.draft, { modelRef: reference });
+    assert.deepEqual(saved.resolved, before.resolved);
+    assert.deepEqual(saved.sources.activeProfiles, before.sources.activeProfiles);
+    assert.match(await readFile(path, 'utf8'), /Preserve dedicated comments/);
+    assert.equal(ui.updates, 0);
+  });
+}
+
+test('parameter-only creation stages valid fields, rejects empty drafts and discards cancelled input', async (t) => {
+  const root = await dedicatedFixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const before = await readFile(path, 'utf8');
+  const native = await readFile(join(root, 'opencode.jsonc'), 'utf8');
+  const ui = uiHarness(root);
+  await newPreset(ui, root);
+  ui.setProviderError(true); // Unbound parameters require no catalog/provider setup.
+  await ui.select('+parameters');
+  await ui.select('+save');
+  assert.match(ui.toasts.at(-1)!.message, /at least one/i);
+  await ui.select('maxOutputTokens');
+  await ui.enter('0');
+  assert.match(ui.toasts.at(-1)!.message, /positive safe integers/i);
+  await ui.enter('128');
+  assert.equal(ui.title(), 'New preset: staged parameters');
+  await ui.select('options');
+  await ui.enter('{"x":1,"x":2}');
+  assert.match(ui.toasts.at(-1)!.message, /duplicate/i);
+  await ui.escape();
+  assert.equal(await readFile(path, 'utf8'), before);
+  await ui.select('+save');
+  assert.match(ui.message(), /model-dependent support will be checked at dispatch/);
+  await ui.cancel();
+  await ui.select('maxOutputTokens');
+  await ui.enter('');
+  await ui.select('+save');
+  assert.match(ui.toasts.at(-1)!.message, /at least one/i);
+  await ui.select('temperature');
+  await ui.enter('0.4');
+  await ui.select('reset');
+  await ui.select('+save');
+  assert.match(ui.toasts.at(-1)!.message, /at least one/i);
+  await ui.select('maxOutputTokens');
+  await ui.enter('256');
+  await ui.select('+save');
+  await ui.confirm();
+  const saved = await loadSnapshot(root);
+  assert.deepEqual(saved.sources.registry.configurationPresets?.draft, { parameters: { maxOutputTokens: 256 } });
+  assert.deepEqual(saved.sources.activeProfiles, ['work']);
+  assert.match(await readFile(path, 'utf8'), /Preserve dedicated comments/);
+  assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), native);
+  assert.equal(ui.updates, 0);
+});
+
+for (const change of ['source', 'connection'] as const) {
+  test(`staged preset creation rejects changed ${change} before saving`, async (t) => {
+    const root = await fixture(t);
+    const path = join(root, 'config-composer.jsonc');
+    const ui = uiHarness(root);
+    await newPreset(ui, root);
+    await ui.select('+parameters');
+    await ui.select('topP');
+    await ui.enter('0.8');
+    await ui.select('+save');
+    if (change === 'source') {
+      await writeFile(path, (await readFile(path, 'utf8')) + '\n// concurrent edit');
+    } else {
+      ui.setProject(join(root, 'changed-project'));
+    }
+    const expected = await readFile(path, 'utf8');
+    await ui.confirm();
+    assert.match(ui.toasts.at(-1)!.message, /changed|Reopen|connection/);
+    assert.equal(await readFile(path, 'utf8'), expected);
+    assert.equal(ui.updates, 0);
+  });
+}
+
+test('preset creation validates inherited parameters against the referenced model and rechecks its catalog', async (t) => {
+  const root = await dedicatedFixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  const value = parseConfig(await readFile(path, 'utf8'));
+  value.configurationPresets = { shared: { model: 'example/fast', parameters: { topK: 3 } } };
+  await writeFile(path, JSON.stringify(value));
+  const before = await readFile(path, 'utf8');
+  const ui = uiHarness(root);
+  await newPreset(ui, root);
+  await ui.select('+reference');
+  const originalProviders = ui.api.client.config.providers;
+  ui.api.client.config.providers = (async () => ({
+    data: {
+      providers: [
+        {
+          id: 'example',
+          models: {
+            fast: { api: { npm: '@ai-sdk/openai-compatible' } },
+          },
+        },
+      ],
+    },
+  })) as unknown as typeof originalProviders;
+  await ui.select('preset:shared');
+  assert.match(ui.toasts.at(-1)!.message, /does not support topK/);
+  assert.equal(await readFile(path, 'utf8'), before);
+  ui.api.client.config.providers = originalProviders;
+  await ui.select('preset:shared');
+  assert.match(ui.message(), /resolved parameters {"topK":3}/);
+  ui.setProviderError(true);
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /provider models/);
+  assert.equal(await readFile(path, 'utf8'), before);
+});
+
+test('leaving a staged preset discards its draft and custom JSON options are validated before one atomic create', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await newPreset(ui, root);
+  await ui.select('+parameters');
+  await ui.select('temperature');
+  await ui.enter('0.2');
+  await ui.escape();
+  await ui.select('+parameters');
+  await ui.select('+save');
+  assert.match(ui.toasts.at(-1)!.message, /at least one/);
+  await ui.select('options');
+  await ui.enter('{}');
+  await ui.select('+save');
+  assert.match(ui.toasts.at(-1)!.message, /at least one/);
+  await ui.select('options');
+  await ui.enter('{"custom":[true,null,1,"value"]}');
+  await ui.select('+save');
+  await ui.confirm();
+  assert.deepEqual((await loadSnapshot(root)).sources.registry.configurationPresets?.draft, {
+    parameters: { options: { custom: [true, null, 1, 'value'] } },
+  });
 });
