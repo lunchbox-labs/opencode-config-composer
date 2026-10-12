@@ -30,6 +30,6 @@
       ],
     },
   },
-  // Imports define profiles; this ordered selection activates one explicitly.
+  // Configured default; a saved project selection takes precedence.
   "activeProfiles": ["claude-coding"],
 }

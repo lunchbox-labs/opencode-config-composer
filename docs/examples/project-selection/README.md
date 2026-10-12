@@ -19,7 +19,7 @@ Instance apply/reload preserves the selection; new conversations do not reset it
 this file keep independent selections. Configuration is project-wide, so simultaneous conversations in one
 project use the same applied configuration. Saving remains separate from explicit idle-checked apply.
 
-OpenCode 1.18.34 uses an absolute `XDG_STATE_HOME` when set, otherwise
+OpenCode uses an absolute `XDG_STATE_HOME` when set, otherwise
 `<home>/.local/state`, on both Linux and Windows. Composer uses its `opencode/config-composer/v1/`
 subdirectory. Retained choices live in `projects/<identity-hash>.json`; transient choices live in
 `processes/<server-lifetime>/<identity-hash>.json`. Identity combines the canonical project composition
