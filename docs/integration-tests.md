@@ -36,6 +36,10 @@ independently, and new pushes cancel obsolete pull-request integration runs.
 The running inspector has its own partition so its terminal scenarios do not share
 the runtime editor suite's eight-minute budget. Test assertions and deadlines are unchanged.
 
+The Check workflow runs the standalone TUI startup and shipped review/programming
+workflow cases. The other native cases run in the Linux and Windows Integration matrix,
+without a duplicate Check execution. `npm run test:native` still runs all native files locally.
+
 ## What the harness exercises
 
 OpenCode runs as a real local server. Requests go to a deterministic HTTP provider
