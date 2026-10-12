@@ -360,11 +360,12 @@ test(
     // retained conversation has no new prompt and still records beta/high.
     assertWire((await f.send()).captured, 'low');
     await f.write(f.paths.shared, {
-      componentGroups: { broken: { agents: ['missing-inspector-agent'] } },
+      imports: ['./missing-inspector-source.jsonc'],
+      componentGroups: { broken: { agents: ['worker'] } },
       profiles: { broken: { layers: [{ componentGroup: 'broken' }] } },
       activeProfiles: ['broken'],
     });
-    await assert.rejects(f.editor.snapshot(), /missing-inspector-agent/);
+    await assert.rejects(f.editor.snapshot(), /missing-inspector-source/);
     const relay = await httpRelay(t, () => f.host.url);
     const terminal = await nativeTerminal(
       { ...f.host, url: relay.url },

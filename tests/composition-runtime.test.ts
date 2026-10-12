@@ -69,7 +69,7 @@ test('composition leaves shared native inputs unchanged across fresh instance ho
   assert.equal(agent(first, 'worker')?.model, 'fixture/composed', 'reopening another instance does not alter this one');
 });
 
-test('runtime publishes exact applied revisions and invalid membership never claims an applied revision', async (t) => {
+test('runtime publishes exact applied revisions and skipped membership still has an exact applied revision', async (t) => {
   const f = await fixture(t, definitions);
   const config: Config = { plugin: [packageName], small_model: 'fixture/small' };
   const marker = () => {
@@ -96,8 +96,10 @@ test('runtime publishes exact applied revisions and invalid membership never cla
       activeProfiles: ['broken'],
     }),
   );
-  await assert.rejects(f.hooks.config!(config), /missing/);
-  assert.equal(marker().revision, undefined, 'a rejected candidate must not retain the old applied attestation');
+  await f.hooks.config!(config);
+  assert.ok(marker().revision !== undefined);
+  assert.notEqual(marker().revision?.sources, first.revision.sources);
+  assert.equal(config.agent?.missing, undefined);
 });
 
 test('revision excludes native-only aliases of a Composer component without losing their identity checks', async (t) => {
@@ -229,15 +231,12 @@ test('invalid selected targets and model-reference cycles leave native configura
       profiles: { bad: { layers: [{ configurationPreset: 'small', target: { agents: ['build'] } }] } },
       activeProfiles: ['bad'],
     },
-    {
-      ...definitions,
-      componentGroups: { coding: { agents: ['missing'] } },
-      profiles: { bad: { layers: [{ componentGroup: 'coding' }] } },
-      activeProfiles: ['bad'],
-    },
   ]) {
     const f = await fixture(t, value);
-    const config: Config = { model: 'fixture/native', agent: { worker: { prompt: 'Untouched' } } };
+    const config: Config = {
+      model: 'fixture/native',
+      agent: { worker: { prompt: 'Untouched' } },
+    };
     const before = structuredClone(config);
     await assert.rejects(f.hooks.config!(config), /cycle|selected|unavailable/);
     assert.deepEqual(config, { ...before, skills: { paths: [bundledSkillDirectory] } });
@@ -301,7 +300,7 @@ test('imported agent files retain frontmatter and activate only through selected
   assert.deepEqual(skillPaths(config), [bundledSkillDirectory, '/another-plugin']);
 });
 
-test('mixed groups reject missing components and unavailable command agents before mutation', async (t) => {
+test('mixed groups skip unresolved members without inventing component definitions', async (t) => {
   for (const group of [{ skills: ['missing'] }, { commands: ['missing'] }]) {
     const f = await fixture(t, {
       componentGroups: { work: group },
@@ -309,8 +308,10 @@ test('mixed groups reject missing components and unavailable command agents befo
       activeProfiles: ['work'],
     });
     const config: Config = {};
-    await assert.rejects(f.hooks.config!(config), /missing/);
-    assert.deepEqual(config, { skills: { paths: [bundledSkillDirectory] } });
+    await f.hooks.config!(config);
+    assert.deepEqual(config.command, {});
+    assert.deepEqual(config.agent, {});
+    assert.deepEqual(config.skills?.paths, [bundledSkillDirectory]);
   }
 });
 

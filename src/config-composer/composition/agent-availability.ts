@@ -1,3 +1,4 @@
+import type { ReferenceDiagnostic } from './reference-diagnostics.ts';
 import { type AgentSettings, SettingsError } from '../settings.ts';
 import { CompositionValidationError } from './document.ts';
 import type { LoadedSources } from './sources.ts';
@@ -24,10 +25,25 @@ export interface AgentAvailability {
 const part = (value: string) => value.replaceAll('~', '~0').replaceAll('/', '~1');
 
 /** Validate all declared targets, including inactive profiles, without activating definitions. */
-export function availabilityTargets(sources: LoadedSources, available: Record<string, AgentSettings>): Set<string> {
+export function availabilityTargets(
+  sources: LoadedSources,
+  available: Record<string, AgentSettings>,
+  diagnostics: ReferenceDiagnostic[] = [],
+): Set<string> {
   for (const [profile, definition] of Object.entries(sources.registry.profiles ?? {})) {
     for (const name of Object.keys(definition.agentAvailability ?? {})) {
-      if (internalAgents.has(name) || !Object.hasOwn(available, name)) {
+      if (!Object.hasOwn(available, name)) {
+        diagnostics.push({
+          kind: 'agents',
+          name,
+          status: 'missing',
+          profile,
+          sourceId: sources.provenance[`/profiles/${part(profile)}`].sourceId,
+          pointer: `/profiles/${part(profile)}/agentAvailability/${part(name)}`,
+        });
+        continue;
+      }
+      if (internalAgents.has(name)) {
         const pointer = `/profiles/${part(profile)}/agentAvailability/${part(name)}`;
         throw new CompositionValidationError({
           code: 'invalid-agent-availability',
@@ -40,7 +56,11 @@ export function availabilityTargets(sources: LoadedSources, available: Record<st
       }
     }
   }
-  return new Set(sources.orderedProfiles.flatMap(({ profile }) => Object.keys(profile.agentAvailability ?? {})));
+  return new Set(
+    sources.orderedProfiles.flatMap(({ profile }) =>
+      Object.keys(profile.agentAvailability ?? {}).filter((name) => Object.hasOwn(available, name)),
+    ),
+  );
 }
 
 export function inspectAvailability(

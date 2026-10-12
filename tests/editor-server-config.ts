@@ -1,5 +1,6 @@
 import { publishSelectionProof } from '../src/config-composer/composition/selection-state.ts';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import type { Config as PluginConfig } from '@opencode-ai/plugin';
 import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 type Config = PluginConfig & Pick<NativeConfig, 'default_agent'>;
@@ -21,6 +22,7 @@ export async function editorServerConfig(
   workspace = directory,
   currentDirectory = workspace,
   worktree = workspace,
+  generation = 0,
 ): Promise<Config> {
   await publishSelectionProof(editorSelectionEnvironment(directory));
   const snapshot = await loadSnapshot(
@@ -45,6 +47,14 @@ export async function editorServerConfig(
     selectionEnvironment: editorSelectionEnvironment(directory),
     revision: compositionRevision(snapshot.sources, snapshot.resolved, snapshot.files),
     observedNativeFiles: await observeNativeFiles(directory),
+    diagnostics: snapshot.resolved.diagnostics,
   });
+  // Model a stable host instance between reads, with a new generation after explicit reload.
+  const entry = config.plugin![0] as [string, Record<string, { id: string }>];
+  const marker = entry[1].__configComposerRuntime;
+  marker.id = '';
+  marker.id = createHash('sha256')
+    .update(JSON.stringify([generation, config]))
+    .digest('hex');
   return config;
 }

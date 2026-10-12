@@ -31,6 +31,65 @@ function choicesConfig(choices: Record<string, ResolvedModelSettings> = {}): Con
   return config;
 }
 
+test('native command identities survive transport and reject stale or foreign baselines', () => {
+  const config: Config = { plugin: [packageName], command: { named: { template: 'Native body' } } };
+  const commandNames = ['named'];
+  publishRuntimeBaseline(config, {}, context, {}, {}, { observedNativeFiles, commandNames });
+  commandNames.push('later');
+  assert.deepEqual(readRuntimeBaseline(config, context).commandNames, ['named']);
+  assert.throws(() => readRuntimeBaseline(config, { ...context, directory: '/foreign' }), /another workspace/);
+  marker(config).commandNames = [false];
+  assert.throws(() => readRuntimeBaseline(config, context), /invalid native command/);
+  marker(config).commandNames = ['named'];
+  config.command!.named.description = 'Changed';
+  assert.throws(() => readRuntimeBaseline(config, context), /Commands changed/);
+});
+
+test('populated native command names allow downstream bodies but retain every command configuration guard', () => {
+  const authored = {
+    template: 'Authored',
+    agent: 'worker',
+    model: 'fixture/native',
+    subtask: true,
+    description: 'Check',
+  };
+  const initial: Config = { plugin: [packageName], command: { check: structuredClone(authored) } };
+  publishRuntimeBaseline(
+    initial,
+    {},
+    context,
+    {},
+    {},
+    {
+      observedNativeFiles,
+      revision,
+      choices: {},
+      commandNames: ['check'],
+    },
+  );
+  initial.command!.check.template = 'Transformed by a downstream plugin';
+  assert.deepEqual(readRuntimeBaseline(initial, context).commandNames, ['check']);
+  assert.deepEqual(readRuntimeRevision(initial, context).revision, revision);
+  assert.deepEqual(readChoices(initial, context).choices, {});
+  assert.deepEqual(marker(initial).appliedCommands, { check: authored }, 'comparison preserves the published snapshot');
+  const changedCommands: NonNullable<Config['command']>[] = [
+    { check: { ...authored, agent: 'other' } },
+    { check: { ...authored, model: 'fixture/other' } },
+    { check: { ...authored, subtask: false } },
+    { check: { ...authored, description: 'Changed' } },
+    { check: Object.assign({}, authored, { unknownSetting: { template: 'Nested configuration' } }) },
+    {},
+    { check: authored, extra: { template: 'Added body' } },
+  ];
+  for (const commands of changedCommands) {
+    const config = structuredClone(initial);
+    config.command = commands;
+    assert.throws(() => readRuntimeBaseline(config, context), /Commands changed/);
+    assert.throws(() => readRuntimeRevision(config, context), /Commands changed/);
+    assert.throws(() => readChoices(config, context), /Commands changed/);
+  }
+});
+
 test('native default agent is attested and later changes reject stale editor baselines', () => {
   const config: Config = { plugin: [packageName], default_agent: 'worker' };
   publishRuntimeBaseline(config, {}, context, { default_agent: 'worker' });

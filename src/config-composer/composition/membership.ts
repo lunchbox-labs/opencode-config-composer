@@ -28,19 +28,8 @@ export function resolveGroupAgentNames(
   }
   const members = new Set<string>();
   for (const name of groups[group].agents ?? []) {
-    if (!Object.hasOwn(available, name)) {
-      throw new MembershipValidationError(
-        `Agent ${name} is unavailable. Use an available native or custom agent name in ${group}.`,
-        group,
-        name,
-      );
-    }
-    if (available[name].disable === true) {
-      throw new MembershipValidationError(
-        `Agent ${name} is disabled. Remove it from ${group} or enable it explicitly.`,
-        group,
-        name,
-      );
+    if (!Object.hasOwn(available, name) || available[name].disable === true) {
+      continue;
     }
     members.add(name);
   }

@@ -35,17 +35,12 @@ test(
     const invalid = await readFile(f.paths.shared, 'utf8');
     await f.host.start();
     const original = await f.send();
-    assert.equal(original.captured.model, 'alpha', 'invalid membership applies no partial model overlay');
+    assert.equal(original.captured.model, 'beta', 'missing members preserve valid model composition');
     const terminal = await nativeTerminal(f.host, original.session.id, 'repair-terminal');
     await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
     await terminal.command('/compose', 'Compose');
-    await terminal.choose('Repair invalid memberships', 'Inspect saved membership error');
-    await terminal.choose(
-      'Inspect saved membership error',
-      'Saved composition is invalid',
-      'missing-agent',
-      'Effective saved configuration is unavailable',
-    );
+    await terminal.choose('Repair invalid memberships', 'Inspect skipped references');
+    await terminal.choose('Inspect skipped references', 'Skipped references', 'missing-agent');
     assert.equal(await readFile(f.paths.shared, 'utf8'), invalid);
     await terminal.press('\x1b', 'Repair invalid memberships');
     await terminal.choose('work', 'Repair group: work');
@@ -89,7 +84,11 @@ test(
     await terminal.press('\r', 'Settings saved');
     assert.deepEqual((await f.document(f.paths.shared)).componentGroups!.work.agents, ['worker']);
     assert.match(await readFile(f.paths.shared, 'utf8'), /Preserve fixture comments/);
-    assert.equal((await f.send(original.session.id)).captured.model, 'alpha', 'saving a repair does not apply it');
+    assert.equal(
+      (await f.send(original.session.id)).captured.model,
+      'beta',
+      'saving a repair preserves valid running composition',
+    );
     await reloadFromTerminal(f, terminal);
     assert.equal((await f.send(original.session.id)).captured.model, 'beta');
     await nativeSkill(f.host, 'worker', 'allow');

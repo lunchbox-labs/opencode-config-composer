@@ -500,7 +500,7 @@ test(
       pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
     )) as typeof Baseline;
     assert.ok(
-      'diagnostic' in
+      'resolved' in
         (await loadEditorSnapshot(configRoot, location.root, cachedBaseline, hostPath.directory, hostPath.worktree)),
       'scoped disposal retains exact native inputs when the next composition needs repair',
     );
@@ -511,9 +511,8 @@ test(
     );
     const failedConfig = await api<{ model?: string; agent?: Record<string, unknown> }>('/config');
     const { baseline: repairBaseline } = await editor.runtime();
-    assert.equal(failedConfig.model, 'fixture/alpha', 'invalid composition never applies a partial model overlay');
-    assert.equal(failedConfig.agent?.['prompt-consumer'], undefined, 'no partial component publication');
-    assert.deepEqual(failedConfig.agent, repairBaseline.agent);
+    assert.equal(failedConfig.model, 'fixture/alpha', 'valid global configuration remains active');
+    assert.ok(failedConfig.agent?.['prompt-consumer'] !== undefined, 'valid component publication continues');
     const { nativeAgentProjection } = (await import(
       pathToFileURL(join(installed.directory, 'dist/config-composer/composition/native-baseline.js')).href
     )) as typeof NativeBaseline;
@@ -536,9 +535,8 @@ test(
       hostPath.directory,
       hostPath.worktree,
     );
-    assert.ok('diagnostic' in inspection);
-    assert.match(inspection.diagnostic.message, /removed-for-repair/);
-    assert.equal('resolved' in inspection, false);
+    assert.ok('resolved' in inspection);
+    assert.ok(inspection.resolved.diagnostics.some((item) => item.name === 'removed-for-repair'));
     const repairPlan = planDefinition(inspection, {
       operation: 'patch',
       registry: 'componentGroups',
@@ -549,11 +547,7 @@ test(
     await saveFilePlan(repairPlan, async () => {
       await previewFilePlan(repairPlan);
     });
-    assert.equal(
-      (await api<{ agent?: Record<string, unknown> }>('/config')).agent?.['prompt-consumer'],
-      undefined,
-      'saving the repair does not apply it',
-    );
+    assert.deepEqual(await api('/config'), failedConfig, 'saving the repair does not apply it');
     // Match TUI preparation, preserving the complete native baseline including normalized agent fields.
     const repaired = await loadSnapshot(configRoot, project, repairBaseline, project, '/');
     const { applySavedComposition } = (await import(

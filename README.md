@@ -145,6 +145,13 @@ running. Renaming a selected profile updates this project's selection; other pro
 may need their saved selections repaired. Composer does not read or modify OpenCode's private database.
 
 
+Native agents, commands and skills can be referenced by their OpenCode names without duplicate Composer
+component mappings. Skill names come from `SKILL.md` frontmatter. Skills and final commands validate after
+bootstrap; missing references are skipped while valid composition stays active. `/compose` shows **Reference
+notices** when references are missing, disabled or unverified. Correct the source and reload to refresh them.
+Group/agent skill references do not grant or restrict skill access. See the [component reference guide](docs/native-component-discovery.md)
+for ownership, validation timing and the headless SDK limitation.
+
 ## How settings combine
 
 Composer starts from OpenCode's configuration and applies document defaults in shared, project, then local order.

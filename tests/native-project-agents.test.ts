@@ -155,7 +155,9 @@ test('native project frontmatter name overrides are discoverable and disabled ag
   assert.ok(snapshot.agents.some((agent) => agent.name === 'renamed'));
   assert.ok(!snapshot.agents.some((agent) => agent.name === 'alias'));
   await writeFile(join(f.project, '.opencode/agents/project-md.md'), '---\ndisable: true\n---\nDisabled');
-  await assert.rejects(loadSnapshot(f.installation, f.project), /disabled/);
+  const disabled = await loadSnapshot(f.installation, f.project);
+  assert.ok(disabled.resolved.diagnostics.some((item) => item.status === 'disabled'));
+  assert.equal(disabled.resolved.selectedAgents.includes('project-md'), false);
 });
 
 test('duplicate native Markdown identities require one unambiguous directory definition', async (t) => {

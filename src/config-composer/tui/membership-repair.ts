@@ -1,5 +1,5 @@
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
-import type { RepairSnapshot } from '../storage.ts';
+import type { RepairSnapshot, Snapshot } from '../storage.ts';
 import type { MemberKind, MembershipRepairDraft } from '../composition/membership-repair.ts';
 import { definitionDestinations } from '../composition/authoring.ts';
 import { SettingsError, groupName } from '../settings.ts';
@@ -15,7 +15,7 @@ interface RepairUi {
   review: (draft: MembershipRepairDraft) => Promise<void>;
 }
 
-export function openMembershipRepair(snapshot: RepairSnapshot, ui: RepairUi): void {
+export function openMembershipRepair(snapshot: RepairSnapshot | Snapshot, ui: RepairUi): void {
   const draft: MembershipRepairDraft & Required<Pick<MembershipRepairDraft, 'members' | 'groups'>> = {
     members: [],
     groups: [],
@@ -31,7 +31,13 @@ export function openMembershipRepair(snapshot: RepairSnapshot, ui: RepairUi): vo
     const available =
       kind === 'agents'
         ? snapshot.agents.map((agent) => agent.name)
-        : Object.keys(snapshot.sources.registry.components?.[kind] ?? {});
+        : [
+            ...new Set([
+              ...Object.keys(snapshot.sources.registry.components?.[kind] ?? {}),
+              ...(kind === 'commands' ? (snapshot.nativeModels.commandNames ?? []) : []),
+              ...(snapshot.nativeModels.componentInventory?.[kind] ?? []).map((item) => item.name),
+            ]),
+          ];
     const original = groups[group][kind] ?? [];
     ui.menu(`Repair ${group}: ${kind}`, () => [
       {
@@ -70,7 +76,7 @@ export function openMembershipRepair(snapshot: RepairSnapshot, ui: RepairUi): vo
   const newGroup = () =>
     ui.prompt(
       'Define missing component group',
-      Object.hasOwn(groups, snapshot.diagnostic.group) ? '' : snapshot.diagnostic.group,
+      'diagnostic' in snapshot && !Object.hasOwn(groups, snapshot.diagnostic.group) ? snapshot.diagnostic.group : '',
       (value) => {
         const name = groupName(value.trim());
         if (Object.hasOwn(groups, name) || draft.groups.some((group) => group.name === name)) {
@@ -98,12 +104,14 @@ export function openMembershipRepair(snapshot: RepairSnapshot, ui: RepairUi): vo
       run: () => ui.review(structuredClone(draft)),
     },
     {
-      title: 'Inspect saved membership error',
+      title: 'diagnostic' in snapshot ? 'Inspect saved membership error' : 'Inspect skipped references',
       value: '+diagnostic',
       run: () =>
         ui.alert(
-          'Saved composition is invalid',
-          `${snapshot.diagnostic.message}\n\n${origin(snapshot.diagnostic.group)}\n\nEffective saved configuration is unavailable. Draft edits are checked together before saving; running configuration is not changed by inspection or saving.`,
+          'diagnostic' in snapshot ? 'Saved composition is invalid' : 'Skipped references',
+          'diagnostic' in snapshot
+            ? `${snapshot.diagnostic.message}\n\n${origin(snapshot.diagnostic.group)}\n\nEffective saved configuration is unavailable. Draft edits are checked together before saving; running configuration is not changed by inspection or saving.`
+            : snapshot.resolved.diagnostics.map((item) => `${item.kind}: ${item.name} (${item.status})`).join('\n'),
         ),
     },
     ...Object.keys(groups).map((group) => ({

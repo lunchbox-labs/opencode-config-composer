@@ -1,3 +1,4 @@
+import type { ComponentInventory } from './reference-diagnostics.ts';
 import type { AgentSettings, GroupOptions } from '../settings.ts';
 import type { CompositionDocument, PermissionRule } from './document-types.ts';
 
@@ -56,6 +57,9 @@ export type ConfiguredPermissionPreview =
   | { fallback: 'native'; action?: never; matched?: never; origin?: never };
 
 export interface NativeInput {
+  componentInventory?: ComponentInventory;
+  /** Names from the host config hook, before Composer adds commands. */
+  commandNames?: readonly string[];
   model?: string;
   small_model?: string;
   default_agent?: string;

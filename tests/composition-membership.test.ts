@@ -21,10 +21,10 @@ test('membership resolves against the supplied host registry rather than a built
     resolveGroupAgentNames('native', { native: { agents: ['host-extension'] } }, { 'host-extension': {} }),
     ['host-extension'],
   );
-  assert.throws(() => resolveGroupAgentNames('native', { native: { agents: ['build'] } }, {}), /build.*unavailable/);
-  assert.throws(
-    () => resolveGroupAgentNames('native', { native: { agents: ['build'] } }, { build: { disable: true } }),
-    /build.*disabled/,
+  assert.deepEqual(resolveGroupAgentNames('native', { native: { agents: ['build'] } }, {}), []);
+  assert.deepEqual(
+    resolveGroupAgentNames('native', { native: { agents: ['build'] } }, { build: { disable: true } }),
+    [],
   );
 });
 
