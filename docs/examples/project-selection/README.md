@@ -5,7 +5,7 @@ select OpenCode's built-in `build` and `plan` agents. The `development` preset m
 approval; `review` denies them. Other permissions retain their native fallback. No provider configuration,
 custom component files, or prompt fragments are required. OpenCode enforces the effective permissions.
 
-Each project starts with `development` until it has its own saved choice. Switch to `review` in Compose;
+Each project starts with `development` until it has its own saved choice. Switch to `review` in Compose configs;
 after explicit apply, the edit rule changes. The switch changes external project state, leaving this file
 unchanged. **Use configured defaults** restores `development` without editing the default list.
 Selecting no profiles removes these configuration contributions and restores native permission behavior.

@@ -47,7 +47,7 @@ test('post-load notices resolve authoritative skills, show missing context, dedu
   await notices.refresh(true);
   assert.equal(notices.current().diagnostics[0].status, 'missing');
   assert.equal(notices.current().diagnostics[0].group, 'work');
-  assert.match(toasts[0].message, /\/compose\b/);
+  assert.match(toasts[0].message, /\/compose-configs\b/);
   await notices.refresh(false);
   await notices.refresh(true);
   assert.equal(toasts.length, 1);

@@ -99,7 +99,8 @@ export function referenceNotices(api: TuiPluginApi, registrationRoot: string) {
       api.ui.toast({
         title: 'Composer reference notices',
         variant: 'warning',
-        message: 'Some references are skipped or not yet verified. Run /compose → Reference notices for details.',
+        message:
+          'Some references are skipped or not yet verified. Run /compose-configs → Reference notices for details.',
         duration: 10000,
       });
       lastNotice = fingerprint;

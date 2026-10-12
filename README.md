@@ -1,7 +1,7 @@
 # OpenCode Config Composer
 
 Compose OpenCode configuration with reusable groups, presets and profiles to switch models and permissions
-across your agents. Manage selections, edit settings and inspect the result through `/compose`.
+across your agents. Manage selections, edit settings and inspect the result through `/compose-configs`.
 
 Package: **`@lunchbox-labs/opencode-config-composer`** · Supported host: **OpenCode V1 1.19.0**.
 Independently maintained; not affiliated with OpenCode or Anomaly.
@@ -77,12 +77,12 @@ A preset target must already be selected when that layer runs, usually by a prec
 group does not select it, enable its agents, load its commands or skills, or apply its own configuration. The target group
 need not have been selected as long as its available agent members have been. Missing or disabled component
 references are skipped with notices while valid configuration continues. References that cannot yet be verified
-remain pending; inspect them in **Compose → Reference notices**. Unknown profile, group or preset names still
+remain pending; inspect them in **Compose configs → Reference notices**. Unknown profile, group or preset names still
 produce errors, as does targeting an available agent that has not been selected. This is why the provider
 example selects the coding group before assigning its model preset. See the [component reference guide](docs/native-component-discovery.md)
 for discovery timing, skill-access behavior and headless validation limits.
 
-Choose an ordered profile selection in `/compose`; several profiles run from left to right. Configure the
+Choose an ordered profile selection in `/compose-configs`; several profiles run from left to right. Configure the
 initial selection with `selection.defaultProfiles`. A profile can name
 one parent with `extends` to reuse its layers and overrides before adding its own. `profileShortcuts` gives a saved profile
 selection a named action in the UI. For profiles that also control which agents are enabled, `agentAvailability`
@@ -128,7 +128,7 @@ profile lists are not combined. Legacy `activeProfiles` supplies defaults only w
 "selection": { "defaultProfiles": [] }
 ```
 
-A selection saved through `/compose` or a profile shortcut overrides these defaults for the current project.
+A selection saved through `/compose-configs` or a profile shortcut overrides these defaults for the current project.
 It is stored outside configuration files, so changing a default list—including setting it to `[]`—does not
 replace a saved choice. Save **Select no profiles** to override the defaults with an empty selection. Save
 **Use configured defaults** to remove the override and follow the configured list again. Apply the saved change
@@ -183,7 +183,7 @@ permission contributions; the fallback can be more permissive. See [permission o
 
 ## Edit, apply and inspect
 
-Open `/compose` to inspect sources, edit settings or select profiles. `/agent-models` and `/agent-groups` open
+Open `/compose-configs` to inspect sources, edit settings or select profiles. `/agent-models` and `/agent-groups` open
 focused editors. Save changes, then apply when the current instance is idle, or restart. Applying affects only
 that instance; changes to OpenCode configuration or agent files require a restart. Editing requires shared
 filesystem access, and some sources are read-only.
@@ -192,7 +192,7 @@ Profile switches preserve conversation history. OpenCode can retain a conversati
 and variant, including after clearing profiles. Use `/models`, then `/variants`, to select the destination or
 inherited base settings.
 
-**Compose → Running configuration inspector** shows running settings separately from the saved preview.
+**Compose configs → Running configuration inspector** shows running settings separately from the saved preview.
 Recorded conversation values do not reveal the next request or the current unsent TUI model selection.
 The [configuration reference](docs/composition-schema.md#files-imports-and-activation) covers editing, applying
 and inspection in detail.

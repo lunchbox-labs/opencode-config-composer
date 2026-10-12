@@ -15,11 +15,11 @@ test(
     const original = await fixture.send();
     const terminal = await nativeTerminal(fixture.host, original.session.id);
     await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
-    await terminal.command('/compose', 'Compose', 'Effective configuration and sources');
+    await terminal.command('/compose-configs', 'Compose configs', 'Effective configuration and sources');
     await terminal.choose('Effective configuration and sources', 'Saved composition preview');
     await terminal.choose('Profiles and layer order', 'Active profiles: none', 'Existing conversations are retained');
     await terminal.press('\x1b', 'Saved composition preview');
-    await terminal.press('\x1b', 'Compose', 'Profile activation and scope files');
+    await terminal.press('\x1b', 'Compose configs', 'Profile activation and scope files');
     await terminal.choose('Profile activation and scope files', 'Project profile selection');
     await terminal.choose('Create shared composition source', 'Save profile selection?');
     await terminal.press('\x1b', 'Project profile selection');
@@ -28,7 +28,7 @@ test(
     await terminal.press('\r', 'Settings saved');
     assert.deepEqual(await fixture.document(fixture.paths.shared), {});
     await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
-    await terminal.command('/compose', 'Compose');
+    await terminal.command('/compose-configs', 'Compose configs');
     await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
     await terminal.choose('Component groups', 'Create definition');
     await terminal.choose('Create definition', 'New component groups name');
@@ -38,7 +38,7 @@ test(
     assert.deepEqual((await fixture.document(fixture.paths.shared)).componentGroups?.team, {});
     await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
     const registry = async (kind: string) => {
-      await terminal.command('/compose', 'Compose');
+      await terminal.command('/compose-configs', 'Compose configs');
       await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
       await terminal.choose(kind, 'Create definition');
     };
@@ -87,7 +87,7 @@ test(
     ]);
     assert.equal(authored.activeProfiles, undefined, 'authoring never activates a definition');
     assert.equal(fixture.host.requests.length, 1, 'inspection and editing never send model requests');
-    await terminal.command('/compose', 'Compose');
+    await terminal.command('/compose-configs', 'Compose configs');
     await terminal.choose('Profile activation and scope files', 'Project profile selection');
     await terminal.choose('Edit ordered selection', 'project: ordered active profiles');
     await terminal.choose('Add profile occurrence', 'Choose profile');
@@ -141,7 +141,7 @@ test(
     const before = await readFile(f.paths.shared, 'utf8');
     const terminal = await nativeTerminal(f.host, original.session.id, 'compose-terminal-selection');
     await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
-    await terminal.command('/compose', 'Compose');
+    await terminal.command('/compose-configs', 'Compose configs');
     await terminal.choose('Effective configuration and sources', 'Saved composition preview');
     await terminal.choose(
       'Profiles and layer order',
@@ -170,10 +170,10 @@ test(
     );
     assert.equal(f.host.requests.length, 1, 'inspection sends no model request');
     await terminal.press('\x1b', 'Saved composition preview');
-    await terminal.press('\x1b', 'Compose');
+    await terminal.press('\x1b', 'Compose configs');
     await terminal.press('\x1b', 'ctrl+p', 'commands');
     const selection = async () => {
-      await terminal.command('/compose', 'Compose');
+      await terminal.command('/compose-configs', 'Compose configs');
       await terminal.choose('Profile activation and scope files', 'Project profile selection');
     };
     const apply = async () => {

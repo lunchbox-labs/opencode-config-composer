@@ -1279,18 +1279,18 @@ test('compose navigation preserves Back across existing editor sections and thei
   const before = await readFile(join(root, 'config-composer.jsonc'), 'utf8');
   const ui = uiHarness(root);
   await ui.command('config-composer.compose');
-  assert.equal(ui.title(), 'Compose');
+  assert.equal(ui.title(), 'Compose configs');
   await ui.select('groups');
   assert.equal(ui.title(), 'Agent groups');
   await ui.select('developers');
   assert.equal(ui.title(), 'Group: developers');
   await ui.select('\u0000back');
   await ui.select('\u0000back');
-  assert.equal(ui.title(), 'Compose');
+  assert.equal(ui.title(), 'Compose configs');
   await ui.select('models');
   assert.equal(ui.title(), 'Agent models: scope');
   await ui.escape();
-  assert.equal(ui.title(), 'Compose');
+  assert.equal(ui.title(), 'Compose configs');
   await ui.escape();
   assert.equal(Boolean(ui.dialog), false);
   await ui.command('config-composer.membership');
@@ -1346,7 +1346,7 @@ test('running inspection reads the server despite invalid saved composition and 
   await ui.select('refresh');
   assert.equal(ui.title(), 'Running configuration inspector');
   await ui.escape();
-  assert.equal(ui.title(), 'Compose');
+  assert.equal(ui.title(), 'Compose configs');
   assert.equal(await readFile(path, 'utf8'), before);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), native);
   assert.equal(ui.updates, 0);
@@ -1462,7 +1462,7 @@ for (const section of ['models', 'groups']) {
     await ui.select('\u0000back');
     assert.equal(ui.title(), 'Settings saved');
     await ui.escape();
-    assert.equal(ui.title(), 'Compose');
+    assert.equal(ui.title(), 'Compose configs');
   });
 }
 

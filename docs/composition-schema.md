@@ -147,7 +147,7 @@ Per-document limits include 1 MiB of text, 32 JSON container levels, 64 import e
 and 1,024 definitions per registry. Parent and model-reference chains are limited to 32 levels. Across sources,
 aggregate document text is limited to 8 MiB and shortcut definitions to 128.
 
-Use `/compose` to review scope, sources and effects before saving. Imported sources outside the configuration
+Use `/compose-configs` to review scope, sources and effects before saving. Imported sources outside the configuration
 directory and native project sources are read-only. Comments and unrelated fields are preserved; stale snapshots,
 changed paths and symlinked write targets are rejected. Saving does not automatically apply changes.
 Explicit apply checks current-instance activity, rechecks inputs and verifies the running revision after
@@ -157,7 +157,7 @@ instance apply uses the running native baseline and does not prove the host load
 TUI sessions may retain their previous model and variant after apply. Choose the destination/base model through
 `/models`, then its configured variant or `Default` through `/variants`.
 
-**Compose → Running configuration inspector** reads the server independently of the saved composition preview.
+**Compose configs → Running configuration inspector** reads the server independently of the saved composition preview.
 Use **Refresh** to reread it; invalid saved composition does not prevent native observations.
 
 | Inspector view              | Meaning                                                                                                           |

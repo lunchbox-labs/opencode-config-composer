@@ -35,7 +35,7 @@ Both model presets set `maxOutputTokens` to 4,096. The Claude reviewer's final G
 `ask` for Git without affecting the npm denial. Removing that override restores `ask`. Other requests fall
 back to OpenCode's permissions.
 
-Select `openai-coding` through `/compose`, then save and apply. This saves a project selection outside the
+Select `openai-coding` through `/compose-configs`, then save and apply. This saves a project selection outside the
 configuration files. Editing `selection.defaultProfiles` or the legacy `activeProfiles` list changes configured
 defaults, but does not replace a saved selection—even after apply or a retained restart. Choose **Use configured
 defaults**, then save and apply, to follow those defaults again.

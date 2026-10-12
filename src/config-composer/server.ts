@@ -95,7 +95,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
     const diagnostics = validateReferenceDiagnostics(referenceDiagnostics, current);
     const notice = diagnostics.map(referenceDescription).join('\n\n');
     if (notice !== '' && notice !== lastReferenceNotice) {
-      console.error(`[Config Composer] Reference notices. Run /compose to inspect.\n${notice}`);
+      console.error(`[Config Composer] Reference notices. Run /compose-configs to inspect.\n${notice}`);
     }
     lastReferenceNotice = notice;
   }

@@ -64,7 +64,7 @@ Unsupported wildcard ordering or host shapes warn and skip every Composer permis
 An affected agent keeps native permissions plus applied globals; a global failure keeps native globals and
 lets independent agents compile. Other settings continue. That fallback may omit intended deny rules.
 
-**Compose → Running configuration inspector** reads current server defaults and running agent settings.
+**Compose configs → Running configuration inspector** reads current server defaults and running agent settings.
 **Applied Composer parameters** shows validated applied model-bound contributions, not saved edits awaiting apply.
 **Recorded conversation** separately labels stored session fallback, latest recorded request/response, and an earlier
 completed response when applicable. Missing, stale or foreign applied metadata is unavailable; observable native
@@ -75,7 +75,7 @@ and sends no prompt; values under credential-like option keys are redacted and c
 
 The `skills` relationship describes intended on-demand use; it does not inject bodies or grant access.
 
-`/compose` can author definitions, memberships, profile selection, parameters, permissions. Save and reload are separate. Invalid active memberships have a repair view; malformed
+`/compose-configs` can author definitions, memberships, profile selection, parameters, permissions. Save and reload are separate. Invalid active memberships have a repair view; malformed
 JSONC, imports, and profile/preset reference errors need correction in the named source first.
 Read-only imported sources need an explicit writable destination; no tool should silently rewrite them.
 

@@ -38,7 +38,7 @@ test(
     assert.equal(original.captured.model, 'beta', 'missing members preserve valid model composition');
     const terminal = await nativeTerminal(f.host, original.session.id, 'repair-terminal');
     await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
-    await terminal.command('/compose', 'Compose');
+    await terminal.command('/compose-configs', 'Compose configs');
     await terminal.choose('Repair invalid memberships', 'Inspect skipped references');
     await terminal.choose('Inspect skipped references', 'Skipped references', 'missing-agent');
     assert.equal(await readFile(f.paths.shared, 'utf8'), invalid);
@@ -127,7 +127,7 @@ test(
     const terminal = await nativeTerminal(f.host, original.session.id, 'permission-apply-terminal');
     await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
     const edit = async () => {
-      await terminal.command('/compose', 'Compose');
+      await terminal.command('/compose-configs', 'Compose configs');
       await terminal.choose('Ordered permission rules and configured previews', 'Permission destination');
       await terminal.press('\r', 'Permission target');
       await terminal.choose('Preset: policy', 'Preset: policy: ordered permissions');

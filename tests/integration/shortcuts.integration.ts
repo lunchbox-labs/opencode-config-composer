@@ -256,12 +256,12 @@ test(
       '/code',
       'Shortcut /code changed.',
       'Refresh shortcuts in Compose',
-      'before reviewing its new selection.',
+      'configs before reviewing its new selection.',
     );
     assert.equal(await readFile(f.paths.shared, 'utf8'), bytes);
     assert.equal(f.host.requests.length, 1, 'stale shortcuts fail before dispatch or write');
     const refresh = async () => {
-      await terminal.command('/compose', 'Compose');
+      await terminal.command('/compose-configs', 'Compose configs');
       await terminal.choose('Refresh profile shortcuts');
     };
     await refresh();

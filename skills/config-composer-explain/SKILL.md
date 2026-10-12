@@ -10,23 +10,23 @@ Keep native OpenCode settings, Composer contributions, and session selections di
 
 Read the shared configuration, its explicit `imports`, project `.opencode/config-composer.jsonc`, and local
 `.opencode/config-composer.local.jsonc` when available. Resolve relative paths from the declaring file.
-The `/compose` saved preview shows source paths, ordered profiles, compiled permissions, and field origins.
+The `/compose-configs` saved preview shows source paths, ordered profiles, compiled permissions, and field origins.
 
-Use **Compose → Running configuration inspector** for current server `model`, `small_model`, `default_agent`
+Use **Compose configs → Running configuration inspector** for current server `model`, `small_model`, `default_agent`
 and running agent settings. Keep **Applied Composer parameters** separate from **Recorded conversation** and
 saved pending edits. **Refresh** rereads the server; unavailable applied metadata is not a saved-settings fallback.
 Recorded session/request/response values do not reveal the current unsent TUI selection or complete final provider
 request parameters. State those limits explicitly. Inspection does not apply settings or send a prompt, and remains
 usable for native observations when saved composition is invalid. Values under credential-like option keys are redacted.
 
-Read the current project selection from Compose; config files contain declarative defaults, not live selection. State the active selection, replay order, matching contribution, and native fallback. When no scope defines `selection.defaultProfiles`, legacy `activeProfiles` supplies fallback defaults: a later scope replaces the earlier list, an absent key inherits, and `[]` selects none. Definitions alone activate nothing.
+Read the current project selection from Compose configs; config files contain declarative defaults, not live selection. State the active selection, replay order, matching contribution, and native fallback. When no scope defines `selection.defaultProfiles`, legacy `activeProfiles` supplies fallback defaults: a later scope replaces the earlier list, an absent key inherits, and `[]` selects none. Definitions alone activate nothing.
 A later matching permission rule wins even if looser. An unsupported scope skips its Composer permissions,
 warns, and can become more permissive. Session approvals are outside configured previews.
 
 `profileShortcuts` declares named TUI actions with an ordered `activeProfiles` list and optional description.
 Invoking one previews and saves the current project selection in external state, without editing configuration.
 An empty list selects none. Declaring a shortcut does not activate it, apply settings, or send a model prompt.
-Native prompt-command and TUI alias collisions require a different shortcut name; refresh shortcuts in `/compose`
+Native prompt-command and TUI alias collisions require a different shortcut name; refresh shortcuts in `/compose-configs`
 after editing their definitions.
 
 Profile `agentAvailability` maps native/component agent names to booleans. Ordered profile occurrences use the

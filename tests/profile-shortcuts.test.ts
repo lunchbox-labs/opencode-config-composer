@@ -50,7 +50,7 @@ test('imported shortcuts preserve declaring origins and reject missing profiles,
   assert.equal(loaded.provenance['/profileShortcuts/code'].sourceId, imported);
   for (const value of [
     { profileShortcuts: { code: { activeProfiles: ['missing'] } } },
-    { profileShortcuts: { compose: { activeProfiles: [] } } },
+    { profileShortcuts: { 'compose-configs': { activeProfiles: [] } } },
     {
       profileShortcuts: { code: { activeProfiles: [] } },
       components: { commands: { code: { template: 'Not a profile action' } } },
