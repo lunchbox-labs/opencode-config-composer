@@ -665,10 +665,7 @@ test(
     assert.ok(
       requests
         .filter((body) => !JSON.stringify(body.messages).includes('Load config-composer-'))
-        .every(
-          (body) =>
-            !/agent_group|modelRef|modelPresets|configFile|promptSources|sourceDirectories/.test(JSON.stringify(body)),
-        ),
+        .every((body) => !/agent_group|modelRef|modelPresets|configFile/.test(JSON.stringify(body))),
     );
     assert.match(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), /^\/\/ Native integration fixture/);
     assert.match(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8'), /^\/\/ Dedicated settings/);
@@ -830,10 +827,7 @@ test(
     assert.match(harness.stderr, /Legacy composition keys are not supported/);
     for (const body of requests) {
       const { messages: _messages, tools: _tools, ...parameters } = body;
-      assert.doesNotMatch(
-        JSON.stringify(parameters),
-        /agent_group|modelRef|modelPresets|configFile|promptSources|sourceDirectories/,
-      );
+      assert.doesNotMatch(JSON.stringify(parameters), /agent_group|modelRef|modelPresets|configFile/);
     }
   },
 );

@@ -117,10 +117,7 @@ test('loader resolves paths from the dedicated file and rereads external edits w
 test('JSONC parser rejects duplicate keys at any depth and invalid root objects', () => {
   assert.deepEqual(parseConfiguration('{"agent":{"groups":{},},}'), { agent: { groups: {} } });
   assert.throws(() => parseConfiguration('{"agent":{},"agent":{}}'), /duplicate/);
-  assert.throws(
-    () => parseConfiguration('{"agent":{"prompts":{"overrides":{"lead":{"append":[],"append":[]}}}}}'),
-    /duplicate/,
-  );
+  assert.throws(() => parseConfiguration('{"agent":{"groups":{"lead":{"model":"a/b","model":"a/c"}}}}'), /duplicate/);
   assert.throws(() => parseConfiguration('[]'), /invalid/);
   assert.throws(() => parseConfiguration('{'), /invalid/);
 });

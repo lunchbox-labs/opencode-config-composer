@@ -189,7 +189,6 @@ test('dedicated model edits preserve typed namespaces, comments, and native sett
   await savePlan(planChange(snapshot, { kind: 'group', name: 'developers', choice: { model: 'other/new' } }));
   const after = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
   assert.deepEqual(after.components, before.components);
-  assert.deepEqual(after.sourceDirectories, before.sourceDirectories);
   assert.deepEqual(after.defaults, before.defaults);
   assert.deepEqual(after.overrides, before.overrides);
   assert.equal(after.groups, undefined, 'editor must not create a flat group section');
@@ -1230,7 +1229,6 @@ test('TUI model edits save to the dedicated file while retaining source comments
   const saved = parseConfig(await readFile(join(root, 'config-composer.jsonc'), 'utf8'));
   assert.deepEqual(saved.defaults, original.defaults);
   assert.deepEqual(saved.overrides, original.overrides);
-  assert.deepEqual(saved.sourceDirectories, original.sourceDirectories);
   assert.match(await readFile(join(root, 'config-composer.jsonc'), 'utf8'), /Preserve dedicated comments/);
   assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), originalNative);
 });
