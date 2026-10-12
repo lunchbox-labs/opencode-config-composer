@@ -1,3 +1,4 @@
+import { changedInput } from '../save-diagnostics.ts';
 import { homedir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
@@ -184,7 +185,7 @@ export async function readSelection(
 
 export async function verifySelection(snapshot: SelectionSnapshot): Promise<void> {
   if ((await observe(snapshot.path)).text !== snapshot.text) {
-    throw new SettingsError('Profile selection changed. Reopen the editor.');
+    throw changedInput('Profile selection changed. Reopen the editor.', snapshot.path, 'selection');
   }
 }
 
@@ -192,11 +193,11 @@ export async function verifySelection(snapshot: SelectionSnapshot): Promise<void
 export async function withSelectionLock<T>(snapshot: SelectionSnapshot, operation: () => Promise<T>): Promise<T> {
   const directory = dirname(snapshot.path);
   if ((await canonical(directory)) !== directory) {
-    throw new SettingsError('Selection state directory changed identity. Reopen the editor.');
+    throw changedInput('Selection state directory changed identity. Reopen the editor.', directory, 'identity');
   }
   await mkdir(directory, { recursive: true, mode: 0o700 });
   if ((await realpath(directory)) !== directory) {
-    throw new SettingsError('Selection state directory changed identity. Reopen the editor.');
+    throw changedInput('Selection state directory changed identity. Reopen the editor.', directory, 'identity');
   }
   const lockPath = `${snapshot.path}.lock`;
   const lock = await open(lockPath, 'wx', 0o600).catch(() => {
