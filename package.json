@@ -83,6 +83,9 @@
   "overrides": {
     "@opentui/solid": {
       "@babel/core": "7.29.7"
+    },
+    "solid-js@1.9.12": {
+      "seroval": "1.6.3"
     }
   }
 }
