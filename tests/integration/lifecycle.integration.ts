@@ -260,7 +260,7 @@ test(
         await change({ kind: 'membership', agent: 'worker', groups: ['workers', 'alternate'] });
         assert.equal((await send()).message.info.modelID, 'alpha');
         assert.equal(requests.at(-1)?.reasoning_effort, 'low');
-        assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('ALTERNATE_GROUP'));
+        assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('{{include:@shared/body.md}}'));
         await change({ kind: 'membership', agent: 'build', groups: ['workers', 'alternate'] });
         assert.equal((await send('build')).message.info.modelID, 'alpha');
         await change({ kind: 'membership', agent: 'worker', groups: ['alternate', 'workers'] });
@@ -294,7 +294,7 @@ test(
         await change({ kind: 'override', agent: 'worker', choice: {} });
         assert.equal((await send()).message.info.modelID, 'beta');
         await change({ kind: 'membership', agent: 'worker', groups: ['workers'] });
-        assert.ok((await agent()).prompt?.includes('ALTERNATE_GROUP') !== true);
+        assert.ok((await agent()).prompt?.includes('{{include:@shared/body.md}}') === true);
         assert.equal((await send('pinned')).message.info.modelID, 'alpha');
         assert.equal(requests.at(-1)?.reasoning_effort, 'low');
       },

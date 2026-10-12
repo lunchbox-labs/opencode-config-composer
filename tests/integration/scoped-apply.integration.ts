@@ -131,7 +131,7 @@ test(
       assert.deepEqual(await runtime(), initialRuntime, 'save preserves the actual applied publication');
       const pending = await send('SCOPED_HISTORY_PENDING');
       assert.equal(pending.captured.model, 'alpha');
-      assert.ok(!JSON.stringify(pending.captured.messages).includes('SAVED_PENDING'));
+      assert.ok(JSON.stringify(pending.captured.messages).includes('NATIVE_WORKER'));
       const beforeApplyHistory = await f.history(session.id);
       const start = await confirmApply('Composer revision applied');
       const current = await runtime();
@@ -172,7 +172,7 @@ test(
       assert.deepEqual(baseline.permission, { edit: 'deny' });
       const continued = await send('SCOPED_HISTORY_AFTER_APPLY');
       assert.equal(continued.captured.model, 'beta');
-      assert.ok(JSON.stringify(continued.captured.messages).includes('SAVED_PENDING'));
+      assert.ok(JSON.stringify(continued.captured.messages).includes('NATIVE_WORKER'));
       for (const text of ['SCOPED_HISTORY_FIRST', 'SCOPED_HISTORY_PENDING']) {
         assert.ok(
           JSON.stringify(continued.captured.messages).includes(text),

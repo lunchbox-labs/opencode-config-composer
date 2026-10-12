@@ -249,7 +249,7 @@ test(
       assert.notEqual(captured.max_tokens, 96);
       const text = JSON.stringify(captured.messages);
       assert.ok(text.includes('IMPORTED_REVIEWER'));
-      assert.ok(!text.includes('CANONICAL_SKILL_BODY'), 'skill relationships do not inject their bodies');
+      assert.ok(!text.includes('{{include:@external/skill.md}}'), 'skill relationships do not inject their bodies');
       assert.ok(text.includes('{{include:'), 'include syntax remains authored text');
       assert.deepEqual(
         await readdir(join(configRoot, 'agents')),
@@ -343,7 +343,7 @@ test(
       await reload();
     });
 
-    await t.test('imported commands execute and native skills expand only when called', async () => {
+    await t.test('imported commands execute and native skills load with unchanged text', async () => {
       const session = await api<{ id: string }>('/session', { title: 'Command integration' });
       const result = await api<Message>(`/session/${session.id}/command`, {
         command: 'fixture-review',
@@ -351,7 +351,9 @@ test(
       });
       assert.equal(result.info.error, undefined);
       assert.ok(
-        JSON.stringify(requests.at(-1)?.messages).includes('COMMAND_BODY fixture-input ORIGIN_RELATIVE_FRAGMENT'),
+        JSON.stringify(requests.at(-1)?.messages).includes(
+          'COMMAND_BODY fixture-input {{include:@external/fragment.md}}',
+        ),
       );
       await api<Message>(`/session/${session.id}/message`, {
         agent: 'reviewer',
@@ -360,8 +362,8 @@ test(
       const messages = await api<Message[]>(`/session/${session.id}/message`);
       const skill = messages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
       assert.equal(skill?.state?.status, 'completed', JSON.stringify(messages));
-      assert.match(skill.state.output ?? '', /CANONICAL_SKILL_BODY/);
-      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('CANONICAL_SKILL_BODY'));
+      assert.ok((skill.state.output ?? '').includes('{{include:@external/skill.md}}'));
+      assert.ok(JSON.stringify(requests.at(-1)?.messages).includes('{{include:@external/skill.md}}'));
     });
 
     await t.test('automatic title and manual compaction dispatch use their configured utility parameters', async () => {

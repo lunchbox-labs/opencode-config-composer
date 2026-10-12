@@ -197,8 +197,7 @@ test(
         assert.equal(captured.model, model);
         assert.equal(captured.temperature, temperature);
         assert.equal(captured.top_p, topP);
-        assert.match(systemPrompt(captured), /FOCUS_PROFILE/);
-        assert.match(systemPrompt(captured), /WORK_PROFILE/);
+        assert.ok(systemPrompt(captured).includes(`NATIVE_${name.toUpperCase()}`));
       }
     };
     await check('beta', 0.7, 0.8);
@@ -221,10 +220,7 @@ test(
     assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, []);
     const retained = await f.send(original.session.id);
     assert.equal(retained.captured.model, 'beta', 'clear preserves the selected model of the existing session');
-    assert.ok(
-      !/FOCUS_PROFILE|WORK_PROFILE/.test(systemPrompt(retained.captured)),
-      'clear removes active profile prompts',
-    );
+    assert.match(systemPrompt(retained.captured), /NATIVE_WORKER/);
     assert.equal((await f.send()).captured.model, 'alpha', 'fresh dispatch restores the native default');
     const clearAgents = await f.host.api<{ name: string; model?: unknown; prompt?: string }[]>('/agent');
     for (const name of ['worker', 'peer']) {
