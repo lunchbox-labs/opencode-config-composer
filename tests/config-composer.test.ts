@@ -902,6 +902,47 @@ test('reload alias opens the same instance-scoped revision apply path', async (t
   assert.ok(!ui.message().includes('ALL workspaces'));
 });
 
+for (const entry of ['group menu', 'model source']) {
+  test(`clearing a later group model through ${entry} previews and saves the earlier group defaults`, async (t) => {
+    const root = await fixture(t);
+    await writeFile(
+      join(root, 'config-composer.jsonc'),
+      JSON.stringify({
+        componentGroups: {
+          developers: {},
+          'custom-team': {},
+          earlier: { agents: ['builtin'], configuration: { model: 'example/fast', variant: 'medium' } },
+          later: { agents: ['builtin'], configuration: { model: 'example/deep', variant: 'high' } },
+        },
+        profiles: { work: { layers: [{ componentGroup: 'earlier' }, { componentGroup: 'later' }] } },
+        activeProfiles: ['work'],
+      }),
+    );
+    assert.equal((await loadSnapshot(root)).resolved.choices.builtin.model, 'example/deep');
+    const ui = uiHarness(root);
+    t.after(() => ui.dispose());
+    await ui.command('config-composer.membership');
+    await ui.select('later');
+    if (entry === 'model source') {
+      await ui.select('+model');
+    }
+    const menu = JSON.stringify(ui.dialog);
+    await ui.select(entry === 'model source' ? '+fallback' : '+inherit');
+    const preview = ui.message();
+    assert.match(preview, /Models to validate:.*example\/fast/);
+    await ui.confirm();
+    const saved = await loadSnapshot(root);
+    assert.equal(saved.resolved.choices.builtin.model, 'example/fast');
+    assert.equal(saved.resolved.choices.builtin.variant, 'medium');
+    assert.deepEqual(saved.groups.later, {});
+    await ui.command('config-composer.membership');
+    await ui.select('later');
+    assert.match(JSON.stringify(ui.dialog), /No group model default/);
+    assert.match(menu, /Clear group model defaults/);
+    assert.match(preview, /Remaining layers and native defaults determine the effective model/);
+  });
+}
+
 test('TUI model selection previews, saves, and blocks reload while an agent runs', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);
