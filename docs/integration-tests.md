@@ -18,9 +18,9 @@ source absent. Native plugin loading and composition run normally.
 
 The [Integration workflow](../.github/workflows/integration.yml) runs the same functional
 cases on `ubuntu-latest` and `windows-latest` for pull requests, pushes to `main`, and
-manual dispatch. Each platform runs 14 suites:
+manual dispatch. Each platform runs these suites:
 
-`core`, `canonical`, `editor`, `terminal`, `cleanup`, `content`, `content-terminal`,
+`core`, `discovery`, `canonical`, `editor`, `terminal`, `cleanup`, `content`, `content-terminal`,
 `permissions`, `runtime-terminal`, `running-inspector`, `scoped-apply`, `shortcuts`, `availability`, and
 `profile-switching`.
 
@@ -31,7 +31,7 @@ check ensures every portable test file runs exactly once per platform. To run on
 npm run test:integration -- --suite scoped-apply
 ```
 
-Use any suite name above; the default command runs all 14. Matrix jobs finish
+Use any suite name above; the default command runs all suites. Matrix jobs finish
 independently, and new pushes cancel obsolete pull-request integration runs.
 The running inspector has its own partition so its terminal scenarios do not share
 the runtime editor suite's eight-minute budget. Test assertions and deadlines are unchanged.
