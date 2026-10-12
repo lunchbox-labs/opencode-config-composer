@@ -431,3 +431,63 @@ test('invalid registry-name diagnostics include the escaped offending property',
     );
   }
 });
+
+test('syntax diagnostics retain the source and report only the first parser category and location', () => {
+  for (const newline of ['\n', '\r\n', '\r']) {
+    const text = ['{', '  "profiles": {}', '  "activeProfiles": [}', '}'].join(newline);
+    assert.throws(
+      () => parseCompositionDocument(text, 'models.jsonc'),
+      (error: unknown) => {
+        assert.ok(error instanceof CompositionValidationError);
+        assert.equal(error.diagnostic.code, 'invalid-composition-jsonc');
+        assert.equal(error.diagnostic.sourceId, 'models.jsonc');
+        assert.equal(error.diagnostic.pointer, '');
+        assert.equal(
+          error.message,
+          'models.jsonc: Fix the invalid Config Composer JSONC configuration. CommaExpected at line 3, column 3.',
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test('duplicate diagnostics locate both raw property tokens despite escaped names and CRLF', () => {
+  const text =
+    '{\r\n  "configurationPresets": {"model": {"parameters": {"options": {\r\n    "a/b~": 1, "a\\u002fb~": 2\r\n  }}}}\r\n}';
+  assert.throws(
+    () => parseCompositionDocument(text, 'models.jsonc'),
+    (error: unknown) => {
+      assert.ok(error instanceof CompositionValidationError);
+      assert.equal(error.diagnostic.code, 'invalid-composition-jsonc');
+      assert.equal(error.diagnostic.pointer, '');
+      assert.equal(
+        error.message,
+        'models.jsonc: The Config Composer configuration has duplicate JSON keys: "a/b~" at line 3, column 5 and line 3, column 16.',
+      );
+      return true;
+    },
+  );
+});
+
+test('JSONC locations count raw escaped tokens and tabs and report end of input', () => {
+  for (const [text, location] of [
+    ['{"profiles": {}, "active\\u0050rofiles": [] "defaults": {}}', 'CommaExpected at line 1, column 44'],
+    ['{\r\n\t"profiles": {}', 'CloseBraceExpected at line 2, column 16'],
+  ]) {
+    assert.throws(
+      () => parseCompositionDocument(text, 'source.jsonc'),
+      (error: unknown) => {
+        assert.ok(error instanceof CompositionValidationError);
+        assert.ok(error.message.includes(location), error.message);
+        return true;
+      },
+    );
+  }
+});
+
+test('JSONC acceptance still permits comments, trailing commas, and equal keys in separate objects', () => {
+  assert.deepEqual(parseCompositionDocument('{// comment\r\n"profiles":{"one":{},"two":{},},}'), {
+    profiles: { one: {}, two: {} },
+  });
+});
