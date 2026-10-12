@@ -49,6 +49,33 @@ async function fixture(t: TestContext) {
   return { root, installation, project, directory };
 }
 
+for (const kind of ['global', 'all'] as const) {
+  test(`${kind} model edit previews retain higher-precedence project bindings`, async (t) => {
+    const f = await fixture(t);
+    await writeFile(join(f.project, 'opencode.jsonc'), '{"model":"fixture/project"}');
+    await writeFile(
+      join(f.installation, 'config-composer.jsonc'),
+      JSON.stringify({
+        componentGroups: {
+          work: { agents: ['build'], configuration: { modelRef: 'opencode:model', parameters: { topP: 0.4 } } },
+          secondary: {},
+        },
+        profiles: { work: { layers: [{ componentGroup: 'work' }] } },
+        activeProfiles: ['work'],
+      }),
+    );
+    const snapshot = await loadSnapshot(f.installation, f.project, { model: 'fixture/project' });
+    const plan = planChange(
+      snapshot,
+      kind === 'global' ? { kind, field: 'model', model: 'fixture/next' } : { kind, choice: { model: 'fixture/next' } },
+    );
+    const choices = await plannedChoices(plan);
+    assert.ok(choices.some((choice) => choice.model === 'fixture/project' && choice.parameters?.topP === 0.4));
+    assert.ok(choices.some((choice) => choice.model === 'fixture/next' && choice.parameters === undefined));
+    assert.ok(!choices.some((choice) => choice.model === 'fixture/next' && choice.parameters !== undefined));
+  });
+}
+
 test('existing project JSON and Markdown agents join JSONC groups without shadow definitions or pin changes', async (t) => {
   const f = await fixture(t);
   const markdown = join(f.project, '.opencode/agents/project-md.md');

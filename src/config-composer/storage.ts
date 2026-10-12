@@ -1002,6 +1002,21 @@ export async function plannedChoices(
       : change.kind === 'all'
         ? { ...native, model: change.choice.model, small_model: change.choice.model }
         : native;
+  if (change.kind === 'global' || change.kind === 'all') {
+    const index = snapshot.nativeLayers.findIndex((layer) => layer.file.path === snapshot.configFile.path);
+    for (const field of change.kind === 'global' ? [change.field] : (['model', 'small_model'] as const)) {
+      const masked = snapshot.nativeLayers.slice(index + 1).some((layer) => {
+        if (layer.kind !== 'config') {
+          return false;
+        }
+        const value = parseConfig(snapshot.nativeVariables.documents.get(layer.file.path) ?? layer.file.text);
+        return typeof value[field] === 'string';
+      });
+      if (masked) {
+        defaults[field] = native[field];
+      }
+    }
+  }
   const resolved = await resolveProfileRuntime(
     sources,
     {
