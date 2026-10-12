@@ -1,3 +1,4 @@
+import { moveToPosition } from './move-to-position.ts';
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
 import type { Snapshot } from '../storage.ts';
 import { type DefinitionChange, type DefinitionRegistry, definitionDestinations } from '../composition/authoring.ts';
@@ -136,6 +137,11 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
             : 'Component group',
         run: () =>
           ui.menu(`Layer ${index + 1}`, [
+            {
+              title: 'Move to position…',
+              value: 'position',
+              run: () => moveToPosition(ui, pending, index),
+            },
             {
               title: 'Remove layer',
               value: 'remove',
