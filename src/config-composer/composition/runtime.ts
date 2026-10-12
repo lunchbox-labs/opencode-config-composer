@@ -293,15 +293,37 @@ export async function resolveProfileRuntime(
       current = presets[name];
     }
   }
-  function validateAgentDefinition(name: string) {
-    const value = registry.components?.agents?.[name]?.configuration;
-    if (value !== undefined) {
-      validateSettings(value, sources.provenance[`/components/agents/${part(name)}/configuration`]);
+  for (const [name, value] of Object.entries(presets)) {
+    validateSettings(value, sources.provenance[`/configurationPresets/${part(name)}`]);
+  }
+  const configuredDefinitions: [string, Record<string, { configuration?: AgentConfiguration }>][] = [
+    ['components/agents', registry.components?.agents ?? {}],
+    ['componentGroups', groups],
+  ];
+  for (const [kind, definitions] of configuredDefinitions) {
+    for (const [name, definition] of Object.entries(definitions)) {
+      if (definition.configuration !== undefined) {
+        validateSettings(definition.configuration, sources.provenance[`/${kind}/${part(name)}/configuration`]);
+      }
     }
+  }
+  function validateOverrides(value: Record<string, AgentConfiguration> | undefined, at: FieldOrigin) {
+    for (const [name, setting] of Object.entries(value ?? {})) {
+      validateSettings(setting, { ...at, pointer: `${at.pointer}/agents/${part(name)}` });
+    }
+  }
+  for (const [name, profile] of Object.entries(registry.profiles ?? {})) {
+    const at = sources.provenance[`/profiles/${part(name)}`];
+    validateOverrides(profile.overrides?.agents, { ...at, pointer: `${at.pointer}/overrides` });
+  }
+  for (const scope of sources.scopes) {
+    if (scope.value.defaults?.agents !== undefined) {
+      validateSettings(scope.value.defaults.agents, origin(scope.id, '/defaults/agents', 'defaults'));
+    }
+    validateOverrides(scope.value.overrides?.agents, origin(scope.id, '/overrides', 'overrides'));
   }
   function diagnoseGroupAgents(name: string, profile: string) {
     for (const [index, member] of (groups[name].agents ?? []).entries()) {
-      validateAgentDefinition(member);
       if (!Object.hasOwn(available, member) || available[member].disable === true) {
         diagnostics.push({
           kind: 'agents',
@@ -449,8 +471,6 @@ export async function resolveProfileRuntime(
   }
   function overrides(value: Record<string, AgentConfiguration> | undefined, at: FieldOrigin) {
     for (const [name, setting] of Object.entries(value ?? {})) {
-      validateAgentDefinition(name);
-      validateSettings(setting, { ...at, pointer: `${at.pointer}/agents/${part(name)}` });
       if (!Object.hasOwn(available, name) || available[name].disable === true) {
         diagnostics.push({
           kind: 'agents',
@@ -466,11 +486,6 @@ export async function resolveProfileRuntime(
         throw new SettingsError(`Agent ${name} must be selected before applying an override.`);
       }
       apply(name, setting, { ...at, pointer: `${at.pointer}/agents/${part(name)}` }, true);
-    }
-  }
-  for (const scope of sources.scopes) {
-    if (scope.value.defaults?.agents !== undefined) {
-      validateSettings(scope.value.defaults.agents, origin(scope.id, '/defaults/agents', 'defaults'));
     }
   }
   for (const occurrence of sources.orderedProfiles) {
@@ -494,9 +509,6 @@ export async function resolveProfileRuntime(
         const group = groups[name];
         for (const key of ['agents', 'commands', 'skills'] as const) {
           for (const [index, member] of (group[key] ?? []).entries()) {
-            if (key === 'agents') {
-              validateAgentDefinition(member);
-            }
             const status =
               key === 'agents'
                 ? !Object.hasOwn(available, member)
@@ -536,9 +548,6 @@ export async function resolveProfileRuntime(
         }
         const members = resolveGroupAgentNames(name, groups, available);
         const at = { ...sources.provenance[`/componentGroups/${part(name)}`], layer: `profile:${occurrence.name}` };
-        if (group.configuration !== undefined) {
-          validateSettings(group.configuration, { ...at, pointer: `${at.pointer}/configuration` });
-        }
         for (const member of members) {
           select(member);
           if (groups[name].configuration !== undefined) {
@@ -546,10 +555,6 @@ export async function resolveProfileRuntime(
           }
         }
       } else {
-        validateSettings(presets[layer.configurationPreset], {
-          ...sources.provenance[`/configurationPresets/${part(layer.configurationPreset)}`],
-          layer: `profile:${occurrence.name}`,
-        });
         const target = new Set(layer.target.agents ?? []);
         for (const group of layer.target.componentGroups ?? []) {
           const members = resolveGroupAgentNames(group, groups, available);
@@ -559,7 +564,6 @@ export async function resolveProfileRuntime(
           }
         }
         for (const name of target) {
-          validateAgentDefinition(name);
           if (!Object.hasOwn(available, name) || available[name].disable === true) {
             diagnostics.push({
               kind: 'agents',
