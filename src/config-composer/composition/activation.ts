@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { SettingsError } from '../settings.ts';
-import { type FilePlan, type SourceFile, type SourceSnapshot, editJson } from '../storage.ts';
+import type { FilePlan, SourceFile, SourceSnapshot } from '../storage.ts';
 
 export type CompositionScope = 'shared' | 'project' | 'local';
 export type ScopeChange = { operation: 'create' } | { operation: 'selection'; profiles?: string[] };
@@ -54,42 +54,49 @@ export function scopeDestinations(snapshot: SourceSnapshot): ScopeDestination[] 
   return result;
 }
 
+/** Live selection belongs to the project state store, never a scope document. */
+export function planSelection<S extends SourceSnapshot>(snapshot: S, profiles?: string[]): FilePlan<S> {
+  if (snapshot.sources.selectionState === undefined) {
+    throw new SettingsError('The server did not publish its selection state location. Restart OpenCode.');
+  }
+  return {
+    snapshot,
+    edits: [],
+    selection: { profiles },
+    description:
+      profiles === undefined
+        ? 'Use configured default profiles'
+        : `Project profiles: ${profiles.length === 0 ? 'none' : profiles.join(' → ')}`,
+  };
+}
+
 export function planScope<S extends SourceSnapshot>(
   snapshot: S,
   scope: CompositionScope,
   change: ScopeChange,
 ): FilePlan<S> {
+  if (change.operation === 'selection') {
+    return planSelection(snapshot, change.profiles);
+  }
   const destination = scopeDestinations(snapshot).find((item) => item.scope === scope);
   if (destination?.writable !== true) {
     throw new SettingsError(
       'That composition scope is read-only or aliases a later scope. Select its declaring source.',
     );
   }
-  if (change.operation === 'create' && destination.file !== undefined) {
+  if (destination.file !== undefined) {
     throw new SettingsError('That composition source already exists. Reopen the editor.');
   }
-  const file = destination.file ?? {
+  const file: SourceFile = {
     path: destination.path,
     text: '',
     mode: 0o600,
     writable: true,
     writeRoot: scope === 'shared' ? snapshot.root : snapshot.scopeRoot,
   };
-  const text =
-    change.operation === 'create'
-      ? '{}\n'
-      : editJson(file.text === '' ? '{}\n' : file.text, ['activeProfiles'], change.profiles);
-  const inheritAbsent =
-    destination.file === undefined && change.operation === 'selection' && change.profiles === undefined;
   return {
     snapshot,
-    edits:
-      inheritAbsent || text === file.text
-        ? []
-        : [{ file, text, ...(destination.file === undefined ? { create: true } : {}) }],
-    description:
-      change.operation === 'create'
-        ? `Create ${scope} composition source`
-        : `${scope} profile selection: ${change.profiles === undefined ? 'inherit' : change.profiles.length === 0 ? 'none' : change.profiles.join(' → ')}`,
+    edits: [{ file, text: '{}\n', create: true }],
+    description: `Create ${scope} composition source`,
   };
 }

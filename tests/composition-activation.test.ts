@@ -27,7 +27,10 @@ async function fixture(t: TestContext) {
       activeProfiles: ['first'],
     }),
   );
-  const snapshot = () => loadSnapshot(root, project);
+  const snapshot = () =>
+    loadSnapshot(root, project, {
+      selectionEnvironment: { stateDirectory: join(directory, 'state'), lifetime: 'test' },
+    });
   return { root, project, snapshot };
 }
 
@@ -37,7 +40,7 @@ async function save(plan: ReturnType<typeof planScope>) {
   });
 }
 
-test('local activation creates only its selected scope and replaces shared selection in authored order', async (t) => {
+test('project selection replaces configured defaults in authored order without creating scope files', async (t) => {
   const f = await fixture(t);
   const original = await readFile(join(f.root, 'config-composer.jsonc'), 'utf8');
   const plan = planScope(await f.snapshot(), 'local', { operation: 'selection', profiles: ['first', 'last'] });
@@ -51,7 +54,7 @@ test('local activation creates only its selected scope and replaces shared selec
   await assert.rejects(readFile(join(f.project, '.opencode/config-composer.jsonc')), /ENOENT/);
 });
 
-test('explicit none and inherited activation stay distinct and preserve unrelated JSONC settings', async (t) => {
+test('explicit none and configured-default selection stay distinct and preserve unrelated JSONC settings', async (t) => {
   const f = await fixture(t);
   await mkdir(join(f.project, '.opencode'));
   const path = join(f.project, '.opencode/config-composer.local.jsonc');
@@ -60,9 +63,9 @@ test('explicit none and inherited activation stay distinct and preserve unrelate
   assert.deepEqual((await f.snapshot()).sources.activeProfiles, []);
   assert.equal((await f.snapshot()).resolved.model, 'fixture/native');
   await save(planScope(await f.snapshot(), 'local', { operation: 'selection' }));
-  assert.deepEqual((await f.snapshot()).sources.activeProfiles, ['first']);
+  assert.deepEqual((await f.snapshot()).sources.activeProfiles, ['last']);
   assert.match(await readFile(path, 'utf8'), /Keep this/);
-  assert.doesNotMatch(await readFile(path, 'utf8'), /activeProfiles/);
+  assert.match(await readFile(path, 'utf8'), /activeProfiles/);
 });
 
 test('scope creation adds a reusable authoring destination without selecting profiles', async (t) => {
@@ -79,17 +82,18 @@ test('scope creation adds a reusable authoring destination without selecting pro
   assert.deepEqual((await f.snapshot()).sources.registry.profiles?.review, { layers: [] });
 });
 
-test('scope descriptions show local masking and ordered inherited selection', async (t) => {
+test('legacy scope descriptions retain configured-default precedence and order', async (t) => {
   const f = await fixture(t);
-  await save(planScope(await f.snapshot(), 'project', { operation: 'selection', profiles: ['last', 'first'] }));
-  await save(planScope(await f.snapshot(), 'local', { operation: 'selection', profiles: [] }));
+  await mkdir(join(f.project, '.opencode'));
+  await writeFile(join(f.project, '.opencode/config-composer.jsonc'), '{"activeProfiles":["last","first"]}');
+  await writeFile(join(f.project, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
   const destinations = scopeDestinations(await f.snapshot());
   assert.deepEqual(destinations.find((scope) => scope.scope === 'project')?.selection, ['last', 'first']);
   assert.equal(destinations.find((scope) => scope.scope === 'project')?.maskedBy, 'local');
   assert.deepEqual(destinations.find((scope) => scope.scope === 'local')?.inherited, ['last', 'first']);
 });
 
-test('concurrent file creation and unknown profiles are rejected before creating scope files', async (t) => {
+test('concurrent source creation and unknown profiles reject selection changes', async (t) => {
   const f = await fixture(t);
   const invalid = planScope(await f.snapshot(), 'local', { operation: 'selection', profiles: ['missing'] });
   await assert.rejects(save(invalid), /Unknown profile/);
@@ -105,7 +109,7 @@ test('scope creation rejects symlink parent escapes and leaves external files un
   const f = await fixture(t);
   const external = join(f.root, 'external');
   await mkdir(external);
-  const plan = planScope(await f.snapshot(), 'local', { operation: 'selection', profiles: [] });
+  const plan = planScope(await f.snapshot(), 'local', { operation: 'create' });
   await symlink(external, join(f.project, '.opencode'));
   await assert.rejects(save(plan), /directory|identity|symbolic/i);
   await assert.rejects(readFile(join(external, 'config-composer.local.jsonc')), /ENOENT/);

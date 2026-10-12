@@ -31,8 +31,8 @@ to preserve its single native worker's prior behavior. For real configurations, 
 old defaults and overrides: canonical agent settings affect selected agents only, and overrides require selected
 targets. Legacy frontmatter group order could differ per agent, while canonical profile layer order controls
 replay for all targets. Compare each affected agent before translating multiple groups; retain differing
-behavior with explicit targeted layers/overrides only after proving equivalence. Preserve current scope masking; a local selection replaces the shared list. Imported files must not
-contain top-level defaults, overrides, or activeProfiles; keep those in scope files.
+behavior with explicit targeted layers/overrides only after proving equivalence. Preserve configured-default scope precedence; a local default list replaces the shared list. Imported files must not
+contain top-level selection, defaults, overrides, or activeProfiles; keep those in scope files.
 
 Validate the candidate and review sources, selected agents, pins, permission outcomes, and
 unchanged native bytes. Save and apply are separate; reload or restart only when requested. Apply affects the current
@@ -42,3 +42,5 @@ variant or `Default` through `/variants`; conversation history is preserved. Rep
 missing source evidence explicitly rather than silently deleting unknown settings or adding a fallback mode.
 
 Prompt composition belongs to `@lunchbox-labs/opencode-prompt-composer`. Do not migrate old prompt operations into config profiles; profile-driven prompt changes have been removed. Preserve ordinary OpenCode agent prompt strings and command templates.
+
+For selection-state migration, move each scoped `activeProfiles` list to `selection.defaultProfiles` in the same file, preserving order, scope precedence and explicit `[]`. Review all scopes together: any configured `selection.defaultProfiles` takes priority over the legacy fallback. Existing fields remain readable until this explicit migration. Profile switching and shortcuts write external per-project state only. `selection.retainOnRestart` defaults to true; false resets on server restart, not a new session or an attached TUI disconnect.

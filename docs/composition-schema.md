@@ -17,7 +17,8 @@ explicit imports, reusable model and permission presets, and profiles that compo
 | `profileShortcuts`     | Named actions with ordered `activeProfiles` and optional `description`.                                        |
 | `defaults`             | Runtime `model`, `small_model`, global `permissions` and selected-agent `agents` defaults.                     |
 | `overrides`            | Runtime `model`, `small_model`, global `permissions` and `agents` settings keyed by exact selected agent name. |
-| `activeProfiles`       | Ordered profile names. Absence inherits; `[]` selects none.                                                    |
+| `selection`            | `defaultProfiles`: ordered configuration profile names; `retainOnRestart`: boolean, default `true`. |
+| `activeProfiles`       | Legacy configured defaults, used when no `selection.defaultProfiles` is supplied.                                                    |
 | `imports`              | Explicit local `.json` or `.jsonc` definition documents in authored order.                                     |
 
 An agent supplies exactly one `file` or inline `prompt`. Optional fields are `description`, `mode`
@@ -124,11 +125,17 @@ action and origin, or native fallback for a nonmatch; it does not invent an `ask
 
 Sources are the shared configured/default file, project `.opencode/config-composer.jsonc`, then local
 `.opencode/config-composer.local.jsonc`. Missing optional scope files are allowed; an explicitly requested
-missing file or a malformed/unreadable file is an error. The highest scope supplying `activeProfiles` replaces
-earlier selections. Omission inherits; `[]` activates no profiles while document defaults/overrides still apply.
+missing file or a malformed/unreadable file is an error. `selection` fields inherit independently across
+shared, project and local sources. The last `defaultProfiles` list replaces earlier lists; `[]` selects none.
+Without that setting, the last legacy `activeProfiles` list supplies defaults. Neither setting is live state.
+A saved external project selection overrides configured defaults until **Use configured defaults** is chosen.
+Document defaults/overrides still apply when no profiles are selected. `retainOnRestart` defaults to `true`;
+`false` uses a server-process namespace that survives instance apply but not server restart. There is no
+session reset setting or cross-package prompt-profile selection. These settings control configuration only.
+See [selection storage and migration](../README.md#shared-project-and-local-settings).
 
 Imports load explicit definition documents in authored order. They may define components, groups, presets,
-profiles and shortcuts, but cannot supply root activation/default/override scopes.
+profiles and shortcuts, but cannot supply root `selection`, legacy activation, defaults or overrides.
 Importing never activates profiles. Paths retain the declaring reference directory, including alias-relative
 paths. Canonical file identities detect cycles and repeated imports; aliases are read-only for editing.
 Duplicate registry names identify both source locations. Automatic directory discovery remains deferred.

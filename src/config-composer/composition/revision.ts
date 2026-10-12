@@ -1,3 +1,4 @@
+import { verifySelection } from './selection-state.ts';
 import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -91,6 +92,9 @@ export function compositionRevision(
 
 /** Check the captured bytes and identities again before publishing or applying a revision. */
 export async function verifyCompositionInputs(sources: LoadedSources, files: readonly SourceFile[]): Promise<void> {
+  if (sources.selectionState !== undefined) {
+    await verifySelection(sources.selectionState);
+  }
   for (const [path, expected] of sources.paths) {
     if ((await identity(path)) !== expected) {
       throw new SettingsError('Composition source identity changed. Reopen the editor.');

@@ -1,3 +1,4 @@
+import { publishSelectionProof, selectionLifetime, selectionStateDirectory } from './composition/selection-state.ts';
 import { validateShortcutCommands } from './composition/shortcuts.ts';
 import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
 import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
@@ -26,7 +27,10 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
   ) {
     throw new SettingsError('Config Composer plugin options support only configFile and an optional reloadToken.');
   }
+  const selectionEnvironment = { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() };
+  await publishSelectionProof(selectionEnvironment);
   const context = {
+    selectionEnvironment,
     root:
       typeof input.worktree === 'string' && input.worktree !== '' && input.worktree !== '/'
         ? input.worktree
@@ -166,7 +170,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
             { root: context.root, directory: input.directory },
             nativeGlobals,
             staged,
-            { observedNativeFiles },
+            { observedNativeFiles, selectionEnvironment },
           );
         }
         throw error;
@@ -260,7 +264,7 @@ const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
         { root: context.root, directory: input.directory },
         nativeGlobals,
         staged,
-        { revision, observedNativeFiles, choices: resolved.choices },
+        { revision, observedNativeFiles, selectionEnvironment, choices: resolved.choices },
       );
       await notifications.applied(resolved.permissionWarnings);
     },

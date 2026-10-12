@@ -91,7 +91,7 @@ async function profileFixture(t: TestContext, name: string) {
   const original = await f.send();
   const originalHistory = await f.history(original.session.id);
   const pinned = await f.send(undefined, 'pinned');
-  const preservedPaths = [nativePath, definitions, f.paths.shared];
+  const preservedPaths = [nativePath, definitions, f.paths.shared, f.paths.local];
   // OpenCode may insert its schema during initial loading. Freeze initialized bytes.
   const preservedBytes = await Promise.all(preservedPaths.map((path) => readFile(path, 'utf8')));
   const nativeBaseline = (await f.editor.runtime()).baseline;
@@ -120,7 +120,7 @@ async function profileFixture(t: TestContext, name: string) {
     const requests = f.host.requests.length;
     const history = await f.history(original.session.id);
     await f.saveScope('local', { operation: 'selection', profiles });
-    assert.deepEqual((await f.document(f.paths.local)).activeProfiles, profiles);
+    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, profiles);
     await f.editor.reload();
     assert.equal(f.host.requests.length, requests, 'selection and scoped apply send no provider request');
     assert.deepEqual(

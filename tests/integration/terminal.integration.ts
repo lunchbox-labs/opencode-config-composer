@@ -20,12 +20,11 @@ test(
     await terminal.choose('Profiles and layer order', 'Active profiles: none', 'Existing conversations are retained');
     await terminal.press('\x1b', 'Saved composition preview');
     await terminal.press('\x1b', 'Compose', 'Profile activation and scope files');
-    await terminal.choose('Profile activation and scope files', 'shared', 'project', 'local');
-    await terminal.choose('shared', 'shared profile selection');
-    await terminal.choose('Create empty composition source', 'Save profile selection?');
-    await terminal.press('\x1b', 'shared profile selection');
+    await terminal.choose('Profile activation and scope files', 'Project profile selection');
+    await terminal.choose('Create shared composition source', 'Save profile selection?');
+    await terminal.press('\x1b', 'Project profile selection');
     assert.equal(await stat(fixture.paths.shared).catch(() => undefined), undefined, 'cancel does not create a source');
-    await terminal.choose('Create empty composition source', 'Save profile selection?');
+    await terminal.choose('Create shared composition source', 'Save profile selection?');
     await terminal.press('\r', 'Settings saved');
     assert.deepEqual(await fixture.document(fixture.paths.shared), {});
     await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
@@ -89,14 +88,13 @@ test(
     assert.equal(authored.activeProfiles, undefined, 'authoring never activates a definition');
     assert.equal(fixture.host.requests.length, 1, 'inspection and editing never send model requests');
     await terminal.command('/compose', 'Compose');
-    await terminal.choose('Profile activation and scope files', 'shared', 'project', 'local');
-    await terminal.choose('shared', 'shared profile selection');
-    await terminal.choose('Edit ordered selection', 'shared: ordered active profiles');
+    await terminal.choose('Profile activation and scope files', 'Project profile selection');
+    await terminal.choose('Edit ordered selection', 'project: ordered active profiles');
     await terminal.choose('Add profile occurrence', 'Choose profile');
     await terminal.choose('work', '1. work');
     await terminal.choose('Save selection', 'Save profile selection?');
     await terminal.press('\r', 'Settings saved');
-    assert.deepEqual((await fixture.document(fixture.paths.shared)).activeProfiles, ['work']);
+    assert.deepEqual((await fixture.editor.snapshot()).sources.activeProfiles, ['work']);
     assert.equal(
       (await fixture.send(original.session.id)).captured.model,
       'alpha',
@@ -174,41 +172,41 @@ test(
     await terminal.press('\x1b', 'Saved composition preview');
     await terminal.press('\x1b', 'Compose');
     await terminal.press('\x1b', 'ctrl+p', 'commands');
-    const scope = async (name: string) => {
+    const selection = async () => {
       await terminal.command('/compose', 'Compose');
-      await terminal.choose('Profile activation and scope files', 'shared', 'project', 'local');
-      await terminal.choose(name, `${name} profile selection`);
+      await terminal.choose('Profile activation and scope files', 'Project profile selection');
     };
     const apply = async () => {
       await terminal.press('\r', 'Settings saved');
       await reloadFromTerminal(f, terminal);
     };
-    await scope('shared');
-    await terminal.choose('Edit ordered selection', 'shared: ordered active profiles');
+    await selection();
+    await terminal.choose('Edit ordered selection', 'project: ordered active profiles');
     await terminal.choose('2. work', 'Profile occurrence 2');
     await terminal.choose('Move earlier', '1. work', '2. focus');
     await terminal.choose('Save selection', 'Save profile selection?');
     await apply();
-    assert.deepEqual((await f.document(f.paths.shared)).activeProfiles, ['work', 'focus']);
+    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['work', 'focus']);
     assert.equal((await f.send(original.session.id)).captured.model, 'alpha');
-    await scope('local');
+    await selection();
     await terminal.choose('Select no profiles', 'Save profile selection?');
     await apply();
-    assert.deepEqual((await f.document(f.paths.local)).activeProfiles, []);
+    assert.equal(await stat(f.paths.local).catch(() => undefined), undefined);
     assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, []);
     assert.equal((await f.send()).captured.model, 'alpha');
-    await scope('local');
-    await terminal.choose('Inherit earlier selection', 'Save profile selection?');
+    await selection();
+    await terminal.choose('Use configured defaults', 'Save profile selection?');
     await apply();
-    assert.equal(Object.hasOwn(await f.document(f.paths.local), 'activeProfiles'), false);
-    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['work', 'focus']);
-    await scope('shared');
-    await terminal.choose('Edit ordered selection', 'shared: ordered active profiles');
-    await terminal.choose('2. focus', 'Profile occurrence 2');
+    assert.equal(await stat(f.paths.local).catch(() => undefined), undefined);
+    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['focus', 'work']);
+    await selection();
+    await terminal.choose('Edit ordered selection', 'project: ordered active profiles');
+    await terminal.choose('1. focus', 'Profile occurrence 1');
     await terminal.choose('Remove occurrence', '1. work');
     await terminal.choose('Save selection', 'Save profile selection?');
     await apply();
-    assert.deepEqual((await f.document(f.paths.shared)).activeProfiles, ['work']);
+    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['work']);
+    assert.equal(await readFile(f.paths.shared, 'utf8'), before);
     assert.equal((await f.send(original.session.id)).captured.model, 'beta');
     assert.ok((await f.history(original.session.id)).some((message) => message.info.id === original.message.info.id));
     assert.equal(

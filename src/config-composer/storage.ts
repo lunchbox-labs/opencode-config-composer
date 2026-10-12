@@ -1,3 +1,4 @@
+import { verifySelection, withSelectionLock, withSelectionUpdate } from './composition/selection-state.ts';
 import { modelEditKey, resetModelBindingEdits } from './composition/model-binding-edits.ts';
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -120,6 +121,7 @@ export interface FilePlan<S extends SourceSnapshot = Snapshot> {
   snapshot: S;
   edits: FileEdit[];
   description: string;
+  selection?: { profiles?: string[] };
   /** Extra inputs observed while validating edits. */
   reads?: SourceFile[];
 }
@@ -310,6 +312,9 @@ async function sourceFile(root: string, path: string): Promise<SourceFile> {
 }
 
 async function observedComposition(sources: LoadedSources): Promise<void> {
+  if (sources.selectionState !== undefined) {
+    await verifySelection(sources.selectionState);
+  }
   for (const [path, expected] of sources.paths) {
     const actual = await realpath(path).catch((error: unknown) => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
@@ -399,6 +404,7 @@ export async function loadEditorSnapshot(
     ),
     baseExplicit: typeof options.configFile === 'string',
     allowEmpty: true,
+    selectionEnvironment: native?.selectionEnvironment,
   };
   const sources = await loadCompositionSources(sourceContext);
   const compositionFiles: SourceFile[] = [];
@@ -1185,7 +1191,7 @@ export async function previewFilePlan(
     overlays.set(edit.file.canonicalPath ?? edit.file.path, edit.text);
   }
   const sources = await loadCompositionSources(
-    plan.snapshot.sourceContext,
+    { ...plan.snapshot.sourceContext, selectionPreview: plan.selection },
     overlays,
     new Set(plan.edits.filter((edit) => edit.create === true).map((edit) => edit.file.path)),
   );
@@ -1195,18 +1201,23 @@ export async function previewFilePlan(
   return { sources, resolved, reads: reads.files };
 }
 
-export async function saveFilePlan(
+async function verifySavedSnapshot(snapshot: SourceSnapshot): Promise<void> {
+  observedNativeVariables(snapshot.nativeVariables);
+  await observedComposition(snapshot.sources);
+  for (const file of snapshot.files) {
+    if ((await observedFile(snapshot.root, file)).text !== file.text) {
+      throw new SettingsError('Settings changed. Reopen the editor before applying. Saved changes are retained.');
+    }
+  }
+  await observedSourceList(snapshot);
+}
+
+async function persistFilePlan(
   plan: FilePlan<SourceSnapshot>,
   validate: () => Promise<void>,
   authorize?: () => Promise<() => void>,
+  commit?: () => Promise<void>,
 ): Promise<void> {
-  if (plan.edits.length === 0) {
-    return;
-  }
-  const lockPath = join(plan.snapshot.root, '.config-composer.lock');
-  const lock = await open(lockPath, 'wx').catch(() => {
-    throw new SettingsError('Another settings edit is active, or a stale .config-composer.lock needs attention.');
-  });
   const applied: FileEdit[] = [];
   const createdDirectories: string[] = [];
   try {
@@ -1278,6 +1289,8 @@ export async function saveFilePlan(
       await atomicWrite(edit.file.path, edit.text, edit.file.mode, edit.create);
       applied.push(edit);
     }
+    assertAuthorized?.();
+    await commit?.();
   } catch (error) {
     let incomplete = false;
     for (const edit of applied.reverse()) {
@@ -1304,6 +1317,41 @@ export async function saveFilePlan(
       );
     }
     throw error;
+  }
+}
+
+export async function saveFilePlan(
+  plan: FilePlan<SourceSnapshot>,
+  validate: () => Promise<void>,
+  authorize?: () => Promise<() => void>,
+): Promise<void> {
+  if (plan.edits.length === 0 && plan.selection === undefined) {
+    return;
+  }
+  const lockPath = join(plan.snapshot.root, '.config-composer.lock');
+  const lock = await open(lockPath, 'wx').catch(() => {
+    throw new SettingsError('Another settings edit is active, or a stale .config-composer.lock needs attention.');
+  });
+  try {
+    if (plan.selection === undefined) {
+      await persistFilePlan(plan, validate, authorize);
+      return;
+    }
+    const state = plan.snapshot.sources.selectionState;
+    if (state === undefined) {
+      throw new SettingsError('The server did not publish its selection state location. Restart OpenCode.');
+    }
+    await withSelectionUpdate(state, plan.selection.profiles, async (commit) => {
+      await persistFilePlan(
+        plan,
+        async () => {
+          await previewFilePlan(plan);
+          await validate();
+        },
+        authorize,
+        commit,
+      );
+    });
   } finally {
     await lock.close();
     await unlink(lockPath);
@@ -1393,19 +1441,12 @@ export async function withSavedSnapshot<T>(
   const lock = await open(lockPath, 'wx').catch(() => {
     throw new SettingsError('Another settings edit is active. Apply after it finishes. Saved changes are retained.');
   });
-  const verify = async () => {
-    observedNativeVariables(snapshot.nativeVariables);
-    await observedComposition(snapshot.sources);
-    for (const file of snapshot.files) {
-      if ((await observedFile(snapshot.root, file)).text !== file.text) {
-        throw new SettingsError('Settings changed. Reopen the editor before applying. Saved changes are retained.');
-      }
-    }
-    await observedSourceList(snapshot);
-  };
+  const verify = () => verifySavedSnapshot(snapshot);
   try {
     await verify();
-    return await operation(verify);
+    return snapshot.sources.selectionState === undefined
+      ? await operation(verify)
+      : await withSelectionLock(snapshot.sources.selectionState, () => operation(verify));
   } finally {
     await lock.close();
     await unlink(lockPath);

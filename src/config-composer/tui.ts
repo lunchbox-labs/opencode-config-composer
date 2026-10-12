@@ -1,3 +1,4 @@
+import { verifySelectionProof } from './composition/selection-state.ts';
 import { verifyNativeAgents } from './composition/native-baseline.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { realpath } from 'node:fs/promises';
@@ -52,7 +53,7 @@ import { openRunning, readRunningInspection } from './tui/running.ts';
 import { openAuthoring } from './tui/authoring.ts';
 import { type DefinitionChange, planDefinition } from './composition/authoring.ts';
 import { profileShortcutRegistration } from './tui/shortcuts.ts';
-import { planScope, scopeDestinations } from './composition/activation.ts';
+import { planScope, planSelection } from './composition/activation.ts';
 import { openParameters } from './tui/parameters.ts';
 import { planParameter } from './composition/parameter-authoring.ts';
 import { parameterReview, validateParameterChoice } from './composition/parameter-review.ts';
@@ -109,10 +110,26 @@ export function registerSettings(
       typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
         ? path.worktree
         : (path.directory ?? directory);
-    return readRuntimeBaseline(response.data, { root, directory: path.directory ?? root }, directory);
+    const baseline = readRuntimeBaseline(response.data, { root, directory: path.directory ?? root }, directory);
+    const hostState = api.state.path.state;
+    if (
+      baseline.selectionEnvironment !== undefined &&
+      typeof hostState === 'string' &&
+      resolve(baseline.selectionEnvironment.stateDirectory) !== resolve(hostState)
+    ) {
+      throw new SettingsError(
+        'The server selection state directory differs from OpenCode. Restart with matching state paths.',
+      );
+    }
+    return baseline;
   };
   const refreshNative = async (snapshot: Snapshot) => {
     const models = await readNative();
+    if (!isDeepStrictEqual(snapshot.nativeModels.selectionEnvironment, models.selectionEnvironment)) {
+      throw new SettingsError(
+        'The server selection lifetime or state directory changed. Reopen the editor after restart.',
+      );
+    }
     if (
       !isDeepStrictEqual(snapshot.nativeModels.agent, models.agent) ||
       snapshot.nativeModels.default_agent !== models.default_agent ||
@@ -230,9 +247,9 @@ export function registerSettings(
   };
   const authorizePlan = async (plan: FilePlan<SourceSnapshot>) => {
     const { assertCurrent, client } = await connection(plan.snapshot.root);
-    const projectWrite = plan.edits.some(
-      (edit) => edit.file.writeRoot !== undefined && edit.file.writeRoot !== plan.snapshot.root,
-    );
+    const projectWrite =
+      plan.selection !== undefined ||
+      plan.edits.some((edit) => edit.file.writeRoot !== undefined && edit.file.writeRoot !== plan.snapshot.root);
     const assertProject = () => {
       assertCurrent();
       if (projectWrite && currentProject(plan.snapshot.root) !== plan.snapshot.sourceContext.root) {
@@ -245,6 +262,9 @@ export function registerSettings(
       if (verified !== client) {
         throw new SettingsError('The server connection changed. Reopen the editor.');
       }
+    }
+    if (plan.snapshot.nativeModels.selectionEnvironment !== undefined) {
+      await verifySelectionProof(plan.snapshot.nativeModels.selectionEnvironment);
     }
     assertProject();
     return assertProject;
@@ -1065,7 +1085,7 @@ export function registerSettings(
     confirm(
       review?.title ?? (change === undefined ? 'Save profile selection?' : 'Save composition definition?'),
       permissionReview(preview.resolved.permissionWarnings) +
-        `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+        `${plan.description}\n\n${plan.selection === undefined ? plan.edits.map((edit) => edit.file.path).join('\n') : plan.snapshot.sources.selectionState?.path}\n\n` +
         (review === undefined ? '' : `${review.details}\n\n`) +
         `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
         `Changed global models: ${globals.length === 0 ? 'none' : globals.map(({ field, model }) => `${field}: ${model}`).join(', ')}.\n` +
@@ -1162,7 +1182,7 @@ export function registerSettings(
       review: async (draft) => {
         const current = navigation.checkpoint();
         const plan = planMembershipRepair(snapshot, draft);
-        if (plan.edits.length === 0) {
+        if (plan.edits.length === 0 && plan.selection === undefined) {
           throw new SettingsError('Choose membership repairs or a scoped profile selection before reviewing.');
         }
         const preview = await previewFilePlan(plan);
@@ -1181,7 +1201,7 @@ export function registerSettings(
         confirm(
           'Save membership repair?',
           permissionReview(preview.resolved.permissionWarnings) +
-            `${plan.description}\n\n${plan.edits.map((edit) => edit.file.path).join('\n')}\n\n` +
+            `${plan.description}\n\n${plan.selection === undefined ? plan.edits.map((edit) => edit.file.path).join('\n') : plan.snapshot.sources.selectionState?.path}\n\n` +
             'The previous saved configuration is invalid; no effective before-state is available.\n' +
             `Validated candidate profiles: ${preview.sources.activeProfiles.length === 0 ? 'none' : preview.sources.activeProfiles.join(' → ')}.\n` +
             `Selected agents: ${preview.resolved.selectedAgents.length === 0 ? 'none' : preview.resolved.selectedAgents.join(', ')}.\n` +
@@ -1230,27 +1250,11 @@ export function registerSettings(
         throw new SettingsError('The shortcut changed. Refresh shortcuts in Compose.');
       }
       const selection = shortcut.activeProfiles;
-      menu(
-        `/${name}: save profile selection in…`,
-        scopeDestinations(snapshot).map((destination) => ({
-          title: destination.scope,
-          value: destination.scope,
-          description: `${destination.path} · profiles: ${selection.length === 0 ? 'none' : selection.join(' → ')}${destination.maskedBy === undefined ? '' : ` · masked by ${destination.maskedBy}`}${destination.writable ? '' : ' · read-only'}`,
-          run: () =>
-            proposeComposition(
-              snapshot,
-              planScope(snapshot, destination.scope, { operation: 'selection', profiles: [...selection] }),
-              undefined,
-              {
-                title: `Save /${name} profile selection?`,
-                validate,
-                details: `Shortcut /${name}: ${selection.length === 0 ? 'none' : selection.join(' → ')}\nDestination: ${destination.scope} · ${destination.path}${destination.maskedBy === undefined ? '' : `\nMasked by ${destination.maskedBy} selection`}`,
-              },
-            ),
-        })),
-        undefined,
-        true,
-      );
+      return proposeComposition(snapshot, planSelection(snapshot, [...selection]), undefined, {
+        title: `Save /${name} profile selection?`,
+        validate,
+        details: `Shortcut /${name}: ${selection.length === 0 ? 'none' : selection.join(' → ')}\nProject selection`,
+      });
     },
     run,
     () => navigation.checkpoint(),
@@ -1424,7 +1428,13 @@ export function registerSettings(
             openActivation(snapshot, {
               menu,
               back: navigation.back,
-              propose: (scope, change) => proposeComposition(snapshot, planScope(snapshot, scope, change)),
+              propose: (scope, change) =>
+                proposeComposition(
+                  snapshot,
+                  change.operation === 'selection'
+                    ? planSelection(snapshot, change.profiles)
+                    : planScope(snapshot, scope, change),
+                ),
             });
           },
         },

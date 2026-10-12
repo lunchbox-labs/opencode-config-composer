@@ -66,7 +66,7 @@ test(
     });
 
     await t.test(
-      'a native source added during asynchronous validation aborts before creating a local selection',
+      'a native source added during asynchronous validation aborts before saving external project selection',
       async () => {
         const late = join(f.host.project, '.opencode/agents/late.md');
         const plan = f.activation.planScope(await f.editor.snapshot(), 'local', {
@@ -86,7 +86,10 @@ test(
           );
           assert.equal(added, true, 'rejection happens after the validation callback adds the source');
           await absent(f.paths.local);
-          assert.deepEqual((await f.document(f.paths.shared)).activeProfiles, ['work']);
+          assert.deepEqual(
+            f.editor.storage.parseConfig(await readFile(plan.snapshot.sources.selectionState!.path, 'utf8')).selection,
+            { mode: 'override', profiles: ['work'] },
+          );
           await expectModel('beta');
         } finally {
           await rm(late, { force: true });
@@ -95,39 +98,40 @@ test(
     );
 
     await t.test(
-      'project replacement, local ordering, explicit empty and inheritance affect actual dispatch',
+      'project selection order, explicit empty and configured defaults affect dispatch without source writes',
       async () => {
+        const bytes = await readFile(f.paths.shared, 'utf8');
         await select('project', ['focus']);
         await expectModel('alpha');
         await select('local', ['focus', 'work']);
         await expectModel('beta');
-        assert.deepEqual((await f.document(f.paths.local)).activeProfiles, ['focus', 'work']);
+        assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['focus', 'work']);
         await select('local', ['work', 'focus']);
         await expectModel('alpha');
         await select('local', []);
         await expectModel('alpha');
         assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, []);
         await select('local');
-        assert.equal(Object.hasOwn(await f.document(f.paths.local), 'activeProfiles'), false);
-        assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['focus']);
-        await select('project');
-        await expectModel('beta');
-        assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['work']);
-        await select('local', []);
-        await expectModel('alpha');
-        const scopes = f.activation.scopeDestinations(await f.editor.snapshot());
-        assert.equal(scopes.find((scope) => scope.scope === 'shared')?.maskedBy, 'local');
+        assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, []);
+        assert.equal(await readFile(f.paths.shared, 'utf8'), bytes);
+        await absent(f.paths.project);
+        await absent(f.paths.local);
       },
     );
 
     await t.test('invalid selection and concurrent first-source creation preserve all existing bytes', async () => {
-      const before = await Promise.all(Object.values(f.paths).map((path) => readFile(path, 'utf8')));
+      const before = await Promise.all(
+        Object.values(f.paths).map((path) => readFile(path, 'utf8').catch(() => undefined)),
+      );
       await assert.rejects(
         f.saveScope('local', { operation: 'selection', profiles: ['missing'] }),
         /Unknown.*profile|profile.*not found/i,
       );
-      assert.deepEqual(await Promise.all(Object.values(f.paths).map((path) => readFile(path, 'utf8'))), before);
-      await rm(f.paths.local);
+      assert.deepEqual(
+        await Promise.all(Object.values(f.paths).map((path) => readFile(path, 'utf8').catch(() => undefined))),
+        before,
+      );
+      await mkdir(dirname(f.paths.local), { recursive: true });
       const plan = f.activation.planScope(await f.editor.snapshot(), 'local', { operation: 'create' });
       const concurrent = '// Concurrent author\n{"activeProfiles":[]}\n';
       await writeFile(f.paths.local, concurrent);

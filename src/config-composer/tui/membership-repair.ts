@@ -122,7 +122,7 @@ export function openMembershipRepair(snapshot: RepairSnapshot, ui: RepairUi): vo
     })),
     { title: 'Define a missing component group…', value: '+group', run: newGroup },
     {
-      title: 'Change scoped profile selection…',
+      title: 'Change project profile selection…',
       value: '+activation',
       run: () =>
         openActivation(snapshot, {

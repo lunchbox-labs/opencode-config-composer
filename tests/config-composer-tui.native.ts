@@ -107,9 +107,14 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
         { env, timeout: 130_000, maxBuffer: 1_000_000 },
       );
       assert.match(result.stdout, /native TUI saved and applied profile shortcut/);
-      assert.deepEqual(JSON.parse(await readFile(join(project, '.opencode/config-composer.local.jsonc'), 'utf8')), {
-        activeProfiles: [],
-      });
+      await assert.rejects(readFile(join(project, '.opencode/config-composer.local.jsonc')), /ENOENT/);
+      const { readSelection } = await import('../src/config-composer/composition/selection-state.ts');
+      const selected = await readSelection(
+        { stateDirectory: join(root, 'state/opencode'), lifetime: 'inspection' },
+        { root: project, baseFile: join(configRoot, 'config-composer.jsonc') },
+        true,
+      );
+      assert.deepEqual(selected.profiles, []);
       assert.deepEqual(
         (JSON.parse(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8')) as { activeProfiles: string[] })
           .activeProfiles,

@@ -19,13 +19,12 @@ Recorded session/request/response values do not reveal the current unsent TUI se
 request parameters. State those limits explicitly. Inspection does not apply settings or send a prompt, and remains
 usable for native observations when saved composition is invalid. Values under credential-like option keys are redacted.
 
-State the active selection, replay order, matching contribution, and native fallback. Local `activeProfiles`
-replaces the shared/project list; an absent key inherits and `[]` selects none. Definitions alone activate nothing.
+Read the current project selection from Compose; config files contain declarative defaults, not live selection. State the active selection, replay order, matching contribution, and native fallback. When no scope defines `selection.defaultProfiles`, legacy `activeProfiles` supplies fallback defaults: a later scope replaces the earlier list, an absent key inherits, and `[]` selects none. Definitions alone activate nothing.
 A later matching permission rule wins even if looser. An unsupported scope skips its Composer permissions,
 warns, and can become more permissive. Session approvals are outside configured previews.
 
 `profileShortcuts` declares named TUI actions with an ordered `activeProfiles` list and optional description.
-Invoking one chooses shared, project, or local scope, then previews and saves through Composer's normal flow.
+Invoking one previews and saves the current project selection in external state, without editing configuration.
 An empty list selects none. Declaring a shortcut does not activate it, apply settings, or send a model prompt.
 Native prompt-command and TUI alias collisions require a different shortcut name; refresh shortcuts in `/compose`
 after editing their definitions.

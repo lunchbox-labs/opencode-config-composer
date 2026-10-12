@@ -1,0 +1,23 @@
+{
+  "$schema": "https://unpkg.com/@lunchbox-labs/opencode-config-composer/schema.json",
+  "componentGroups": { "coding": { "agents": ["build", "plan"] } },
+  "configurationPresets": {
+    "development": { "permissions": [{ "tool": "edit", "action": "ask" }] },
+    "review": { "permissions": [{ "tool": "edit", "action": "deny" }] }
+  },
+  "profiles": {
+    "development": {
+      "layers": [
+        { "componentGroup": "coding" },
+        { "configurationPreset": "development", "target": { "componentGroups": ["coding"] } }
+      ]
+    },
+    "review": {
+      "layers": [
+        { "componentGroup": "coding" },
+        { "configurationPreset": "review", "target": { "componentGroups": ["coding"] } }
+      ]
+    }
+  },
+  "selection": { "defaultProfiles": ["development"], "retainOnRestart": true }
+}

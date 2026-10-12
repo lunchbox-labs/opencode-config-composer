@@ -137,44 +137,32 @@ test(
     const bytes = async () =>
       Promise.all([f.paths.shared, f.paths.local, nativePath].map((path) => readFile(path, 'utf8')));
     const before = await bytes();
-    await terminal.command('/code', '/code: save profile selection in', 'shared', 'project', 'local');
-    await terminal.choose(
-      'shared',
+    await terminal.command(
+      '/code',
       'Save /code profile selection?',
       'Shortcut /code: focus → work',
-      'Destination: shared',
-      'Masked by local selection',
+      'Project selection',
       'Confirm',
       'Cancel',
     );
     assert.deepEqual(await bytes(), before, 'review precedes every write');
-    await terminal.press('\x1b', '/code: save profile selection in');
+    await terminal.press('\x1b', 'ctrl+p', 'commands');
     assert.deepEqual(await bytes(), before, 'cancel preserves comments and native configuration bytes');
-    assert.equal(f.host.requests.length, 1, 'opening a registered slash action and cancelling sends no model request');
-
-    await terminal.choose('shared', 'Save /code profile selection?', 'Masked by local selection');
-    await terminal.press('\r', 'Settings saved', 'Saved Composer revision', 'pending');
-    assert.deepEqual((await f.document(f.paths.shared)).activeProfiles, ['focus', 'work']);
-    assert.equal(await readFile(f.paths.local, 'utf8'), before[1]);
-    assert.equal((await f.send()).captured.model, 'alpha', 'a shared selection remains masked by explicit local none');
-    await reloadFromTerminal(f, terminal);
-    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, []);
-    assert.equal((await f.send()).captured.model, 'alpha', 'applying masked shared profiles does not activate them');
+    assert.equal(f.host.requests.length, 1, 'cancelling sends no model request');
 
     const save = async (command: string, selection: string) => {
       const requests = f.host.requests.length;
-      await terminal.command(`/${command}`, `/${command}: save profile selection in`);
-      await terminal.choose(
-        'local',
+      await terminal.command(
+        `/${command}`,
         `Save /${command} profile selection?`,
         `Shortcut /${command}: ${selection}`,
-        'Destination: local',
+        'Project selection',
       );
       await terminal.press('\r', 'Settings saved', 'Saved Composer revision', 'pending');
       assert.equal(f.host.requests.length, requests, 'shortcut save sends no model request');
     };
     await save('code', 'focus → work');
-    assert.deepEqual((await f.document(f.paths.local)).activeProfiles, ['focus', 'work']);
+    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['focus', 'work']);
     assert.equal(
       (await f.send(original.session.id)).captured.model,
       'alpha',
@@ -202,10 +190,11 @@ test(
     };
     await check('beta', 0.7, 0.8);
     await save('reverse', 'work → focus');
-    assert.deepEqual((await f.document(f.paths.local)).activeProfiles, ['work', 'focus']);
+    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, ['work', 'focus']);
     assert.equal((await f.send()).captured.model, 'beta', 'reverse order is pending until applied');
     await reloadFromTerminal(f, terminal);
     await check('alpha', 0.2, 0.6);
+    assert.deepEqual(await bytes(), before, 'profile switches preserve every configuration byte');
 
     const selected = await f.host.api<NativeMessage>(`/session/${original.session.id}/message`, {
       agent: 'worker',
@@ -215,7 +204,7 @@ test(
     assert.equal(selected.info.error, undefined);
     assert.equal(f.host.requests.at(-1)!.model, 'beta', 'the real conversation chooses a different session model');
     await save('quiet', 'none');
-    assert.deepEqual((await f.document(f.paths.local)).activeProfiles, []);
+    assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, []);
     await reloadFromTerminal(f, terminal);
     assert.deepEqual((await f.editor.snapshot()).sources.activeProfiles, []);
     const retained = await f.send(original.session.id);
@@ -278,9 +267,7 @@ test(
     await refresh();
     await registry(named('code', 'Profiles: work → focus'));
     await terminal.press('\x1b', 'ctrl+p', 'commands');
-    await terminal.command('/code', '/code: save profile selection in');
-    await terminal.choose('local', 'Shortcut /code: work → focus', 'Save /code profile selection?');
-    await terminal.press('\x1b', '/code: save profile selection in');
+    await terminal.command('/code', 'Shortcut /code: work → focus', 'Save /code profile selection?');
     await terminal.press('\x1b', 'ctrl+p', 'commands');
     assert.equal(await readFile(f.paths.shared, 'utf8'), bytes);
 
