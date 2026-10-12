@@ -128,7 +128,7 @@ missing file or a malformed/unreadable file is an error. The highest scope suppl
 earlier selections. Omission inherits; `[]` activates no profiles while document defaults/overrides still apply.
 
 Imports load explicit definition documents in authored order. They may define components, groups, presets,
-profiles, shortcuts and source directories, but cannot supply root activation/default/override scopes.
+profiles and shortcuts, but cannot supply root activation/default/override scopes.
 Importing never activates profiles. Paths retain the declaring reference directory, including alias-relative
 paths. Canonical file identities detect cycles and repeated imports; aliases are read-only for editing.
 Duplicate registry names identify both source locations. Automatic directory discovery remains deferred.
