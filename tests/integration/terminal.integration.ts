@@ -236,14 +236,28 @@ test(
     await terminal.press('\x1b', 'Compose configs');
     await writeFile(fixture.paths.shared, before);
     for (let index = 0; index < 2; index++) {
-      await terminal.choose('Last editor error', 'Last editor error', 'JSON');
+      await terminal.choose('Last editor error', 'Last editor error', 'Project:', 'JSON');
       await terminal.press('\x1b', 'Compose configs');
     }
     await terminal.choose('Effective configuration and sources', 'Saved composition preview');
     await terminal.press('\x1b', 'Compose configs');
-    await terminal.choose('Last editor error', 'Last editor error', 'JSON');
+    await terminal.choose('Last editor error', 'Last editor error', 'Project:', 'JSON');
     await terminal.press('\x1b', 'Compose configs');
     await terminal.press('\x1b', 'ctrl+p', 'commands');
+    await writeFile(
+      fixture.paths.shared,
+      JSON.stringify({ imports: ['./' + 'long-segment/'.repeat(80) + 'END.jsonc'] }),
+    );
+    await terminal.command('/compose-configs', 'Compose configs');
+    await terminal.choose('Effective configuration and sources', 'Could not read import');
+    await terminal.choose('Last editor error', 'Details 1 of');
+    const count = /Details 1 of (\d+)/.exec(terminal.text())?.[1];
+    assert.ok(count !== undefined && Number(count) > 1);
+    await terminal.choose(`Details ${count} of ${count}`, 'Last editor error', 'END.jsonc');
+    await terminal.press('\x1b', 'Details 1 of');
+    await terminal.press('\x1b', 'Compose configs');
+    await terminal.press('\x1b', 'ctrl+p', 'commands');
+    await writeFile(fixture.paths.shared, before);
     await terminal.command('/agent-groups', 'Agent groups');
     await terminal.choose('All agents', 'Agents');
     await terminal.choose('worker', 'Manage groups');
@@ -256,7 +270,7 @@ test(
     await terminal.choose('Save groups', 'Save agent settings?');
     await terminal.press('\r', 'worker: groups', 'Last editor error');
     for (let index = 0; index < 2; index++) {
-      await terminal.choose('Last editor error', 'Last editor error', 'changed');
+      await terminal.choose('Last editor error', 'Last editor error', 'Project:', 'changed');
       await terminal.press('\x1b', 'worker: groups');
     }
     await terminal.press('\x15', '1. team');

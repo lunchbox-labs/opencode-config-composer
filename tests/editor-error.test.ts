@@ -31,3 +31,14 @@ test('unexpected failures expose no raw diagnostic payload or stack', () => {
   assert.equal(result, 'Could not update settings. Check the files and server connection.');
   assert.equal(editorErrorText({ apiKey: 'secret' }), result);
 });
+
+test('long diagnostics are divided into readable pages without dropping the final source segment', async () => {
+  const { diagnosticPages } = await import('../src/config-composer/tui/editor-error.ts');
+  const message = '/imports/' + 'long-path/'.repeat(70) + 'source.jsonc:123\nFinal validation detail';
+  const pages = diagnosticPages(message, 40, 5);
+  assert.ok(pages.length > 1);
+  assert.ok(pages.every((page) => page.split('\n').length <= 5));
+  assert.ok(pages.every((page) => page.split('\n').every((line) => line.length <= 40)));
+  assert.equal(pages.join('').replaceAll('\n', ''), message.replaceAll('\n', ''));
+  assert.match(pages.at(-1)!, /Final validation detail/);
+});
