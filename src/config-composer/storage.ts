@@ -1289,8 +1289,8 @@ async function persistFilePlan(
       }
       if (edit.create !== true) {
         const before = await sourceFile(writeRoot, edit.file.path);
-        if (before.text !== edit.file.text || before.writable === false) {
-          throw new SettingsError('Settings changed or became read-only before saving. Reopen the editor.');
+        if (before.text !== edit.file.text || before.mode !== edit.file.mode || before.writable === false) {
+          throw new SettingsError('Settings changed or permissions changed before saving. Reopen the editor.');
         }
       }
       assertAuthorized?.();

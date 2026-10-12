@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { type TestContext, test } from 'node:test';
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,6 +11,7 @@ import {
   planChange,
   plannedChoices,
   reloadConfiguration,
+  saveFilePlan,
   savePlan,
 } from '../src/config-composer/storage.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
@@ -55,6 +56,28 @@ async function fixture(t: TestContext) {
   );
   return root;
 }
+
+test('saving rejects permission changes made during validation without restoring stale access', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows does not support POSIX group and other permission bits');
+    return;
+  }
+  const root = await fixture(t);
+  const path = join(root, 'config-composer.jsonc');
+  await chmod(path, 0o664);
+  const original = await readFile(path, 'utf8');
+  const plan = planChange(await loadSnapshot(root), {
+    kind: 'group',
+    name: 'work',
+    choice: { model: 'fixture/b' },
+  });
+  await assert.rejects(
+    saveFilePlan(plan, () => chmod(path, 0o600)),
+    /Settings changed/,
+  );
+  assert.equal(await readFile(path, 'utf8'), original);
+  assert.equal((await stat(path)).mode & 0o777, 0o600);
+});
 
 test('canonical editor opens selected built-ins and custom agents and preserves unrelated preset settings and resets parameters on model edits', async (t) => {
   const root = await fixture(t);
