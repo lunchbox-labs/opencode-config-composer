@@ -249,7 +249,7 @@ test(
       JSON.stringify({ imports: ['./' + 'long-segment/'.repeat(80) + 'END.jsonc'] }),
     );
     await terminal.command('/compose-configs', 'Compose configs');
-    await terminal.choose('Effective configuration and sources', 'Could not read import');
+    await terminal.choose('Effective configuration and sources', 'Compose configs', 'Search…');
     await terminal.choose('Last editor error', 'Details 1 of');
     const count = /Details 1 of (\d+)/.exec(terminal.text())?.[1];
     assert.ok(count !== undefined && Number(count) > 1);
@@ -268,13 +268,16 @@ test(
     const changed = (await readFile(nativePath, 'utf8')) + '\n// external change\n';
     await writeFile(nativePath, changed);
     await terminal.choose('Save groups', 'Save agent settings?');
-    await terminal.press('\r', 'worker: groups', 'Last editor error');
+    await terminal.press('\r', 'worker: groups', 'Last editor error', 'Settings changed');
     for (let index = 0; index < 2; index++) {
       await terminal.choose('Last editor error', 'Last editor error', 'Project:', 'changed');
       await terminal.press('\x1b', 'worker: groups');
     }
     await terminal.press('\x15', '1. team');
     await terminal.press('\x1b', 'Manage groups');
+    await terminal.choose('Last editor error', 'Last editor error', 'Project:', 'changed');
+    await fixture.host.api('/instance/dispose', {});
+    await terminal.wait(['No editor error in this project and instance.']);
     assert.equal(await readFile(nativePath, 'utf8'), changed);
     assert.equal(await readFile(fixture.paths.shared, 'utf8'), before);
     assert.equal(fixture.host.requests.length, 0);
