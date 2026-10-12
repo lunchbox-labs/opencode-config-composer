@@ -1085,6 +1085,31 @@ export function registerSettings(
     if (!isCurrent()) {
       return;
     }
+    if (change?.registry === 'configurationPresets' && change.operation === 'create') {
+      const target = {
+        sourceId: change.sourceId,
+        path: ['configurationPresets', change.name],
+        label: `Preset: ${change.name}`,
+      };
+      const reviewPreset = async (value: typeof preview) => {
+        const bound =
+          editorSettings(value.sources, snapshot.nativeModels).modelPresets[change.name].model !== undefined;
+        return parameterReview(snapshot, target, value, bound ? await models() : []);
+      };
+      const details = await reviewPreset(preview);
+      if (!isCurrent()) {
+        return;
+      }
+      const previousReview = review;
+      review = {
+        title: previousReview?.title ?? 'Save composition definition?',
+        details: [previousReview?.details, details].filter((value) => value !== undefined).join('\n\n'),
+        validate: async (value) => {
+          await previousReview?.validate?.(value);
+          await reviewPreset(value);
+        },
+      };
+    }
     const projection = (value: typeof preview) =>
       JSON.stringify({
         model: value.resolved.model,
@@ -1175,34 +1200,8 @@ export function registerSettings(
       },
     );
   };
-  const proposeDefinition = async (snapshot: Snapshot, change: DefinitionChange) => {
-    const plan = planDefinition(snapshot, change);
-    if (change.registry !== 'configurationPresets' || change.operation !== 'create') {
-      return proposeComposition(snapshot, plan, change);
-    }
-    const current = navigation.checkpoint();
-    const target = {
-      sourceId: change.sourceId,
-      path: ['configurationPresets', change.name],
-      label: `Preset: ${change.name}`,
-    };
-    const review = async (preview: Awaited<ReturnType<typeof previewFilePlan>>) => {
-      const bound =
-        editorSettings(preview.sources, snapshot.nativeModels).modelPresets[change.name].model !== undefined;
-      return parameterReview(snapshot, target, preview, bound ? await models() : []);
-    };
-    const details = await review(await previewFilePlan(plan));
-    if (!current()) {
-      return;
-    }
-    return proposeComposition(snapshot, plan, change, {
-      title: 'Save composition definition?',
-      details,
-      validate: async (preview) => {
-        await review(preview);
-      },
-    });
-  };
+  const proposeDefinition = (snapshot: Snapshot, change: DefinitionChange) =>
+    proposeComposition(snapshot, planDefinition(snapshot, change), change);
   const repairMenu = async () => {
     const current = navigation.checkpoint();
     const { root } = await connection();

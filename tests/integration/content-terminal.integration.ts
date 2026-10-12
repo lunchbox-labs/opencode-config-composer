@@ -6,6 +6,82 @@ import { nativeTerminal } from './terminal.ts';
 import { reloadFromTerminal } from './terminal-editor.ts';
 
 test(
+  'real terminal creates inactive model, reference and staged parameter presets without intermediate writes',
+  { timeout: 240_000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'preset-create-terminal');
+    await f.write(f.paths.shared, {
+      configurationPresets: { base: { model: 'fixture/alpha', variant: 'high' } },
+      defaults: { small_model: 'fixture/beta' },
+    });
+    await f.host.start();
+    const original = await f.send();
+    const terminal = await nativeTerminal(f.host, original.session.id, 'preset-create-terminal');
+    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
+    const create = async (name: string) => {
+      await terminal.command('/compose-configs', 'Compose configs');
+      await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
+      await terminal.choose('Configuration presets', 'Create definition');
+      await terminal.choose('Create definition', 'New configuration presets name');
+      await terminal.press(`${name}\r`, 'Save new definition in');
+      await terminal.press('\r', 'New configuration preset');
+    };
+    await create('budget');
+    const before = await readFile(f.paths.shared, 'utf8');
+    await terminal.choose('Parameter-only preset', 'New preset: staged parameters');
+    await terminal.choose('Review and create preset', 'at least one');
+    await terminal.press('\x15', 'Search');
+    await terminal.choose('maxOutputTokens', 'maxOutputTokens: blank removes this local value');
+    await terminal.press('0\r', 'Use temperature');
+    await terminal.press('\x15' + '128\r', 'New preset: staged parameters');
+    assert.equal(await readFile(f.paths.shared, 'utf8'), before);
+    await terminal.choose('Review and create preset', 'Save composition definition?', 'checked at dispatch');
+    await terminal.press('\x1b', 'New preset: staged parameters');
+    assert.equal(await readFile(f.paths.shared, 'utf8'), before);
+    await terminal.choose('maxOutputTokens', 'maxOutputTokens: blank removes this local value');
+    await terminal.press('\x15' + '256\r', 'New preset: staged parameters');
+    await terminal.choose('Review and create preset', 'Save composition definition?');
+    await terminal.press('\r', 'Settings saved');
+    await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
+    assert.deepEqual((await f.document(f.paths.shared)).configurationPresets?.budget, {
+      parameters: { maxOutputTokens: 256 },
+    });
+    for (const [name, reference] of [
+      ['following', 'opencode:model'],
+      ['small', 'opencode:small_model'],
+      ['linked', 'preset:base'],
+    ]) {
+      await create(name);
+      await terminal.choose('Exact model reference', 'New preset: model reference');
+      await terminal.choose(reference, 'Save composition definition?');
+      await terminal.press('\r', 'Settings saved');
+      await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
+      assert.deepEqual((await f.document(f.paths.shared)).configurationPresets?.[name], { modelRef: reference });
+    }
+    await create('concrete');
+    await terminal.choose('Concrete model', 'New configuration preset');
+    await terminal.choose('Fixture Beta', 'Fixture Beta: variant');
+    await terminal.choose('Model default', 'Save composition definition?');
+    await terminal.press('\r', 'Settings saved');
+    await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
+    assert.deepEqual((await f.document(f.paths.shared)).configurationPresets?.concrete, { model: 'fixture/beta' });
+    await create('stale');
+    await terminal.choose('Parameter-only preset', 'New preset: staged parameters');
+    await terminal.choose('topP', 'topP: blank removes this local value');
+    await terminal.press('0.8\r', 'New preset: staged parameters');
+    await terminal.choose('Review and create preset', 'Save composition definition?');
+    const concurrent = (await readFile(f.paths.shared, 'utf8')) + '\n// external edit';
+    await writeFile(f.paths.shared, concurrent);
+    await terminal.press('\r', 'changed');
+    assert.equal(await readFile(f.paths.shared, 'utf8'), concurrent);
+    assert.deepEqual((await f.document(f.paths.shared)).activeProfiles, undefined);
+    assert.match(concurrent, /Preserve fixture comments/);
+    assert.equal((await f.send(original.session.id)).captured.model, original.captured.model);
+    assert.ok((await f.history(original.session.id)).some((message) => message.info.id === original.message.info.id));
+  },
+);
+
+test(
   'real terminal validates, cancels, saves, applies and resets typed model parameters',
   { timeout: 240_000 },
   async (t) => {
@@ -143,81 +219,5 @@ test(
     assert.equal(JSON.stringify(await f.host.api('/agent')), running);
     assert.equal(f.host.requests.length, 1);
     assert.match(await readFile(f.paths.shared, 'utf8'), /Preserve fixture comments/);
-  },
-);
-
-test(
-  'real terminal creates inactive model, reference and staged parameter presets without intermediate writes',
-  { timeout: 240_000 },
-  async (t) => {
-    const f = await compositionFixture(t, 'preset-create-terminal');
-    await f.write(f.paths.shared, {
-      configurationPresets: { base: { model: 'fixture/alpha', variant: 'high' } },
-      defaults: { small_model: 'fixture/beta' },
-    });
-    await f.host.start();
-    const original = await f.send();
-    const terminal = await nativeTerminal(f.host, original.session.id, 'preset-create-terminal');
-    await terminal.wait(['Acceptance conversation', 'verified', 'ctrl+p', 'commands']);
-    const create = async (name: string) => {
-      await terminal.command('/compose-configs', 'Compose configs');
-      await terminal.choose('Author groups, presets and profiles', 'Composition definitions');
-      await terminal.choose('Configuration presets', 'Create definition');
-      await terminal.choose('Create definition', 'New configuration presets name');
-      await terminal.press(`${name}\r`, 'Save new definition in');
-      await terminal.press('\r', 'New configuration preset');
-    };
-    await create('budget');
-    const before = await readFile(f.paths.shared, 'utf8');
-    await terminal.choose('Parameter-only preset', 'New preset: staged parameters');
-    await terminal.choose('Review and create preset', 'at least one');
-    await terminal.press('\x15', 'Search');
-    await terminal.choose('maxOutputTokens', 'maxOutputTokens: blank removes this local value');
-    await terminal.press('0\r', 'Use temperature');
-    await terminal.press('\x15' + '128\r', 'New preset: staged parameters');
-    assert.equal(await readFile(f.paths.shared, 'utf8'), before);
-    await terminal.choose('Review and create preset', 'Save composition definition?', 'checked at dispatch');
-    await terminal.press('\x1b', 'New preset: staged parameters');
-    assert.equal(await readFile(f.paths.shared, 'utf8'), before);
-    await terminal.choose('maxOutputTokens', 'maxOutputTokens: blank removes this local value');
-    await terminal.press('\x15' + '256\r', 'New preset: staged parameters');
-    await terminal.choose('Review and create preset', 'Save composition definition?');
-    await terminal.press('\r', 'Settings saved');
-    await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
-    assert.deepEqual((await f.document(f.paths.shared)).configurationPresets?.budget, {
-      parameters: { maxOutputTokens: 256 },
-    });
-    for (const [name, reference] of [
-      ['following', 'opencode:model'],
-      ['small', 'opencode:small_model'],
-      ['linked', 'preset:base'],
-    ]) {
-      await create(name);
-      await terminal.choose('Exact model reference', 'New preset: model reference');
-      await terminal.choose(reference, 'Save composition definition?');
-      await terminal.press('\r', 'Settings saved');
-      await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
-      assert.deepEqual((await f.document(f.paths.shared)).configurationPresets?.[name], { modelRef: reference });
-    }
-    await create('concrete');
-    await terminal.choose('Concrete model', 'New configuration preset');
-    await terminal.choose('Fixture Beta', 'Fixture Beta: variant');
-    await terminal.choose('Model default', 'Save composition definition?');
-    await terminal.press('\r', 'Settings saved');
-    await terminal.choose('Apply on next restart', 'ctrl+p', 'commands');
-    assert.deepEqual((await f.document(f.paths.shared)).configurationPresets?.concrete, { model: 'fixture/beta' });
-    await create('stale');
-    await terminal.choose('Parameter-only preset', 'New preset: staged parameters');
-    await terminal.choose('topP', 'topP: blank removes this local value');
-    await terminal.press('0.8\r', 'New preset: staged parameters');
-    await terminal.choose('Review and create preset', 'Save composition definition?');
-    const concurrent = (await readFile(f.paths.shared, 'utf8')) + '\n// external edit';
-    await writeFile(f.paths.shared, concurrent);
-    await terminal.press('\r', 'changed');
-    assert.equal(await readFile(f.paths.shared, 'utf8'), concurrent);
-    assert.deepEqual((await f.document(f.paths.shared)).activeProfiles, undefined);
-    assert.match(concurrent, /Preserve fixture comments/);
-    assert.equal((await f.send(original.session.id)).captured.model, original.captured.model);
-    assert.ok((await f.history(original.session.id)).some((message) => message.info.id === original.message.info.id));
   },
 );
