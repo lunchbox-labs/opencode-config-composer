@@ -891,6 +891,35 @@ test('a delayed reference picker does not reopen after Escape', async (t) => {
   assert.equal(ui.dialog, current);
 });
 
+for (const reference of ['model', 'small_model'] as const) {
+  test(`TUI rejects a changed native ${reference} during save catalog loading`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    let model = 'example/fast';
+    ui.api.client.config.get = (async () => ({
+      data: await editorServerConfig(root, { [reference]: model }),
+    })) as typeof ui.api.client.config.get;
+    const path = join(root, 'config-composer.jsonc');
+    const before = await readFile(path, 'utf8');
+    await ui.command();
+    await ui.select('developers');
+    await ui.select(`opencode:${reference}`);
+    await ui.select('low');
+    assert.equal(ui.title(), 'Save agent settings?');
+    assert.match(ui.message(), /example\/fast \(low\)/);
+    const response = ui.delayProviders();
+    const pending = ui.confirm();
+    await response.requested;
+    model = 'example/deep'; // This model only supports the high variant.
+    response.resolve();
+    await pending;
+    assert.equal(await readFile(path, 'utf8'), before);
+    assert.equal(await readFile(join(root, 'opencode.jsonc'), 'utf8'), config);
+    assert.match(ui.toasts.at(-1)!.message, /Effective model defaults changed/);
+    assert.equal(ui.updates, 0);
+  });
+}
+
 test('reload alias opens the same instance-scoped revision apply path', async (t) => {
   const root = await fixture(t);
   const ui = uiHarness(root);
