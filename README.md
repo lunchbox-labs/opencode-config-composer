@@ -3,7 +3,7 @@
 Compose OpenCode configuration with reusable groups, presets and profiles to switch models and permissions
 across your agents. Manage selections, edit settings and inspect the result through `/compose-configs`.
 
-Package: **`@lunchbox-labs/opencode-config-composer`** · Supported host: **OpenCode V1 1.19.x**.
+Package: **`@lunchbox-labs/opencode-config-composer`** · Tested host range: **OpenCode V1 1.19.x**.
 Independently maintained; not affiliated with OpenCode or Anomaly.
 
 ## Add Composer
@@ -211,11 +211,11 @@ Composer includes `config-composer-create` and `config-composer-explain` guidanc
 
 Development requires Node 22.18 or newer and npm. Run `npm ci` and `npm run check` for typechecking, lint,
 formatting, unit tests and the installed-package test. `npm run test:native` uses `OPENCODE_BIN`, Python 3 and
-a Unix pseudo-terminal to test against the newest published host matching `engines.opencode`. See the [integration guide](docs/integration-tests.md)
+a Unix pseudo-terminal to test against the newest published host matching the range in [`tests/opencode.json`](tests/opencode.json). See the [integration guide](docs/integration-tests.md)
 for the Linux/Windows integration suite and coverage.
 
 This project is licensed under MIT. See [LICENSE](LICENSE).
 
-Host support covers all stable 1.19 patch releases, including 1.19.0, and excludes other minors.
-Native runners query current npm release metadata using a fresh temporary cache on every invocation, select the newest stable OpenCode satisfying `engines.opencode`, install that exact binary, and check its reported version. They print the selection and pass it to all native fixtures. An existing `OPENCODE_BIN` must report that selected version. `OPENCODE_TEST_VERSION=1.19.0` selects the optional minimum-patch lane; `opencodeTestVersion` records that floor, not the default. SDK/toolchain pins remain independent.
+Native tests cover stable OpenCode 1.19 patch releases, including the 1.19.0 floor. This is a test target, not a runtime compatibility gate; the package does not declare `engines.opencode`. Other OpenCode versions are not automatically rejected, but are not covered by this test range.
+Native runners query current npm release metadata using a fresh temporary cache on every invocation, select the newest stable OpenCode satisfying the `range` in `tests/opencode.json`, install that exact binary, and check its reported version. They print the selection and pass it to all native fixtures. An existing `OPENCODE_BIN` must report that selected version. `OPENCODE_TEST_VERSION=minimum` selects the optional minimum-patch lane (`OPENCODE_TEST_VERSION=1.19.0` also selects that exact version); `floor` in that test-only file records the minimum lane, not the default. SDK/toolchain pins remain independent.
 Both bundled help skills (`config-composer-create` and `config-composer-explain`) require server registration in `opencode.json`/`opencode.jsonc`; TUI registration alone cannot expose them. Verify discovery with `opencode debug skill`.
