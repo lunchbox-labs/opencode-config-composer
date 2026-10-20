@@ -42,6 +42,16 @@ test('release attachment runs after publication with isolated write permission a
   const { readFile } = await import('node:fs/promises');
   const { parse } = await import('yaml');
   const workflow = parse(await readFile(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8'));
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
+  const steps = workflow.jobs.publish.steps;
+  const checkoutIndex = steps.findIndex((step) => step.uses?.startsWith('actions/checkout@'));
+  const downloadIndex = steps.findIndex((step) => step.uses?.startsWith('actions/download-artifact@'));
+  assert.ok(checkoutIndex >= 0 && checkoutIndex < downloadIndex);
+  const preflight = steps.findIndex((step) => step.run === 'node scripts/attach-published-tarball.mjs --preflight');
+  const publish = steps.findIndex((step) => step.run?.includes('npm publish'));
+  assert.ok(preflight >= 0 && preflight < publish);
+  assert.equal(steps[preflight].env.GH_TOKEN, '${{ github.token }}');
+  assert.equal(steps[publish].env.GH_TOKEN, undefined);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.equal(workflow.jobs.publish.permissions.contents, 'read');
   assert.deepEqual(workflow.jobs.attach.needs, ['verify', 'publish']);

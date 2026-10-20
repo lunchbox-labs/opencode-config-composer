@@ -21,7 +21,14 @@ async function fixture(t, overrides = {}) {
   await writeFile(join(root, 'package/package.json'), JSON.stringify({ name, version, ...overrides.manifest }));
   await promisify(execFile)('tar', ['-czf', join(root, 'package.tgz'), '-C', root, 'package']);
   const bytes = await readFile(join(root, 'package.tgz'));
-  const state = { assets: [], posts: 0, metadataReads: 0, unavailable: 0, calls: [], ...overrides };
+  const state = {
+    assets: [],
+    posts: 0,
+    metadataReads: 0,
+    unavailable: 0,
+    calls: [],
+    ...overrides,
+  };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, base);
     const path = decodeURIComponent(url.pathname);
@@ -54,8 +61,18 @@ async function fixture(t, overrides = {}) {
       return;
     }
     assert.equal(request.headers.authorization, 'Bearer fixture-token');
-    if (path === '/repos/owner/repo/releases/tags/v1.2.3') {
-      json(200, { id: 42, tag_name: 'v1.2.3', draft: false, prerelease: false, ...state.release });
+    if (path === '/repos/owner/repo/releases') {
+      const releases = state.releases ?? [
+        {
+          id: 42,
+          tag_name: 'v1.2.3',
+          draft: true,
+          prerelease: false,
+          ...state.release,
+        },
+      ];
+      const page = Number(url.searchParams.get('page'));
+      json(200, releases.slice((page - 1) * 100, page * 100));
       return;
     }
     if (path === '/repos/owner/repo/releases/42/assets' && request.method === 'GET') {
@@ -78,9 +95,16 @@ async function fixture(t, overrides = {}) {
       for await (const chunk of request) {
         chunks.push(chunk);
       }
-      const asset = { id: 99, name: url.searchParams.get('name'), bytes: Buffer.concat(chunks) };
+      const asset = {
+        id: 99,
+        name: url.searchParams.get('name'),
+        bytes: Buffer.concat(chunks),
+      };
       if (state.race) {
-        state.assets.push({ ...asset, bytes: state.race === 'different' ? Buffer.from('different') : asset.bytes });
+        state.assets.push({
+          ...asset,
+          bytes: state.race === 'different' ? Buffer.from('different') : asset.bytes,
+        });
         json(422, {});
         return;
       }
@@ -135,8 +159,15 @@ test('uploads the exact verified registry tarball and an identical rerun perform
 
 test('mismatched existing assets fail without overwrite, including paginated asset lists', async (t) => {
   const { state, options } = await fixture(t);
-  state.assets = Array.from({ length: 100 }, (_, id) => ({ id, name: `unrelated-${id}` }));
-  state.assets.push({ id: 101, name: assetName, bytes: Buffer.from('different') });
+  state.assets = Array.from({ length: 100 }, (_, id) => ({
+    id,
+    name: `unrelated-${id}`,
+  }));
+  state.assets.push({
+    id: 101,
+    name: assetName,
+    bytes: Buffer.from('different'),
+  });
   await assert.rejects(attach(options), /existing.*differs/i);
   assert.equal(state.posts, 0);
 });
@@ -165,11 +196,12 @@ for (const mismatch of ['metadata-name', 'metadata-version', 'integrity', 'archi
   });
 }
 
-for (const release of [{ tag_name: 'v9.9.9' }, { draft: true }, { prerelease: true }]) {
+for (const release of [{ tag_name: 'v9.9.9' }, { draft: false }, { prerelease: true }, { immutable: true }]) {
   test(`rejects an unsuitable GitHub release ${JSON.stringify(release)}`, async (t) => {
     const { state, options } = await fixture(t, { release });
     await assert.rejects(attach(options), /release/i);
     assert.equal(state.posts, 0);
+    assert.equal(state.metadataReads, 0);
   });
 }
 
@@ -179,7 +211,7 @@ test('bounded registry propagation retries allow a just-published version but st
   assert.equal(state.metadataReads, 3);
   const missing = await fixture(t, { unavailable: 99 });
   await assert.rejects(attach(missing.options), /registry/i);
-  assert.ok(missing.state.metadataReads <= 6);
+  assert.ok(missing.state.metadataReads === 61);
   assert.equal(missing.state.posts, 0);
 });
 
@@ -212,4 +244,61 @@ test('CLI failures omit assertion diffs from logs', async () => {
   ).catch((error) => error);
   assert.match(stderr, /release tag must match the package version/);
   assert.doesNotMatch(stderr, /sensitive-response/);
+});
+
+test('draft preflight reads GitHub only and requires an existing draft', async (t) => {
+  const { preflightDraftRelease } = await import('../scripts/attach-published-tarball.mjs');
+  const { state, options } = await fixture(t);
+  await preflightDraftRelease(options);
+  assert.equal(state.metadataReads, 0);
+  assert.equal(state.posts, 0);
+  assert.ok(state.calls.every((call) => call.startsWith('GET /repos/')));
+});
+
+test('draft lookup finds paginated tags and rejects missing or duplicate matches', async (t) => {
+  const { preflightDraftRelease } = await import('../scripts/attach-published-tarball.mjs');
+  const releases = Array.from({ length: 100 }, (_, id) => ({
+    id: id + 100,
+    tag_name: `v0.0.${id}`,
+    draft: false,
+  }));
+  const target = { id: 42, tag_name: 'v1.2.3', draft: true, prerelease: false };
+  const { state, options } = await fixture(t, {
+    releases: [...releases, target],
+  });
+  assert.equal((await preflightDraftRelease(options)).release.id, 42);
+  assert.equal(state.metadataReads, 0);
+  state.releases = [];
+  await assert.rejects(preflightDraftRelease(options), /exactly one/);
+  state.releases = [target, { ...target, id: 43 }];
+  await assert.rejects(preflightDraftRelease(options), /exactly one/);
+  assert.equal(state.posts, 0);
+});
+
+test('stage diagnostics omit arbitrary transport errors and response details', async (t) => {
+  const { preflightDraftRelease, attachPublishedTarball, releaseFailureMessage } =
+    await import('../scripts/attach-published-tarball.mjs');
+  const { options } = await fixture(t);
+  const secret = 'response-body-and-token-must-not-be-logged';
+  const failing = async () => {
+    throw new Error(secret);
+  };
+  await assert.rejects(preflightDraftRelease({ ...options, fetch: failing }), (error) => {
+    const message = releaseFailureMessage(error);
+    assert.match(message, /\[draft-preflight\]/);
+    assert.doesNotMatch(message, /response-body-and-token/);
+    return true;
+  });
+  await assert.rejects(
+    attachPublishedTarball({
+      ...options,
+      fetch: (url, init) => (String(url).startsWith(`${options.registry}/%40`) ? failing() : fetch(url, init)),
+    }),
+    (error) => {
+      const message = releaseFailureMessage(error);
+      assert.match(message, /\[registry-metadata\]/);
+      assert.doesNotMatch(message, /response-body-and-token/);
+      return true;
+    },
+  );
 });
