@@ -20,12 +20,12 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
     await mkdir(configRoot, { recursive: true });
     await mkdir(join(project, '.opencode'), { recursive: true });
     await installPackage(configRoot);
-    const specification = await npmRegistration(t, configRoot);
+    const specification = await npmRegistration(t, configRoot, root);
     const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
       opencodeTestVersion: string;
     };
     const hostVersion = process.env.OPENCODE_TEST_VERSION ?? manifest.opencodeTestVersion;
-    assert.ok(process.env.npm_execpath, 'run native tests through npm');
+    assert.ok(process.env.npm_execpath !== undefined, 'run native tests through npm');
     await promisify(execFile)(
       process.execPath,
       [
@@ -100,6 +100,8 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
     await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [specification] }));
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      HOME: root,
+      USERPROFILE: root,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
       XDG_CONFIG_HOME: join(root, 'config'),

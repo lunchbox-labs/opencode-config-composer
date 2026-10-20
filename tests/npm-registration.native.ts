@@ -10,7 +10,7 @@ test(
   { timeout: 180_000 },
   async (t) => {
     const harness = await nativeHarness(t, 'npm-registration');
-    const specification = await npmRegistration(t, harness.configRoot);
+    const specification = await npmRegistration(t, harness.configRoot, harness.root);
     await writeFile(join(harness.project, 'opencode.json'), JSON.stringify({ plugin: [specification] }));
     await harness.start();
     const skills = await harness.api<{ name: string; location: string }[]>('/skill');
