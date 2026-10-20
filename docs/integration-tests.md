@@ -2,7 +2,7 @@
 
 Run `npm ci` and `npm run test:integration` with Node 24 on Linux x64 or Windows x64.
 The command builds the package, installs the exact OpenCode version from
-`engines.opencode` in [package.json](../package.json), verifies its reported version, packs Composer,
+`opencodeTestVersion` in [package.json](../package.json), verifies its reported version, packs Composer,
 and installs the tarball in temporary consumer projects. It also installs and checksum-verifies
 the real ripgrep 15.1.0 binary used by the pinned host on both platforms before startup,
 so reload cannot interrupt OpenCode’s dependency download. Set `OPENCODE_BIN` to an

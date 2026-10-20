@@ -6,7 +6,7 @@ import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { validateBaseline, validateCliVersion } from './opencode.mjs';
+import { validateBaseline, validateCliVersion, validateTestVersion } from './opencode.mjs';
 import { isolatedEnvironment } from '../tests/integration/harness.ts';
 import { stopProcess } from '../tests/integration/process.ts';
 import { cleanupProcesses, registerProcess } from '../tests/integration/resources.ts';
@@ -21,6 +21,7 @@ export function nativePackage(platform = process.platform, arch = process.arch) 
 }
 
 const suites = {
+  registration: ['tests/npm-registration.native.ts'],
   core: [
     'tests/config-composer.native.ts',
     'tests/composition-profiles.native.ts',
@@ -205,7 +206,8 @@ async function main() {
   try {
     const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8'));
     const lock = JSON.parse(await readFile(join(repository, 'package-lock.json'), 'utf8'));
-    const version = validateBaseline(manifest, lock);
+    const baseline = validateBaseline(manifest, lock);
+    const version = validateTestVersion(process.env.OPENCODE_TEST_VERSION ?? baseline, manifest.engines.opencode);
     let binary = process.env.OPENCODE_BIN;
     if (binary === undefined) {
       const target = nativePackage();

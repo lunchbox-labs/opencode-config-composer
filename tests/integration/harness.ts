@@ -211,8 +211,10 @@ export async function nativeHarness(t: TestContext, name: string) {
     const npm = process.env.npm_execpath;
     assert.ok(npm !== undefined, 'run native tests through npm run');
     const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
-      engines: { opencode: string };
+      opencodeTestVersion: string;
     };
+    const testVersion = process.env.OPENCODE_TEST_VERSION ?? manifest.opencodeTestVersion;
+    assert.match(testVersion, /^\d+\.\d+\.\d+$/, 'native dependency version must be exact');
     await writeFile(join(directory, 'package.json'), JSON.stringify({ private: true, type: 'module' }), {
       flag: 'wx',
     }).catch((error: unknown) => {
@@ -232,7 +234,7 @@ export async function nativeHarness(t: TestContext, name: string) {
           '--no-audit',
           '--no-fund',
           '--save-exact',
-          `@opencode-ai/plugin@${manifest.engines.opencode}`,
+          `@opencode-ai/plugin@${testVersion}`,
         ],
         { cwd: directory, timeout: 120_000 },
       ).catch((error: unknown) => {
@@ -284,7 +286,10 @@ export async function nativeHarness(t: TestContext, name: string) {
           join(directory, 'package.json'),
           JSON.stringify({
             ...target,
-            dependencies: { ...target.dependencies, '@opencode-ai/plugin': manifest.engines.opencode },
+            dependencies: {
+              ...target.dependencies,
+              '@opencode-ai/plugin': testVersion,
+            },
           }),
         );
         // Native OpenCode checks this root lock's dependency names before loading;
@@ -295,7 +300,7 @@ export async function nativeHarness(t: TestContext, name: string) {
     const metadata = JSON.parse(
       await readFile(join(directory, 'node_modules/@opencode-ai/plugin/package.json'), 'utf8'),
     ) as { version: string };
-    assert.equal(metadata.version, manifest.engines.opencode);
+    assert.equal(metadata.version, testVersion);
     prepared.add(directory);
   };
   let environment = isolatedEnvironment(root);

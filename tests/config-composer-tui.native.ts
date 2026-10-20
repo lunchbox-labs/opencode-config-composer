@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { installPackage } from './install-package.ts';
+import { npmRegistration } from './npm-registration.ts';
 
 for (const scope of ['shared', 'project-only', 'empty'] as const) {
   test(`OpenCode renders both Composer menus with ${scope} sources`, { timeout: 260_000 }, async (t) => {
@@ -18,7 +19,34 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
     const project = join(root, 'project');
     await mkdir(configRoot, { recursive: true });
     await mkdir(join(project, '.opencode'), { recursive: true });
-    const installed = await installPackage(configRoot);
+    await installPackage(configRoot);
+    const specification = await npmRegistration(t, configRoot);
+    const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+      opencodeTestVersion: string;
+    };
+    const hostVersion = process.env.OPENCODE_TEST_VERSION ?? manifest.opencodeTestVersion;
+    assert.ok(process.env.npm_execpath, 'run native tests through npm');
+    await promisify(execFile)(
+      process.execPath,
+      [
+        process.env.npm_execpath,
+        'install',
+        '--prefix',
+        configRoot,
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+        '--save-exact',
+        `@opencode-ai/plugin@${hostVersion}`,
+      ],
+      { timeout: 120_000 },
+    );
+    for (const directory of [join(root, '.opencode'), join(project, '.opencode')]) {
+      await mkdir(directory, { recursive: true });
+      for (const name of ['package.json', 'package-lock.json', 'node_modules']) {
+        await cp(join(configRoot, name), join(directory, name), { recursive: true, verbatimSymlinks: true });
+      }
+    }
     let requests = 0;
     const provider = createServer((_request, response) => {
       requests++;
@@ -36,7 +64,7 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
     await writeFile(
       join(configRoot, 'opencode.jsonc'),
       JSON.stringify({
-        plugin: [installed.directory],
+        plugin: [specification],
         model: 'fixture/model',
         small_model: 'fixture/model',
         default_agent: scope === 'shared' ? undefined : 'worker',
@@ -69,7 +97,7 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
         }),
       );
     }
-    await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [installed.directory] }));
+    await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [specification] }));
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       TERM: 'xterm-256color',

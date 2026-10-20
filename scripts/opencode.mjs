@@ -9,9 +9,14 @@ import { promisify } from 'node:util';
 const repository = new URL('../', import.meta.url);
 
 export function validateBaseline(manifest, lock) {
-  const version = manifest.engines?.opencode;
-  assert.match(version ?? '', /^\d+\.\d+\.\d+$/, 'engines.opencode must pin an exact stable CLI version');
-  assert.equal(lock.packages[''].engines.opencode, version, 'lockfile host baseline differs from package.json');
+  const version = manifest.opencodeTestVersion;
+  assert.match(version ?? '', /^\d+\.\d+\.\d+$/, 'opencodeTestVersion must pin an exact stable CLI version');
+  assert.equal(
+    lock.packages[''].engines.opencode,
+    manifest.engines.opencode,
+    'lockfile host range differs from package.json',
+  );
+  validateTestVersion(version, manifest.engines.opencode);
   for (const name of ['@opencode-ai/plugin', '@opencode-ai/sdk']) {
     const declared = manifest.devDependencies[name];
     assert.match(declared ?? '', /^\d+\.\d+\.\d+$/, `${name} must have an exact version`);
@@ -21,14 +26,29 @@ export function validateBaseline(manifest, lock) {
   return version;
 }
 
+export function validateTestVersion(version, range) {
+  assert.match(version ?? '', /^\d+\.\d+\.\d+$/, 'test version must be exact');
+  assert.match(range ?? '', /^\d+\.\d+\.x$/, 'host support must cover exactly one minor');
+  assert.equal(
+    version.split('.').slice(0, 2).join('.') + '.x',
+    range,
+    'test version is outside the supported host range',
+  );
+  return version;
+}
+
 export function validateCliVersion(actual, expected) {
-  assert.equal(actual.trim(), expected, 'the native OpenCode binary differs from engines.opencode');
+  assert.equal(actual.trim(), expected, 'the native OpenCode binary differs from the selected exact test version');
 }
 
 async function readBaseline() {
   const manifest = JSON.parse(await readFile(new URL('package.json', repository), 'utf8'));
   const lock = JSON.parse(await readFile(new URL('package-lock.json', repository), 'utf8'));
-  return { manifest, version: validateBaseline(manifest, lock) };
+  const baseline = validateBaseline(manifest, lock);
+  return {
+    manifest,
+    version: validateTestVersion(process.env.OPENCODE_TEST_VERSION ?? baseline, manifest.engines.opencode),
+  };
 }
 
 async function run(command, args, options = {}) {
