@@ -34,7 +34,9 @@ test(
       signal: AbortSignal.timeout(60_000),
     });
     assert.ok(shared.ok, await shared.text());
-    const terminal = await nativeTerminal(harness, undefined, 'npm-registration');
+    // The terminal driver observes the session layout's input, rather than the centered home prompt.
+    const session = await harness.api<{ id: string }>('/session', { title: 'Npm registration smoke' });
+    const terminal = await nativeTerminal(harness, session.id, 'npm-registration');
     await terminal.wait(['ctrl+p', 'commands']);
     await terminal.command('/agent-models', 'Agent models: scope', 'Global defaults');
     await terminal.stop();
