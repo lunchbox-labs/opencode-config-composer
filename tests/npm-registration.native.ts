@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { npmRegistration } from './npm-registration.ts';
-import { nativeHarness } from './integration/harness.ts';
+import { compositionFixture } from './integration/composition-fixture.ts';
+import { nativeTerminal } from './integration/terminal.ts';
 
 test(
-  'native npm registration discovers packaged Composer skills and slash commands',
-  { timeout: 180_000 },
+  'native npm registration discovers skills and slash commands and renders the actual TUI',
+  { timeout: 240_000 },
   async (t) => {
-    const harness = await nativeHarness(t, 'npm-registration');
+    const { host: harness } = await compositionFixture(t, 'npm-registration');
     const specification = await npmRegistration(t, harness.configRoot, harness.root);
-    await writeFile(join(harness.project, 'opencode.json'), JSON.stringify({ plugin: [specification] }));
+    const file = join(harness.configRoot, 'opencode.jsonc');
+    const config = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    await writeFile(file, JSON.stringify({ ...config, plugin: [specification] }));
+    await writeFile(join(harness.configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [specification] }));
     await harness.start();
     const skills = await harness.api<{ name: string; location: string }[]>('/skill');
     const commands = await harness.api<{ name: string }[]>('/command');
@@ -24,6 +28,17 @@ test(
         `missing slash command ${name}`,
       );
     }
+    // Initialize the shared location before testing the TUI's bounded filesystem challenge.
+    const shared = await fetch(`${harness.url}/config`, {
+      headers: { 'x-opencode-directory': harness.configRoot },
+      signal: AbortSignal.timeout(60_000),
+    });
+    assert.ok(shared.ok, await shared.text());
+    const terminal = await nativeTerminal(harness, undefined, 'npm-registration');
+    await terminal.wait(['ctrl+p', 'commands']);
+    await terminal.command('/agent-models', 'Agent models: scope', 'Global defaults');
+    await terminal.stop();
+    assert.equal(harness.requests.length, 0, 'npm TUI startup must not send a model request');
     assert.doesNotMatch(harness.stderr, /incompatible|Failed to install|Failed to load/);
   },
 );

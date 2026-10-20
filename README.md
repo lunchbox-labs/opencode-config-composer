@@ -211,7 +211,7 @@ Composer includes `config-composer-create` and `config-composer-explain` guidanc
 
 Development requires Node 22.18 or newer and npm. Run `npm ci` and `npm run check` for typechecking, lint,
 formatting, unit tests and the installed-package test. `npm run test:native` uses `OPENCODE_BIN`, Python 3 and
-a Unix pseudo-terminal to test against the version pinned in `package.json`. See the [integration guide](docs/integration-tests.md)
+a Unix pseudo-terminal to test against the newest published host matching `engines.opencode`. See the [integration guide](docs/integration-tests.md)
 for the Linux/Windows integration suite and coverage.
 
 This project is licensed under MIT. See [LICENSE](LICENSE).
