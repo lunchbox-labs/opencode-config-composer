@@ -38,32 +38,34 @@ test('release validation rejects private, provisional, mismatched, prerelease, a
   }
 });
 
-test('release attachment runs after publication with isolated write permission and verified identity', async () => {
+test('manual lifecycle scopes writes and orders verify, prepare, npm, attachment and release publication', async () => {
   const { readFile } = await import('node:fs/promises');
   const { parse } = await import('yaml');
   const workflow = parse(await readFile(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
-  const steps = workflow.jobs.publish.steps;
-  const checkoutIndex = steps.findIndex((step) => step.uses?.startsWith('actions/checkout@'));
-  const downloadIndex = steps.findIndex((step) => step.uses?.startsWith('actions/download-artifact@'));
-  assert.ok(checkoutIndex >= 0 && checkoutIndex < downloadIndex);
-  const preflight = steps.findIndex((step) => step.run === 'node scripts/attach-published-tarball.mjs --preflight');
-  const publish = steps.findIndex((step) => step.run?.includes('npm publish'));
-  assert.ok(preflight >= 0 && preflight < publish);
-  assert.equal(steps[preflight].env.GH_TOKEN, '${{ github.token }}');
-  assert.equal(steps[publish].env.GH_TOKEN, undefined);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
-  assert.equal(workflow.jobs.publish.permissions.contents, 'read');
+  assert.deepEqual(workflow.jobs.prepare.needs, 'verify');
+  assert.deepEqual(workflow.jobs.prepare.permissions, { contents: 'write' });
+  assert.deepEqual(workflow.jobs.publish.needs, ['verify', 'prepare']);
+  assert.deepEqual(workflow.jobs.publish.permissions, { contents: 'read', 'id-token': 'write' });
   assert.deepEqual(workflow.jobs.attach.needs, ['verify', 'publish']);
   assert.deepEqual(workflow.jobs.attach.permissions, { contents: 'write' });
-  const checkout = workflow.jobs.attach.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
-  assert.equal(checkout.with.ref, '${{ github.workflow_sha }}');
-  assert.equal(checkout.with['persist-credentials'], false);
-  const attachment = workflow.jobs.attach.steps.find(
-    (step) => step.run === 'node scripts/attach-published-tarball.mjs',
-  );
-  assert.equal(attachment.env.NPM_PACKAGE_NAME, '${{ needs.verify.outputs.name }}');
-  assert.equal(attachment.env.NPM_PACKAGE_VERSION, '${{ needs.verify.outputs.version }}');
-  assert.equal(workflow.jobs.verify.outputs.name, '${{ steps.release.outputs.name }}');
-  assert.equal(workflow.jobs.verify.outputs.version, '${{ steps.release.outputs.version }}');
+  for (const [job, stage] of [
+    ['prepare', 'prepare'],
+    ['publish', 'npm'],
+    ['attach', 'finish'],
+  ]) {
+    const steps = workflow.jobs[job].steps;
+    const checkout = steps.findIndex((step) => step.uses?.startsWith('actions/checkout@'));
+    assert.equal(steps[checkout].with.ref, '${{ github.workflow_sha }}');
+    assert.equal(steps[checkout].with['persist-credentials'], false);
+    const operation = steps.find((step) => step.run === `node scripts/release-lifecycle.mjs ${stage}`);
+    assert.equal(operation.env.RELEASE_COMMIT, '${{ needs.verify.outputs.commit }}');
+    assert.equal(operation.env.NPM_PACKAGE_NAME, '${{ needs.verify.outputs.name }}');
+    if (stage !== 'prepare') {
+      assert.ok(steps.findIndex((step) => step.uses?.startsWith('actions/download-artifact@')) > checkout);
+    }
+  }
+  assert.equal(workflow.jobs.verify.outputs.commit, '${{ github.sha }}');
+  assert.ok(workflow.jobs.verify.steps.some((step) => step.run?.includes('cmp release/*.tgz repeated-pack/*.tgz')));
 });

@@ -220,5 +220,6 @@ Native tests cover stable OpenCode 1.19 patch releases, including the 1.19.0 flo
 Native runners query current npm release metadata using a fresh temporary cache on every invocation, select the newest stable OpenCode satisfying the `range` in `tests/opencode.json`, install that exact binary, and check its reported version. They print the selection and pass it to all native fixtures. An existing `OPENCODE_BIN` must report that selected version. `OPENCODE_TEST_VERSION=minimum` selects the optional minimum-patch lane (`OPENCODE_TEST_VERSION=1.19.0` also selects that exact version); `floor` in that test-only file records the minimum lane, not the default. SDK/toolchain pins remain independent.
 Both bundled help skills (`config-composer-create` and `config-composer-explain`) require server registration in `opencode.json`/`opencode.jsonc`; TUI registration alone cannot expose them. Verify discovery with `opencode debug skill`.
 
-Published releases also attach the exact npm `.tgz` to the matching GitHub release.
+The manual release workflow creates or reuses the matching tag and draft, publishes npm,
+attaches the exact npm `.tgz`, and publishes the GitHub release last.
 The archive does not bundle runtime dependencies; see [release assets and reruns](docs/release-artifacts.md).
