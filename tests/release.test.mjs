@@ -37,3 +37,23 @@ test('release validation rejects private, provisional, mismatched, prerelease, a
     assert.throws(() => validateRelease(release, tag), /release tag/);
   }
 });
+
+test('release attachment runs after publication with isolated write permission and verified identity', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { parse } = await import('yaml');
+  const workflow = parse(await readFile(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8'));
+  assert.deepEqual(workflow.permissions, { contents: 'read' });
+  assert.equal(workflow.jobs.publish.permissions.contents, 'read');
+  assert.deepEqual(workflow.jobs.attach.needs, ['verify', 'publish']);
+  assert.deepEqual(workflow.jobs.attach.permissions, { contents: 'write' });
+  const checkout = workflow.jobs.attach.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
+  assert.equal(checkout.with.ref, '${{ github.workflow_sha }}');
+  assert.equal(checkout.with['persist-credentials'], false);
+  const attachment = workflow.jobs.attach.steps.find(
+    (step) => step.run === 'node scripts/attach-published-tarball.mjs',
+  );
+  assert.equal(attachment.env.NPM_PACKAGE_NAME, '${{ needs.verify.outputs.name }}');
+  assert.equal(attachment.env.NPM_PACKAGE_VERSION, '${{ needs.verify.outputs.version }}');
+  assert.equal(workflow.jobs.verify.outputs.name, '${{ steps.release.outputs.name }}');
+  assert.equal(workflow.jobs.verify.outputs.version, '${{ steps.release.outputs.version }}');
+});
