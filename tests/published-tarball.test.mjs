@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 const name = '@fixture/package';
 const version = '1.2.3';
@@ -193,3 +194,22 @@ for (const race of ['same', 'different']) {
     assert.equal(state.posts, 1);
   });
 }
+
+test('CLI failures omit assertion diffs from logs', async () => {
+  const { stderr } = await promisify(execFile)(
+    process.execPath,
+    [fileURLToPath(new URL('../scripts/attach-published-tarball.mjs', import.meta.url))],
+    {
+      env: {
+        ...process.env,
+        NPM_PACKAGE_NAME: name,
+        NPM_PACKAGE_VERSION: version,
+        RELEASE_TAG: 'v9.9.9-sensitive-response',
+        GITHUB_REPOSITORY: 'owner/repo',
+        GH_TOKEN: 'fixture-token',
+      },
+    },
+  ).catch((error) => error);
+  assert.match(stderr, /release tag must match the package version/);
+  assert.doesNotMatch(stderr, /sensitive-response/);
+});
