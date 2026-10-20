@@ -9,8 +9,7 @@
     "url": "git+https://github.com/lunchbox-labs/opencode-config-composer.git"
   },
   "engines": {
-    "node": ">=22.18.0",
-    "opencode": "1.19.x"
+    "node": ">=22.18.0"
   },
   "exports": {
     ".": {
@@ -87,6 +86,5 @@
     "solid-js@1.9.12": {
       "seroval": "1.6.3"
     }
-  },
-  "opencodeTestVersion": "1.19.0"
+  }
 }

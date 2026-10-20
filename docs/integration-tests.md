@@ -2,15 +2,16 @@
 
 Run `npm ci` and `npm run test:integration` with Node 24 on Linux x64 or Windows x64.
 The command builds the package, freshly queries npm releases and selects the newest stable OpenCode
-satisfying `engines.opencode` in [package.json](../package.json). It prints the selection, installs that exact
+satisfying `range` in [tests/opencode.json](../tests/opencode.json). It prints the selection, installs that exact
 version, verifies the binary reports it, packs Composer,
 and installs the tarball in temporary consumer projects. It also installs and checksum-verifies
 the real ripgrep 15.1.0 binary used by the pinned host on both platforms before startup,
 so reload cannot interrupt OpenCode’s dependency download. Set `OPENCODE_BIN` to an
 existing binary to avoid downloading it; it must match the freshly resolved version or the run fails.
-`OPENCODE_TEST_VERSION=1.19.0` requests explicit additional floor coverage. The normal Linux/Windows
+`OPENCODE_TEST_VERSION=minimum` requests the configured `floor` (currently 1.19.0); exact overrides remain available. The normal Linux/Windows
 integration lanes resolve latest compatible dynamically; the floor is also exercised separately.
 No installed binary, project lockfile, or persistent npm cache selects the default host version.
+The range and floor are test-only configuration, excluded from the published package; no `engines.opencode` runtime gate is declared.
 Before host startup, the harness installs the matching public `@opencode-ai/plugin`
 dependency in the fixture's shared and existing project configuration directories.
 OpenCode normally initializes those dependencies during its first request; preparing

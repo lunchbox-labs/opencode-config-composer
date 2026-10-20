@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        opencode: ['latest', '1.19.0']
+        opencode: ['latest', 'minimum']
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

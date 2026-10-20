@@ -75,6 +75,7 @@ export async function installPackage(root: string) {
   const directory = await realpath(join(root, 'node_modules', manifest.name));
   const metadata = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as Record<string, unknown>;
   assert.equal(metadata.name, '@lunchbox-labs/opencode-config-composer');
+  assert.deepEqual(metadata.engines, { node: '>=22.18.0' }, 'the packed plugin must not gate OpenCode versions');
   assert.equal(metadata.license, 'MIT');
   const license = await readFile(join(directory, 'LICENSE'), 'utf8');
   assert.equal(license, await readFile(join(repository, 'LICENSE'), 'utf8'));

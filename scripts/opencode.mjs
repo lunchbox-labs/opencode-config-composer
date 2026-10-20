@@ -9,15 +9,15 @@ import semver from 'semver';
 
 const repository = new URL('../', import.meta.url);
 
-export function validateBaseline(manifest, lock) {
-  const version = manifest.opencodeTestVersion;
-  assert.match(version ?? '', /^\d+\.\d+\.\d+$/, 'opencodeTestVersion must pin an exact stable CLI version');
-  assert.equal(
-    lock.packages[''].engines.opencode,
-    manifest.engines.opencode,
-    'lockfile host range differs from package.json',
+export function validateBaseline(manifest, lock, testConfig) {
+  const version = testConfig.floor;
+  assert.match(version ?? '', /^\d+\.\d+\.\d+$/, 'test floor must pin an exact stable CLI version');
+  assert.deepEqual(
+    lock.packages[''].engines,
+    manifest.engines,
+    'lockfile engine declarations differ from package.json',
   );
-  validateTestVersion(version, manifest.engines.opencode);
+  validateTestVersion(version, testConfig.range);
   for (const name of ['@opencode-ai/plugin', '@opencode-ai/sdk']) {
     const declared = manifest.devDependencies[name];
     assert.match(declared ?? '', /^\d+\.\d+\.\d+$/, `${name} must have an exact version`);
@@ -29,8 +29,8 @@ export function validateBaseline(manifest, lock) {
 
 export function validateTestVersion(version, range) {
   assert.match(version ?? '', /^\d+\.\d+\.\d+$/, 'test version must be exact');
-  assert.ok(semver.validRange(range), 'host support must be a valid semver range');
-  assert.ok(semver.satisfies(version, range), 'test version is outside the supported host range');
+  assert.ok(semver.validRange(range), 'tested host range must be a valid semver range');
+  assert.ok(semver.satisfies(version, range), 'test version is outside the tested host range');
   return version;
 }
 
@@ -72,9 +72,12 @@ export async function publishedVersions() {
   }
 }
 
-export async function resolveNativeVersion(manifest, options = { override: process.env.OPENCODE_TEST_VERSION }) {
-  const range = manifest.engines.opencode;
-  assert.ok(semver.validRange(range), 'host support must be a valid semver range');
+export async function resolveNativeVersion(testConfig, options = { override: process.env.OPENCODE_TEST_VERSION }) {
+  const range = testConfig.range;
+  assert.ok(semver.validRange(range), 'tested host range must be a valid semver range');
+  if (options.override === 'minimum') {
+    return validateTestVersion(testConfig.floor, range);
+  }
   if (options.override !== undefined && options.override !== 'latest') {
     return validateTestVersion(options.override, range);
   }
@@ -95,8 +98,9 @@ export async function resolveNativeVersion(manifest, options = { override: proce
 async function readBaseline() {
   const manifest = JSON.parse(await readFile(new URL('package.json', repository), 'utf8'));
   const lock = JSON.parse(await readFile(new URL('package-lock.json', repository), 'utf8'));
-  validateBaseline(manifest, lock);
-  return { manifest, version: await resolveNativeVersion(manifest) };
+  const testConfig = JSON.parse(await readFile(new URL('tests/opencode.json', repository), 'utf8'));
+  validateBaseline(manifest, lock, testConfig);
+  return { manifest, testConfig, version: await resolveNativeVersion(testConfig) };
 }
 
 async function installCli(directory, version) {
@@ -151,8 +155,8 @@ async function run(command, args, options = {}) {
 }
 
 async function main() {
-  const { manifest, version } = await readBaseline();
-  console.log(`Selected OpenCode ${version} satisfying engines.opencode ${manifest.engines.opencode}`);
+  const { manifest, testConfig, version } = await readBaseline();
+  console.log(`Selected OpenCode ${version} satisfying test range ${testConfig.range}`);
   if (process.argv[2] === 'install') {
     assert.ok(process.argv[3], 'provide the temporary installation directory');
     const directory = resolve(process.argv[3]);

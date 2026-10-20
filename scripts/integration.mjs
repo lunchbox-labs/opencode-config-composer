@@ -206,9 +206,10 @@ async function main() {
   try {
     const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8'));
     const lock = JSON.parse(await readFile(join(repository, 'package-lock.json'), 'utf8'));
-    validateBaseline(manifest, lock);
-    const version = await resolveNativeVersion(manifest);
-    console.log(`Selected OpenCode ${version} satisfying engines.opencode ${manifest.engines.opencode}`);
+    const testConfig = JSON.parse(await readFile(join(repository, 'tests/opencode.json'), 'utf8'));
+    validateBaseline(manifest, lock, testConfig);
+    const version = await resolveNativeVersion(testConfig);
+    console.log(`Selected OpenCode ${version} satisfying test range ${testConfig.range}`);
     let binary = process.env.OPENCODE_BIN;
     if (binary === undefined) {
       const target = nativePackage();
