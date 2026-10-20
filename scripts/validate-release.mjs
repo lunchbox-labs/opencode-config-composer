@@ -38,7 +38,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const result = validateRelease(manifest, process.env.RELEASE_TAG);
   if (process.env.GITHUB_OUTPUT) {
-    appendFileSync(process.env.GITHUB_OUTPUT, `access=${result.access}\n`);
+    appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      `access=${result.access}\nname=${result.name}\nversion=${result.version}\n`,
+    );
   }
   console.log(`Validated ${result.name}@${result.version} for ${result.access} publication.`);
 }

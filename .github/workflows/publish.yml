@@ -28,6 +28,8 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
     outputs:
       access: ${{ steps.release.outputs.access }}
+      name: ${{ steps.release.outputs.name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - name: Require a stable version tag
         shell: bash
@@ -97,3 +99,29 @@ jobs:
         run: |
           sha256sum --check SHA256SUMS
           npm publish ./*.tgz --ignore-scripts --access "$NPM_ACCESS" --tag latest
+
+
+  attach:
+    name: Attach the published npm tarball
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # Use the workflow's helper even when manually targeting an older tag.
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify and attach the exact published tarball
+        run: node scripts/attach-published-tarball.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
+          NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
