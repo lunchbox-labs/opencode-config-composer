@@ -1,9 +1,13 @@
 # Releasing Config Composer
 
 Merge the desired package version into main, then manually run the publish workflow
-from main with its stable `vX.Y.Z` version. No tag or draft preparation is required.
+from main with its stable `vX.Y.Z` version. The version comes from package.json; the supplied tag must match it. No tag or draft preparation is required.
 The workflow fixes the selected main commit, validates package metadata, runs checks,
 and verifies that packing the same build twice produces identical bytes.
+
+For a new draft, GitHub's official generated release notes provide its name and body,
+using the release tag and pinned commit and honoring the repository's release.yml defaults.
+Existing draft titles and bodies are preserved, including concurrent draft creation.
 
 The workflow creates or reuses the exact matching tag and stable draft, publishes the
 verified tarball to npm, downloads and verifies the registry's exact tarball, attaches
@@ -16,7 +20,8 @@ Rerun failed jobs, or rerun the workflow for the same commit and version. An exi
 npm version is skipped only when its identity, optional gitHead, SHA-512 integrity,
 and downloaded bytes agree with the verified build. Already-published releases are
 accepted only after verifying their exact existing asset; missing or different assets
-cannot be retrofitted onto immutable releases. Partial failures leave the draft in
+cannot be retrofitted onto immutable releases. If an npm version exists but its tag or release is missing, preparation fails without
+creating replacement GitHub state; investigate that mismatch manually. Partial failures leave the draft in
 place for retry. If main advances, rerun the original workflow run to retain its commit.
 
 The asset for version 0.0.6 is

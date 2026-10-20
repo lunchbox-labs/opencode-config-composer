@@ -81,6 +81,20 @@ export async function prepareRelease(options) {
   assert.ok(['ahead', 'identical'].includes(comparison?.status), 'release commit must belong to main');
   let release = await matchingRelease(options);
   const existingTag = await api(`/git/ref/tags/${encodeURIComponent(options.tag)}`);
+  if (!release || !existingTag) {
+    const request = options.fetch ?? globalThis.fetch;
+    const registry = options.registry ?? 'https://registry.npmjs.org';
+    const response = await request(`${registry}/${encodeURIComponent(options.name)}/${options.version}`, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    });
+    assert.equal(
+      response.status,
+      404,
+      'npm version already exists or lookup failed; missing GitHub state requires manual recovery',
+    );
+    await response.body?.cancel();
+  }
   if (release) {
     assert.equal(release.prerelease, false, 'release must be stable');
   }
@@ -94,13 +108,19 @@ export async function prepareRelease(options) {
   assert.ok(!release || release.draft || existingTag, 'published release is missing its tag');
   await exactTag(options, true);
   if (!release) {
+    const notes = await api('/releases/generate-notes', 'POST', {
+      tag_name: options.tag,
+      target_commitish: options.commit,
+    });
+    assert.ok(typeof notes?.name === 'string' && typeof notes?.body === 'string', 'invalid generated release notes');
     await api(
       '/releases',
       'POST',
       {
         tag_name: options.tag,
         target_commitish: options.commit,
-        name: options.tag,
+        name: notes.name,
+        body: notes.body,
         draft: true,
         prerelease: false,
       },

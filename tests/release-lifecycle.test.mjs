@@ -129,9 +129,22 @@ async function fixture(t, initial = {}) {
       json(200, state.release ? [state.release] : []);
       return;
     }
+    if (path === '/repos/owner/repo/releases/generate-notes' && request.method === 'POST') {
+      assert.deepEqual(body, { tag_name: tag, target_commitish: commit });
+      json(
+        state.notesFailure ? 503 : 200,
+        state.notes ?? { name: 'Generated release title', body: 'Generated release notes' },
+      );
+      return;
+    }
     if (path === '/repos/owner/repo/releases' && request.method === 'POST') {
       assert.equal(state.release, undefined, 'never replace a release');
-      state.release = { id: 42, ...body, immutable: false };
+      state.release = {
+        id: 42,
+        ...body,
+        ...(state.releaseRace ? { name: 'Concurrent title', body: 'Concurrent body' } : {}),
+        immutable: false,
+      };
       json(state.releaseRace ?? 201, state.release);
       return;
     }
@@ -245,6 +258,8 @@ test('one lifecycle creates exact tag and draft, publishes npm, attaches bytes, 
   assert.deepEqual(state.assets[0].bytes, bytes);
   assert.equal(state.release.draft, false);
   assert.equal(state.release.immutable, true);
+  assert.equal(state.release.name, 'Generated release title');
+  assert.equal(state.release.body, 'Generated release notes');
   const writes = state.writes.length;
   await prepareRelease(options);
   await publishNpmRelease(options);
@@ -255,10 +270,12 @@ test('one lifecycle creates exact tag and draft, publishes npm, attaches bytes, 
 
 test('user draft targeting main with no tag is reused with the exact intended commit', async (t) => {
   const { prepareRelease } = await lifecycle();
-  const { state, options } = await fixture(t, { release: draft() });
+  const { state, options } = await fixture(t, { release: draft({ name: 'User title', body: 'User notes' }) });
   await prepareRelease(options);
   assert.equal(state.tag, commit);
   assert.deepEqual(state.writes, ['POST /repos/owner/repo/git/refs']);
+  assert.equal(state.release.name, 'User title');
+  assert.equal(state.release.body, 'User notes');
 });
 
 for (const initial of [
@@ -532,6 +549,8 @@ for (const status of [409, 422]) {
     await prepareRelease(options);
     assert.equal(state.tag, commit);
     assert.equal(state.release.draft, true);
+    assert.equal(state.release.name, 'Concurrent title');
+    assert.equal(state.release.body, 'Concurrent body');
     const writes = state.writes.length;
     await prepareRelease(options);
     assert.equal(state.writes.length, writes);
@@ -549,3 +568,30 @@ test('conflicting concurrent tag creation fails without moving the tag', async (
   assert.equal(state.release, undefined);
   assert.equal(state.writes.length, 1);
 });
+
+test('release note generation failure stops before draft creation or npm publication', async (t) => {
+  const { prepareRelease } = await lifecycle();
+  const { state, options } = await fixture(t, { notesFailure: true });
+  await assert.rejects(prepareRelease(options), /HTTP 503/);
+  assert.equal(state.release, undefined);
+  assert.equal(state.publishes, 0);
+  assert.ok(!state.writes.includes('POST /repos/owner/repo/releases'));
+});
+
+test('malformed generated notes stop before draft creation', async (t) => {
+  const { prepareRelease } = await lifecycle();
+  const { state, options } = await fixture(t, { notes: { name: 'Title', body: null } });
+  await assert.rejects(prepareRelease(options), /invalid generated release notes/);
+  assert.equal(state.release, undefined);
+  assert.equal(state.publishes, 0);
+});
+
+for (const initial of [{ registry: true }, { registry: true, tag: commit }, { registry: true, release: draft() }]) {
+  test(`existing npm version with incomplete GitHub state fails without writes ${JSON.stringify(initial)}`, async (t) => {
+    const { prepareRelease } = await lifecycle();
+    const { state, options } = await fixture(t, initial);
+    await assert.rejects(prepareRelease(options), /missing GitHub state requires manual recovery/);
+    assert.equal(state.writes.length, 0);
+    assert.equal(state.publishes, 0);
+  });
+}
