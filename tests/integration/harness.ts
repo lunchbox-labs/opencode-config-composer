@@ -210,10 +210,8 @@ export async function nativeHarness(t: TestContext, name: string) {
     }
     const npm = process.env.npm_execpath;
     assert.ok(npm !== undefined, 'run native tests through npm run');
-    const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
-      opencodeTestVersion: string;
-    };
-    const testVersion = process.env.OPENCODE_TEST_VERSION ?? manifest.opencodeTestVersion;
+    const testVersion = process.env.OPENCODE_TEST_VERSION;
+    assert.ok(testVersion !== undefined, 'native runner must provide its resolved exact host version');
     assert.match(testVersion, /^\d+\.\d+\.\d+$/, 'native dependency version must be exact');
     await writeFile(join(directory, 'package.json'), JSON.stringify({ private: true, type: 'module' }), {
       flag: 'wx',

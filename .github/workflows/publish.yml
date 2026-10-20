@@ -48,11 +48,13 @@ jobs:
         run: node scripts/validate-release.mjs
       - run: npm ci
       - run: npm run check
-      - name: Install the tested OpenCode binary
+      - name: Resolve and install a compatible OpenCode binary
+        id: opencode
         run: node scripts/opencode.mjs install "$RUNNER_TEMP/opencode"
       - run: npm run test:native
         env:
           OPENCODE_BIN: ${{ runner.temp }}/opencode/node_modules/opencode-linux-x64/bin/opencode
+          OPENCODE_TEST_VERSION: ${{ steps.opencode.outputs.version }}
       - name: Pack the verified build
         run: |
           mkdir release

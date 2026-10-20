@@ -6,7 +6,7 @@ import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { validateBaseline, validateCliVersion, validateTestVersion } from './opencode.mjs';
+import { resolveNativeVersion, validateBaseline, validateCliVersion } from './opencode.mjs';
 import { isolatedEnvironment } from '../tests/integration/harness.ts';
 import { stopProcess } from '../tests/integration/process.ts';
 import { cleanupProcesses, registerProcess } from '../tests/integration/resources.ts';
@@ -206,8 +206,9 @@ async function main() {
   try {
     const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8'));
     const lock = JSON.parse(await readFile(join(repository, 'package-lock.json'), 'utf8'));
-    const baseline = validateBaseline(manifest, lock);
-    const version = validateTestVersion(process.env.OPENCODE_TEST_VERSION ?? baseline, manifest.engines.opencode);
+    validateBaseline(manifest, lock);
+    const version = await resolveNativeVersion(manifest);
+    console.log(`Selected OpenCode ${version} satisfying engines.opencode ${manifest.engines.opencode}`);
     let binary = process.env.OPENCODE_BIN;
     if (binary === undefined) {
       const target = nativePackage();
@@ -262,7 +263,12 @@ async function main() {
       signal: cancellation.signal,
     });
     assert.equal(verifiedRipgrep.stdout.split(/\s+/)[1], ripgrepVersion, verifiedRipgrep.stdout);
-    const testEnvironment = { ...process.env, OPENCODE_BIN: binary, INTEGRATION_ARTIFACT_DIR: artifacts };
+    const testEnvironment = {
+      ...process.env,
+      OPENCODE_BIN: binary,
+      OPENCODE_TEST_VERSION: version,
+      INTEGRATION_ARTIFACT_DIR: artifacts,
+    };
     const pathKey = Object.keys(testEnvironment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
     testEnvironment[pathKey] = `${ripgrepDirectory}${delimiter}${testEnvironment[pathKey] ?? ''}`;
     const { stdout } = await promisify(execFile)(binary, ['--version'], {

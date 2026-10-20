@@ -71,6 +71,7 @@
     "globals": "17.13.0",
     "node-pty": "1.1.0",
     "prettier": "3.9.9",
+    "semver": "7.8.5",
     "solid-js": "1.9.12",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.0"

@@ -22,10 +22,9 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
     await mkdir(join(project, '.opencode'), { recursive: true });
     await installPackage(configRoot);
     const specification = await npmRegistration(t, configRoot, root);
-    const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
-      opencodeTestVersion: string;
-    };
-    const hostVersion = process.env.OPENCODE_TEST_VERSION ?? manifest.opencodeTestVersion;
+    const hostVersion = process.env.OPENCODE_TEST_VERSION;
+    assert.ok(hostVersion !== undefined, 'native runner must provide its resolved exact host version');
+    assert.match(hostVersion, /^\d+\.\d+\.\d+$/, 'native dependency version must be exact');
     assert.ok(process.env.npm_execpath !== undefined, 'run native tests through npm');
     await promisify(execFile)(
       process.execPath,

@@ -41,13 +41,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
           compression-level: 9
-  patch-registration:
+  minimum-registration:
     name: Npm loader (${{ matrix.os }}, OpenCode ${{ matrix.opencode }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        opencode: ['1.19.3']
+        opencode: ['1.19.0']
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:

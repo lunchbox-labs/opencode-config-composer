@@ -217,5 +217,5 @@ for the Linux/Windows integration suite and coverage.
 This project is licensed under MIT. See [LICENSE](LICENSE).
 
 Host support covers all stable 1.19 patch releases, including 1.19.0, and excludes other minors.
-The reproducible native test baseline is `opencodeTestVersion` (1.19.0), independent of the supported range and pinned development SDKs. Use `OPENCODE_TEST_VERSION=1.19.3` to test another supported patch.
+Native runners query current npm release metadata using a fresh temporary cache on every invocation, select the newest stable OpenCode satisfying `engines.opencode`, install that exact binary, and check its reported version. They print the selection and pass it to all native fixtures. An existing `OPENCODE_BIN` must report that selected version. `OPENCODE_TEST_VERSION=1.19.0` selects the optional minimum-patch lane; `opencodeTestVersion` records that floor, not the default. SDK/toolchain pins remain independent.
 Both bundled help skills (`config-composer-create` and `config-composer-explain`) require server registration in `opencode.json`/`opencode.jsonc`; TUI registration alone cannot expose them. Verify discovery with `opencode debug skill`.

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import semver from 'semver';
 
 const repository = new URL('../', import.meta.url);
 
@@ -28,12 +29,8 @@ export function validateBaseline(manifest, lock) {
 
 export function validateTestVersion(version, range) {
   assert.match(version ?? '', /^\d+\.\d+\.\d+$/, 'test version must be exact');
-  assert.match(range ?? '', /^\d+\.\d+\.x$/, 'host support must cover exactly one minor');
-  assert.equal(
-    version.split('.').slice(0, 2).join('.') + '.x',
-    range,
-    'test version is outside the supported host range',
-  );
+  assert.ok(semver.validRange(range), 'host support must be a valid semver range');
+  assert.ok(semver.satisfies(version, range), 'test version is outside the supported host range');
   return version;
 }
 
@@ -41,14 +38,102 @@ export function validateCliVersion(actual, expected) {
   assert.equal(actual.trim(), expected, 'the native OpenCode binary differs from the selected exact test version');
 }
 
+export function npmInvocation(npm = process.env.npm_execpath, platform = process.platform) {
+  if (npm !== undefined) {
+    return { command: process.execPath, args: [npm] };
+  }
+  assert.notEqual(platform, 'win32', 'run native scripts through npm on Windows');
+  return { command: 'npm', args: [] };
+}
+
+export async function publishedVersions() {
+  const cache = await mkdtemp(join(tmpdir(), 'composer-registry-'));
+  try {
+    const npm = npmInvocation();
+    const { stdout } = await promisify(execFile)(
+      npm.command,
+      [
+        ...npm.args,
+        'view',
+        'opencode-ai',
+        'versions',
+        '--json',
+        '--prefer-online',
+        '--offline=false',
+        '--prefer-offline=false',
+        '--cache',
+        cache,
+      ],
+      { timeout: 60_000, maxBuffer: 4_000_000 },
+    );
+    return JSON.parse(stdout);
+  } finally {
+    await rm(cache, { recursive: true, force: true });
+  }
+}
+
+export async function resolveNativeVersion(manifest, options = { override: process.env.OPENCODE_TEST_VERSION }) {
+  const range = manifest.engines.opencode;
+  assert.ok(semver.validRange(range), 'host support must be a valid semver range');
+  if (options.override !== undefined && options.override !== 'latest') {
+    return validateTestVersion(options.override, range);
+  }
+  const versions = await (options.readVersions ?? publishedVersions)();
+  assert.ok(
+    Array.isArray(versions) && versions.every((version) => typeof version === 'string'),
+    'published versions must be an array of strings',
+  );
+  const compatible = versions
+    .filter(
+      (version) => semver.valid(version) && semver.prerelease(version) === null && semver.satisfies(version, range),
+    )
+    .sort(semver.compare);
+  assert.ok(compatible.length > 0, `no stable published OpenCode version satisfies ${range}`);
+  return validateTestVersion(compatible.at(-1), range);
+}
+
 async function readBaseline() {
   const manifest = JSON.parse(await readFile(new URL('package.json', repository), 'utf8'));
   const lock = JSON.parse(await readFile(new URL('package-lock.json', repository), 'utf8'));
-  const baseline = validateBaseline(manifest, lock);
-  return {
-    manifest,
-    version: validateTestVersion(process.env.OPENCODE_TEST_VERSION ?? baseline, manifest.engines.opencode),
-  };
+  validateBaseline(manifest, lock);
+  return { manifest, version: await resolveNativeVersion(manifest) };
+}
+
+async function installCli(directory, version) {
+  assert.equal(process.arch, 'x64', 'the native installer supports x64');
+  assert.ok(['linux', 'win32'].includes(process.platform), 'the native installer supports Linux and Windows');
+  const name = process.platform === 'win32' ? 'opencode-windows-x64' : 'opencode-linux-x64';
+  const npm = npmInvocation();
+  await run(npm.command, [
+    ...npm.args,
+    'install',
+    '--prefix',
+    directory,
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    `${name}@${version}`,
+  ]);
+  return join(directory, 'node_modules', name, 'bin', process.platform === 'win32' ? 'opencode.exe' : 'opencode');
+}
+
+async function verifyBinary(binary, version, root) {
+  const { stdout } = await promisify(execFile)(binary, ['--version'], {
+    env: {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      XDG_CONFIG_HOME: join(root, 'config'),
+      XDG_DATA_HOME: join(root, 'data'),
+      XDG_STATE_HOME: join(root, 'state'),
+      XDG_CACHE_HOME: join(root, 'cache'),
+      OPENCODE_TEST_HOME: root,
+      OPENCODE_DB: join(root, 'db.sqlite'),
+      OPENCODE_DISABLE_AUTOUPDATE: '1',
+    },
+    timeout: 30_000,
+  });
+  validateCliVersion(stdout, version);
 }
 
 async function run(command, args, options = {}) {
@@ -67,50 +152,41 @@ async function run(command, args, options = {}) {
 
 async function main() {
   const { manifest, version } = await readBaseline();
+  console.log(`Selected OpenCode ${version} satisfying engines.opencode ${manifest.engines.opencode}`);
   if (process.argv[2] === 'install') {
-    assert.equal(process.platform, 'linux', 'the CI binary installer supports Linux x64');
-    assert.equal(process.arch, 'x64', 'the CI binary installer supports Linux x64');
     assert.ok(process.argv[3], 'provide the temporary installation directory');
-    await run('npm', [
-      'install',
-      '--prefix',
-      resolve(process.argv[3]),
-      '--no-audit',
-      '--no-fund',
-      `opencode-linux-x64@${version}`,
-    ]);
+    const directory = resolve(process.argv[3]);
+    const binary = await installCli(directory, version);
+    const verification = await mkdtemp(join(tmpdir(), 'composer-cli-version-'));
+    try {
+      await verifyBinary(binary, version, verification);
+    } finally {
+      await rm(verification, { recursive: true, force: true });
+    }
+    if (process.env.GITHUB_OUTPUT !== undefined) {
+      await appendFile(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+    }
     return;
   }
   assert.equal(process.argv[2], 'test', 'use install DIRECTORY or test');
-  const binary = process.env.OPENCODE_BIN ?? 'opencode';
-  const root = await mkdtemp(join(tmpdir(), 'composer-cli-version-'));
+  const root = await mkdtemp(join(tmpdir(), 'composer-native-'));
   try {
-    const { stdout } = await promisify(execFile)(binary, ['--version'], {
-      env: {
-        ...process.env,
-        XDG_CONFIG_HOME: join(root, 'config'),
-        XDG_DATA_HOME: join(root, 'data'),
-        XDG_STATE_HOME: join(root, 'state'),
-        XDG_CACHE_HOME: join(root, 'cache'),
-        OPENCODE_TEST_HOME: root,
-        OPENCODE_DB: join(root, 'db.sqlite'),
-        OPENCODE_DISABLE_AUTOUPDATE: '1',
-      },
-      timeout: 30_000,
+    const binary = process.env.OPENCODE_BIN ?? (await installCli(root, version));
+    await verifyBinary(binary, version, root);
+    console.log(
+      `Native CLI ${version}; plugin types ${manifest.devDependencies['@opencode-ai/plugin']}; SDK types ${manifest.devDependencies['@opencode-ai/sdk']}`,
+    );
+    const tests = (await readdir(new URL('tests/', repository)))
+      .filter((name) => name.endsWith('.native.ts'))
+      .sort()
+      .map((name) => fileURLToPath(new URL(`tests/${name}`, repository)));
+    assert.ok(tests.length > 0, 'native checks are missing');
+    await run(process.execPath, ['--experimental-strip-types', '--test', '--test-concurrency=1', ...tests], {
+      env: { ...process.env, OPENCODE_BIN: binary, OPENCODE_TEST_VERSION: version },
     });
-    validateCliVersion(stdout, version);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-  console.log(
-    `Native CLI ${version}; plugin types ${manifest.devDependencies['@opencode-ai/plugin']}; SDK types ${manifest.devDependencies['@opencode-ai/sdk']}`,
-  );
-  const tests = (await readdir(new URL('tests/', repository)))
-    .filter((name) => name.endsWith('.native.ts'))
-    .sort()
-    .map((name) => fileURLToPath(new URL(`tests/${name}`, repository)));
-  assert.ok(tests.length > 0, 'native checks are missing');
-  await run(process.execPath, ['--experimental-strip-types', '--test', '--test-concurrency=1', ...tests]);
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
