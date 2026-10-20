@@ -1,6 +1,6 @@
 {
   "name": "@lunchbox-labs/opencode-config-composer",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Compose OpenCode configuration with groups, model presets, permissions, and profiles",
   "license": "MIT",
   "type": "module",
@@ -10,7 +10,7 @@
   },
   "engines": {
     "node": ">=22.18.0",
-    "opencode": "1.19.0"
+    "opencode": "1.19.x"
   },
   "exports": {
     ".": {
@@ -71,6 +71,7 @@
     "globals": "17.13.0",
     "node-pty": "1.1.0",
     "prettier": "3.9.9",
+    "semver": "7.8.5",
     "solid-js": "1.9.12",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.0"
@@ -86,5 +87,6 @@
     "solid-js@1.9.12": {
       "seroval": "1.6.3"
     }
-  }
+  },
+  "opencodeTestVersion": "1.19.0"
 }

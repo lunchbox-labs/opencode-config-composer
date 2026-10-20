@@ -7,8 +7,14 @@ permissions:
   contents: read
 jobs:
   check:
+    strategy:
+      fail-fast: false
+      matrix:
+        opencode: ['latest', '1.19.0']
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      OPENCODE_TEST_VERSION: ${{ matrix.opencode }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Validate GitHub workflows
@@ -31,9 +37,11 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm run check
-      - name: Install the tested OpenCode binary
+      - name: Resolve and install a compatible OpenCode binary
+        id: opencode
         run: node scripts/opencode.mjs install "$RUNNER_TEMP/opencode"
       - name: Test standalone TUI startup and the shipped workflow
         run: npm exec --call 'node --experimental-strip-types --test --test-concurrency=1 tests/config-composer-tui.native.ts tests/review-programming.native.ts'
         env:
           OPENCODE_BIN: ${{ runner.temp }}/opencode/node_modules/opencode-linux-x64/bin/opencode
+          OPENCODE_TEST_VERSION: ${{ steps.opencode.outputs.version }}

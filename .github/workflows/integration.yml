@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        suite: [core, discovery, canonical, editor, terminal, cleanup, content, content-terminal, permissions, runtime-terminal, running-inspector, scoped-apply, shortcuts, availability, profile-switching]
+        suite: [registration, core, discovery, canonical, editor, terminal, cleanup, content, content-terminal, permissions, runtime-terminal, running-inspector, scoped-apply, shortcuts, availability, profile-switching]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -41,3 +41,24 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
           compression-level: 9
+  minimum-registration:
+    name: Npm loader (${{ matrix.os }}, OpenCode ${{ matrix.opencode }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        opencode: ['1.19.0']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run test:integration -- --suite registration
+        env:
+          OPENCODE_TEST_VERSION: ${{ matrix.opencode }}
