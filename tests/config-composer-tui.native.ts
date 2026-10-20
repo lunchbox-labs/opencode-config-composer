@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { installPackage } from './install-package.ts';
 import { npmRegistration } from './npm-registration.ts';
+import { isolatedEnvironment } from './integration/harness.ts';
 
 for (const scope of ['shared', 'project-only', 'empty'] as const) {
   test(`OpenCode renders both Composer menus with ${scope} sources`, { timeout: 260_000 }, async (t) => {
@@ -99,9 +100,7 @@ for (const scope of ['shared', 'project-only', 'empty'] as const) {
     }
     await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [specification] }));
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: root,
-      USERPROFILE: root,
+      ...isolatedEnvironment(root),
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
       XDG_CONFIG_HOME: join(root, 'config'),
