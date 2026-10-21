@@ -1,3 +1,4 @@
+import { moveToPosition } from './move-to-position.ts';
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
 import type { Snapshot } from '../storage.ts';
 import { definitionDestinations } from '../composition/authoring.ts';
@@ -26,6 +27,11 @@ export function openPermissions(snapshot: Snapshot, ui: PermissionUi): void {
     const pending = structuredClone(localPermissionRules(snapshot, target) ?? []);
     const ruleMenu = (index: number) =>
       ui.menu(`Rule ${index + 1}`, () => [
+        {
+          title: 'Move to position…',
+          value: 'position',
+          run: () => moveToPosition(ui, pending, index),
+        },
         ...(['tool', 'pattern'] as const).map((field) => ({
           title: `Edit ${field}`,
           value: field,
