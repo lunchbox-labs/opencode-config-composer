@@ -1,6 +1,6 @@
 {
   "name": "@lunchbox-labs/opencode-config-composer",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Compose OpenCode configuration with groups, model presets, permissions, and profiles",
   "license": "MIT",
   "type": "module",
