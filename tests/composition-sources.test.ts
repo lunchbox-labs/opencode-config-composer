@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
+import { loadConfiguration } from '../src/config-composer/configuration.ts';
 import { loadCompositionSources } from '../src/config-composer/composition/sources.ts';
 import { CompositionValidationError } from '../src/config-composer/composition/document.ts';
 
@@ -248,4 +249,40 @@ test('cycle and repeated-import diagnostics identify the declaring import field'
   await writeFile(imported, '{}');
   await writeFile(f.baseFile, '{"imports":["./profiles/work.jsonc","./profiles/../profiles/work.jsonc"]}');
   await assert.rejects(loadCompositionSources(f.context), at(f.baseFile, '/imports/1'));
+});
+
+test('malformed imports identify the loaded file and refresh diagnostics after source changes', async (t) => {
+  const f = await fixture(t);
+  const imported = join(f.root, 'shared/profiles/models.jsonc');
+  await writeFile(f.baseFile, '{"imports":["./profiles/models.jsonc"]}');
+  for (const [text, detail] of [
+    ['{\r\n  "configurationPresets": {}\r\n  "profiles": {}\r\n}', 'CommaExpected at line 3, column 3'],
+    ['{\r\n  "profiles": {"work": {}, "work": {}}\r\n}', '"work" at line 2, column 16 and line 2, column 28'],
+  ]) {
+    await writeFile(imported, text);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(loadCompositionSources(f.context), (error: unknown) => {
+        assert.ok(error instanceof CompositionValidationError);
+        assert.equal(error.diagnostic.sourceId, imported);
+        assert.equal(error.diagnostic.pointer, '');
+        assert.ok(error.message.includes(detail), error.message);
+        return true;
+      });
+    }
+  }
+  await writeFile(imported, '{"profiles":{"work":{}}}');
+  assert.equal((await loadCompositionSources(f.context)).documents.length, 2);
+});
+
+test('direct configuration loading includes the selected file in parser diagnostics', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.baseFile, '{\r\n  "groups": {} "groups": {}\r\n}');
+  await assert.rejects(loadConfiguration({ configFile: f.baseFile }), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(
+      error.message,
+      `${f.baseFile}: Fix the invalid Config Composer JSONC configuration. CommaExpected at line 2, column 16.`,
+    );
+    return true;
+  });
 });
