@@ -11,7 +11,6 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify package and source
     if: >-
       github.repository == 'lunchbox-labs/opencode-config-composer' &&
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
@@ -35,20 +34,15 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-          cache: npm
-          cache-dependency-path: package-lock.json
       - name: Validate release metadata
         id: release
         run: node scripts/validate-release.mjs
-      - name: Install dependencies
-        run: npm ci
-      - name: Check source and installed package
-        run: npm run check
+      - run: npm ci
+      - run: npm run check
       - name: Resolve and install a compatible OpenCode binary
         id: opencode
         run: node scripts/opencode.mjs install "$RUNNER_TEMP/opencode"
-      - name: Test native OpenCode
-        run: npm run test:native
+      - run: npm run test:native
         env:
           OPENCODE_BIN: ${{ runner.temp }}/opencode/node_modules/opencode-linux-x64/bin/opencode
           OPENCODE_TEST_VERSION: ${{ steps.opencode.outputs.version }}
@@ -85,7 +79,7 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Create release App token
+      - name: Create a repository-scoped release App token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -94,7 +88,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
-      - name: Prepare tag and draft release
+      - name: Create or verify the exact tag and release draft
         run: node scripts/release-lifecycle.mjs prepare
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -128,10 +122,10 @@ jobs:
           package-manager-cache: false
       - name: Use a trusted-publishing-capable npm version
         run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
-      - name: Verify release artifact checksum
+      - name: Verify downloaded artifact checksum
         working-directory: release
         run: sha256sum --check SHA256SUMS
-      - name: Publish or verify npm package
+      - name: Publish or verify the exact npm tarball with OIDC
         run: node scripts/release-lifecycle.mjs npm
         env:
           GH_TOKEN: ${{ github.token }}
@@ -164,10 +158,10 @@ jobs:
         with:
           name: lunchbox-labs-opencode-config-composer-release
           path: release
-      - name: Verify release artifact checksum
+      - name: Verify downloaded artifact checksum
         working-directory: release
         run: sha256sum --check SHA256SUMS
-      - name: Create release App token
+      - name: Create a repository-scoped release App token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -176,7 +170,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
-      - name: Verify npm tarball and publish GitHub release
+      - name: Verify and attach the exact published tarball
         run: node scripts/release-lifecycle.mjs finish
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
