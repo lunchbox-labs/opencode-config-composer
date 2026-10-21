@@ -483,3 +483,143 @@ for (const registry of ['profiles', 'configurationPresets'] as const) {
     assert.ok(!getActions().some((action) => action.value === 'duplicate'));
   });
 }
+
+for (const registry of ['profiles', 'componentGroups'] as const) {
+  test(`${registry} descriptions save in the declaring source without effective changes and reject stale edits`, async (t) => {
+    const root = await fixture(t);
+    const before = await loadSnapshot(root);
+    const plan = planDefinition(before, {
+      operation: 'patch',
+      registry,
+      name: 'work',
+      path: ['description'],
+      value: 'Review only',
+    });
+    const preview = await previewDefinition(plan);
+    assert.deepEqual(preview.resolved, before.resolved);
+    await save(plan);
+    const current = await loadSnapshot(root);
+    assert.equal(current.sources.registry[registry]?.work.description, 'Review only');
+    assert.deepEqual(current.sources.activeProfiles, before.sources.activeProfiles);
+    assert.deepEqual(current.resolved, before.resolved);
+    assert.match(await readFile(join(root, 'definitions.jsonc'), 'utf8'), /Preserve preset comment/);
+    await assert.rejects(
+      save(
+        planDefinition(before, { operation: 'patch', registry, name: 'work', path: ['description'], value: 'Stale' }),
+      ),
+      /changed/,
+    );
+    await save(
+      planDefinition(current, { operation: 'patch', registry, name: 'work', path: ['description'], value: undefined }),
+    );
+    assert.equal((await loadSnapshot(root)).sources.registry[registry]?.work.description, undefined);
+  });
+}
+
+test('description authoring shows source labels and uses the existing review callback', async (t) => {
+  const { openAuthoring } = await import('../src/config-composer/tui/authoring.ts');
+  const root = await fixture(t);
+  const snapshot = await loadSnapshot(root);
+  type Action = Exclude<Parameters<AuthoringUi['menu']>[1], () => unknown>[number];
+  let actions: Action[] = [];
+  let confirmed: ((value: string) => void | Promise<void>) | undefined;
+  let proposed: Parameters<AuthoringUi['propose']>[1] | undefined;
+  const ui: AuthoringUi = {
+    menu: (_title, next) => {
+      actions = typeof next === 'function' ? next() : next;
+    },
+    prompt: (_title, _value, next) => {
+      confirmed = next;
+    },
+    back: () => {},
+    refresh: () => {},
+    groupModel: () => {},
+    presetModel: () => {},
+    createPreset: () => {},
+    propose: async (_snapshot, change) => {
+      proposed = change;
+    },
+  };
+  for (const registry of ['profiles', 'componentGroups'] as const) {
+    openAuthoring(snapshot, ui);
+    await actions.find((action) => action.value === registry)!.run();
+    assert.ok(actions.find((action) => action.value === 'work')!.description?.includes('definitions.jsonc') === true);
+    await actions.find((action) => action.value === 'work')!.run();
+    const edit = actions.find((action) => action.value === 'description');
+    assert.ok(edit !== undefined);
+    await edit.run();
+    assert.equal(proposed, undefined, 'opening/cancelling does not propose a write');
+    await confirmed!('Review only');
+    assert.deepEqual(proposed, {
+      operation: 'patch',
+      registry,
+      name: 'work',
+      path: ['description'],
+      value: 'Review only',
+    });
+    proposed = undefined;
+  }
+});
+
+test('selection and authoring menus show each declaration description without parent inheritance', async (t) => {
+  const { openAuthoring } = await import('../src/config-composer/tui/authoring.ts');
+  const { openActivation } = await import('../src/config-composer/tui/activation.ts');
+  const { compositionRevision } = await import('../src/config-composer/composition/revision.ts');
+  const root = await fixture(t);
+  const before = await loadSnapshot(root);
+  for (const registry of ['profiles', 'componentGroups'] as const) {
+    await save(
+      planDefinition(await loadSnapshot(root), {
+        operation: 'patch',
+        registry,
+        name: 'work',
+        path: ['description'],
+        value: `About ${registry}`,
+      }),
+    );
+  }
+  await save(
+    planDefinition(await loadSnapshot(root), {
+      operation: 'create',
+      registry: 'profiles',
+      name: 'child',
+      sourceId: join(root, 'definitions.jsonc'),
+      value: { extends: 'work' },
+    }),
+  );
+  const snapshot = await loadSnapshot(root);
+  const oldRevision = compositionRevision(before.sources, before.resolved, []);
+  const newRevision = compositionRevision(snapshot.sources, snapshot.resolved, []);
+  assert.notEqual(newRevision.sources, oldRevision.sources);
+  assert.equal(newRevision.effective, oldRevision.effective);
+  type Action = Exclude<Parameters<AuthoringUi['menu']>[1], () => unknown>[number];
+  let actions: Action[] = [];
+  const ui: AuthoringUi = {
+    menu: (_title, next) => {
+      actions = typeof next === 'function' ? next() : next;
+    },
+    prompt: () => {},
+    back: () => {},
+    refresh: () => {},
+    groupModel: () => {},
+    presetModel: () => {},
+    createPreset: () => {},
+    propose: async () => {},
+  };
+  const check = (name: string, description: string) => {
+    const actual = actions.find((action) => action.value === name)?.description;
+    assert.ok(actual?.includes(description) === true);
+    assert.ok(actual.includes('definitions.jsonc'));
+  };
+  openActivation(snapshot, { menu: ui.menu, back: ui.back, propose: async () => {} });
+  await actions.find((action) => action.value === 'ordered')!.run();
+  check('0', 'About profiles');
+  await actions.find((action) => action.value === '+add')!.run();
+  assert.doesNotMatch(actions.find((action) => action.value === 'child')?.description ?? '', /About profiles/);
+  openAuthoring(snapshot, ui);
+  await actions.find((action) => action.value === 'componentGroups')!.run();
+  check('work', 'About componentGroups');
+  openAuthoring(snapshot, ui);
+  await actions.find((action) => action.value === 'profiles')!.run();
+  check('work', 'About profiles');
+});

@@ -451,6 +451,9 @@
         },
         "configuration": {
           "$ref": "#/$defs/agentConfiguration"
+        },
+        "description": {
+          "$ref": "#/$defs/definitionDescription"
         }
       },
       "description": "Any subset of component kinds. Configuration contributes to member agents only."
@@ -588,6 +591,9 @@
         },
         "overrides": {
           "$ref": "#/$defs/overrides"
+        },
+        "description": {
+          "$ref": "#/$defs/definitionDescription"
         }
       },
       "description": "Single named parent. Replay the full parent chain, then child layers and overrides, for each active profile in order."
@@ -610,6 +616,12 @@
           "maxLength": 256
         }
       }
+    },
+    "definitionDescription": {
+      "type": "string",
+      "maxLength": 160,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*$",
+      "description": "Optional single-line plain text for this choice, up to 160 characters. Metadata only; not inherited or applied as configuration."
     }
   }
 }

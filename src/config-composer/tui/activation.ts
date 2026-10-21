@@ -1,3 +1,4 @@
+import { definitionDescription } from './definition-description.ts';
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
 import type { SourceSnapshot } from '../storage.ts';
 import {
@@ -27,6 +28,7 @@ export function openActivation(snapshot: SourceSnapshot, ui: ActivationUi): void
       ...pending.map((name, index) => ({
         title: `${index + 1}. ${name}`,
         value: String(index),
+        description: definitionDescription(snapshot, 'profiles', name),
         run: () =>
           ui.menu(`Profile occurrence ${index + 1}`, [
             {
@@ -76,6 +78,7 @@ export function openActivation(snapshot: SourceSnapshot, ui: ActivationUi): void
               .map((name) => ({
                 title: name,
                 value: name,
+                description: definitionDescription(snapshot, 'profiles', name),
                 run: () => {
                   pending.push(name);
                   ui.back();

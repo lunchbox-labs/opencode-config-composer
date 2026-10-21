@@ -1,3 +1,4 @@
+import { definitionDescription } from './definition-description.ts';
 import { moveToPosition } from './move-to-position.ts';
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
 import type { Snapshot } from '../storage.ts';
@@ -185,7 +186,9 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
           value: `${kind}:${name}`,
           category: kind === 'agent' ? 'Agents' : 'Groups',
           description: available.includes(name)
-            ? 'Explicit preset target'
+            ? kind === 'group'
+              ? definitionDescription(snapshot, 'componentGroups', name)
+              : 'Explicit preset target'
             : 'Unavailable or disabled existing target; select to toggle',
           run: () => {
             const index = selected.indexOf(name);
@@ -297,6 +300,7 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
             Object.keys(snapshot.sources.registry.componentGroups ?? {}).map((componentGroup) => ({
               title: componentGroup,
               value: componentGroup,
+              description: definitionDescription(snapshot, 'componentGroups', componentGroup),
               run: () => append({ componentGroup }),
             })),
           ),
@@ -316,6 +320,7 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
                     title: group,
                     value: `group:${group}`,
                     category: 'Groups',
+                    description: definitionDescription(snapshot, 'componentGroups', group),
                     run: () => {
                       pending.push({ configurationPreset, target: { componentGroups: [group] } });
                       ui.back();
@@ -370,10 +375,31 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
               .map((profile) => ({
                 title: profile,
                 value: profile,
+                description: definitionDescription(snapshot, 'profiles', profile),
                 run: () =>
                   ui.propose(snapshot, { operation: 'patch', registry, name, path: ['extends'], value: profile }),
               })),
           ]),
+      });
+    }
+    if (registry !== 'configurationPresets') {
+      actions.push({
+        title: 'Edit description…',
+        value: 'description',
+        description: definitionDescription(snapshot, registry, name),
+        run: () =>
+          ui.prompt(
+            'Description (160 characters; blank clears)',
+            snapshot.sources.registry[registry]?.[name]?.description ?? '',
+            (value) =>
+              ui.propose(snapshot, {
+                operation: 'patch',
+                registry,
+                name,
+                path: ['description'],
+                value: value === '' ? undefined : value,
+              }),
+          ),
       });
     }
     if (registry !== 'componentGroups') {
@@ -474,7 +500,7 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
         .map((name) => ({
           title: name,
           value: name,
-          description: snapshot.sources.provenance[`/${registry}/${name}`].sourceId,
+          description: definitionDescription(snapshot, registry, name),
           run: () => definition(registry, name),
         })),
       {
