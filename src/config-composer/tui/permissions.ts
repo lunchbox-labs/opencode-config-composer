@@ -1,3 +1,4 @@
+import { SettingsError } from '../settings.ts';
 import { moveToPosition } from './move-to-position.ts';
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
 import type { Snapshot } from '../storage.ts';
@@ -22,7 +23,7 @@ interface PermissionUi {
   create: (sourceId: string, name: string) => Promise<void>;
 }
 
-export function openPermissions(snapshot: Snapshot, ui: PermissionUi): void {
+export function openPermissions(snapshot: Snapshot, ui: PermissionUi, target?: ConfigurationTarget): void {
   const edit = (target: ConfigurationTarget) => {
     const pending = structuredClone(localPermissionRules(snapshot, target) ?? []);
     const ruleMenu = (index: number) =>
@@ -145,6 +146,16 @@ export function openPermissions(snapshot: Snapshot, ui: PermissionUi): void {
       },
     ]);
   };
+  if (target !== undefined) {
+    const selected = permissionTargets(snapshot, target.sourceId).find(
+      (candidate) => JSON.stringify(candidate.path) === JSON.stringify(target.path),
+    );
+    if (selected === undefined) {
+      throw new SettingsError('Choose an available writable permissions destination and target.');
+    }
+    edit(selected);
+    return;
+  }
   ui.menu(
     'Permission destination',
     definitionDestinations(snapshot).map((file) => ({

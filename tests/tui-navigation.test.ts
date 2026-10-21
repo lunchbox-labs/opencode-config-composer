@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type {
@@ -209,4 +210,64 @@ test('refresh never resurrects a view after another dialog, route or client take
     await view.escape();
     assert.equal(view.current, undefined);
   }
+});
+
+test('definition settings Back returns to its exact definition and route changes discard child frames', async (t) => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { loadSnapshot } = await import('../src/config-composer/storage.ts');
+  const { openAuthoring } = await import('../src/config-composer/tui/authoring.ts');
+  const { openParameters } = await import('../src/config-composer/tui/parameters.ts');
+  const root = await mkdtemp(join(tmpdir(), 'definition-navigation-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    join(root, 'config-composer.jsonc'),
+    JSON.stringify({ componentGroups: { work: {} }, profiles: { work: {} } }),
+  );
+  const { packageName } = await import('../src/config-composer/package-name.ts');
+  await writeFile(join(root, 'opencode.jsonc'), JSON.stringify({ plugin: [packageName] }));
+  const snapshot = await loadSnapshot(root);
+  const view = harness();
+  type AuthoringUi = Parameters<typeof openAuthoring>[1];
+  const menu: AuthoringUi['menu'] = (title, options) => {
+    const choices = typeof options === 'function' ? options() : options;
+    view.navigation.menu({
+      title,
+      options: choices,
+      onSelect: (option) => {
+        Promise.resolve(choices.find((item) => item.value === option.value)?.run()).catch((error: unknown) => {
+          assert.fail(String(error));
+        });
+      },
+    });
+  };
+  const ui: AuthoringUi = {
+    menu,
+    prompt: () => {},
+    back: view.navigation.back,
+    refresh: view.navigation.refresh,
+    groupModel: () => {},
+    presetModel: () => {},
+    createPreset: () => {},
+    propose: async () => {},
+    parameters: (target) => openParameters(snapshot, { menu, prompt: () => {}, propose: async () => {} }, target),
+  };
+  const choose = (value: string) => {
+    const current = view.current as TuiDialogSelectProps<string>;
+    const option = current.options.find((item) => item.value === value);
+    assert.ok(option !== undefined);
+    current.onSelect!(option);
+  };
+  openAuthoring(snapshot, ui);
+  choose('+find');
+  choose('componentGroups:work');
+  choose('+parameters');
+  assert.equal(view.current?.title, 'Group: work: parameters saved here');
+  await view.escape();
+  assert.equal(view.current.title, 'Component groups: work');
+  choose('+parameters');
+  (view.api.route.current as { params: { sessionID: string } }).params.sessionID = 'other';
+  await view.escape();
+  assert.equal(view.current, undefined);
+  assert.equal(view.navigation.canGoBack, false);
 });

@@ -81,7 +81,7 @@ export function openParameterDraft(
   ]);
 }
 
-export function openParameters(snapshot: Snapshot, ui: ParameterUi): void {
+export function openParameters(snapshot: Snapshot, ui: ParameterUi, target?: ConfigurationTarget): void {
   const edit = (target: ConfigurationTarget) => {
     const current = parameterValue(snapshot, target);
     ui.menu(
@@ -89,6 +89,16 @@ export function openParameters(snapshot: Snapshot, ui: ParameterUi): void {
       parameterActions(current, ui.prompt, (field, text) => ui.propose(target, field, text)),
     );
   };
+  if (target !== undefined) {
+    const selected = configurationTargets(snapshot, target.sourceId).find(
+      (candidate) => JSON.stringify(candidate.path) === JSON.stringify(target.path),
+    );
+    if (selected === undefined) {
+      throw new SettingsError('Choose an available writable parameters destination and target.');
+    }
+    edit(selected);
+    return;
+  }
   ui.menu(
     'Parameter destination',
     definitionDestinations(snapshot).map((file) => ({
