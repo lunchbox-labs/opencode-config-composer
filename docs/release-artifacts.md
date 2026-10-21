@@ -42,7 +42,28 @@ The existing immutable 0.0.5 release cannot receive assets. Use the
 [npm package](https://www.npmjs.com/package/@lunchbox-labs/opencode-config-composer/v/0.0.5)
 or [published tarball](https://registry.npmjs.org/@lunchbox-labs/opencode-config-composer/-/opencode-config-composer-0.0.5.tgz).
 
-The workflow token must be allowed to create version tags by repository/organization
-rulesets; `contents: write` alone does not bypass tag-creation restrictions. A rejected
-tag creation reports its controlled phase and HTTP status without response bodies.
-The workflow never changes rulesets or uses an alternate credential to bypass them.
+The prepare and final attachment/publication steps use a GitHub App installation token.
+Create the repository environment `release` and store `LUNCHBOX_LABS_APP_PRIVATE_KEY`
+only as its environment secret. Keep `LUNCHBOX_LABS_APP_CLIENT_ID` as an organization
+or environment variable with that same name. Remove broader organization/repository
+private-key copies or repository access to those copies so the environment is the
+credential access boundary. Both App-token jobs explicitly request `release`; npm
+retains its separate `npm` environment. Install the
+App on this repository with contents write permission, and authorize its identity
+under the existing version-tag creation ruleset. `contents: write` alone does not
+bypass rulesets. The workflow never changes protection settings or moves existing tags.
+
+The Actions allowlist must permit `actions/create-github-app-token` (pinned here to
+v3.3.0 at `64ab729a6294000f5aa4a4bc0b73d1f32bc45510`). Each release job mints a token
+only for this repository immediately before its GitHub API step, with contents write
+permission and default revocation when the job ends. Its normal workflow token remains
+read-only. App credentials and tokens are not passed to builds, tests, npm, or artifacts;
+no token is exported between jobs. npm retains its separate read-only GitHub token and
+OIDC trusted publishing configuration. Rejected tag creation reports safe phase/status
+diagnostics so the operator can identify policy or installation configuration problems.
+
+Restrict the `release` environment to main and consider required reviewer approval.
+An environment is not a per-workflow allowlist: another workflow can request the same
+environment. Branch restrictions, environment review, protected workflow changes, and
+control of who can run or modify workflows therefore matter. These prerequisites are
+operator configuration; this change does not create environments or alter settings.

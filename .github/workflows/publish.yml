@@ -63,11 +63,12 @@ jobs:
           retention-days: 3
 
   prepare:
+    environment: release
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -77,10 +78,19 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Create a repository-scoped release App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.LUNCHBOX_LABS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.LUNCHBOX_LABS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
       - name: Create or verify the exact tag and release draft
         run: node scripts/release-lifecycle.mjs prepare
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RELEASE_TAG: ${{ needs.verify.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
           NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
@@ -125,12 +135,13 @@ jobs:
           NPM_CONFIG_PROVENANCE: 'false'
 
   attach:
+    environment: release
     name: Attach the npm tarball and publish the release
     needs: [verify, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -148,10 +159,19 @@ jobs:
       - name: Verify downloaded artifact checksum
         working-directory: release
         run: sha256sum --check SHA256SUMS
+      - name: Create a repository-scoped release App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.LUNCHBOX_LABS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.LUNCHBOX_LABS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
       - name: Verify and attach the exact published tarball
         run: node scripts/release-lifecycle.mjs finish
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RELEASE_TAG: ${{ needs.verify.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
           NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
