@@ -42,8 +42,8 @@ jobs:
       - name: Resolve and install a compatible OpenCode binary
         id: opencode
         run: node scripts/opencode.mjs install "$RUNNER_TEMP/opencode"
-      - name: Test standalone TUI startup and the shipped workflow
-        run: npm exec --call 'node --experimental-strip-types --test --test-concurrency=1 tests/config-composer-tui.native.ts tests/review-programming.native.ts'
+      - name: Test the complete native release suite
+        run: npm run test:native
         env:
           OPENCODE_BIN: ${{ runner.temp }}/opencode/node_modules/opencode-linux-x64/bin/opencode
           OPENCODE_TEST_VERSION: ${{ steps.opencode.outputs.version }}

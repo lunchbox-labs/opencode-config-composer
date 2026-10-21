@@ -185,7 +185,9 @@ async function main() {
       .sort()
       .map((name) => fileURLToPath(new URL(`tests/${name}`, repository)));
     assert.ok(tests.length > 0, 'native checks are missing');
-    await run(process.execPath, ['--experimental-strip-types', '--test', '--test-concurrency=1', ...tests], {
+    // Files own separate installs, homes, databases and ephemeral ports. Keep
+    // cases within each file sequential and limit competing native hosts to two.
+    await run(process.execPath, ['--experimental-strip-types', '--test', '--test-concurrency=2', ...tests], {
       env: { ...process.env, OPENCODE_BIN: binary, OPENCODE_TEST_VERSION: version },
     });
   } finally {
