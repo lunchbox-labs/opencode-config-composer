@@ -1,3 +1,4 @@
+import { credentialKey } from './editor-error.ts';
 import { isDeepStrictEqual } from 'node:util';
 import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
 import type { dialogNavigation } from '../../tui/navigation.ts';
@@ -59,16 +60,6 @@ function text(value: unknown): string | undefined {
 }
 function number(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-function credentialKey(key: string): boolean {
-  const name = key.toLowerCase().replaceAll(/[^a-z]/g, '');
-  return (
-    ['apikey', 'authorization', 'password', 'passwd', 'secret', 'credential', 'privatekey'].some((part) =>
-      name.includes(part),
-    ) ||
-    name.endsWith('token') ||
-    name === 'cookie'
-  );
 }
 function safeOptions(value: unknown): unknown {
   let remaining = 200;

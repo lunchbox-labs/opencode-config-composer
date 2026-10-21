@@ -575,9 +575,11 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   let dispose: (() => void) | undefined;
   const commands: { name: string; slashName?: string; slashAliases?: string[]; run: () => void | Promise<void> }[] = [];
   const toasts: { message: string }[] = [];
+  const events = new Map<string, () => void>();
   const keymapListeners = new Set<() => void>();
   let nativeCommands: string[] = [];
   const api = {
+    renderer: { width: 180, height: 55 },
     state: {
       path: {
         config: serverDirectory,
@@ -586,6 +588,12 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
       },
     },
     route: { current: { name: 'home' } },
+    event: {
+      on: (name: string, handler: () => void) => {
+        events.set(name, handler);
+        return () => events.delete(name);
+      },
+    },
     lifecycle: {
       signal: controller.signal,
       onDispose: (callback: () => void) => {
@@ -735,6 +743,7 @@ function uiHarness(root: string, globalDirectory = root, serverDirectory = root)
   const settings = registerSettings(api, root, globalDirectory);
   return {
     api,
+    emit: (name: string) => events.get(name)?.(),
     refreshShortcuts: settings.refreshShortcuts,
     commandNames: () => commands.map((command) => command.name),
     setNativeCommands: (names: string[]) => {
@@ -2528,6 +2537,159 @@ test('selection confirmation requires the server external state filesystem proof
     ['work'],
   );
 });
+
+test('last editor error survives inspection and dismissal, replaces failures, and never writes files', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  const source = join(root, 'config-composer.jsonc');
+  const before = await readFile(source, 'utf8');
+  await ui.command('config-composer.compose');
+  await ui.select('last-editor-error');
+  assert.match(ui.message(), /No editor error/);
+  await ui.escape();
+  await ui.command();
+  ui.setProviderError(true);
+  await ui.select('developers');
+  assert.match(ui.toasts.at(-1)!.message, /Could not load provider models/);
+  await ui.command('config-composer.compose');
+  for (let index = 0; index < 2; index++) {
+    await ui.select('last-editor-error');
+    assert.match(ui.message(), /Could not load provider models/);
+    assert.ok(ui.message().includes(root));
+    await ui.escape();
+    assert.equal(ui.title(), 'Compose configs');
+  }
+  ui.setProviderError(false);
+  await writeFile(source, '{ invalid');
+  await ui.command();
+  await ui.command('config-composer.compose');
+  await ui.select('last-editor-error');
+  assert.doesNotMatch(ui.message(), /Could not load provider models/);
+  assert.match(ui.message(), /JSON/);
+  assert.equal(await readFile(source, 'utf8'), '{ invalid');
+  assert.equal(ui.updates, 0);
+  await writeFile(source, before);
+});
+
+for (const change of ['project', 'client', 'config', 'abort', 'dispose'] as const) {
+  test(`last editor error clears after ${change}`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    await ui.command();
+    ui.setProviderError(true);
+    await ui.select('developers');
+    await ui.command('config-composer.compose');
+    const menu = ui.dialog as TuiDialogSelectProps<string>;
+    const show = menu.options.find((option) => option.value === 'last-editor-error');
+    assert.ok(show !== undefined);
+    if (change === 'project') {
+      ui.setProject(join(root, 'other'));
+    }
+    if (change === 'client') {
+      Object.assign(ui.api, {
+        client: Object.assign(Object.create(Object.getPrototypeOf(ui.api.client) as object) as object, ui.api.client),
+      });
+    }
+    if (change === 'config') {
+      ui.api.state.path.config = join(root, 'other');
+    }
+    if (change === 'abort') {
+      ui.controller.abort();
+    }
+    if (change === 'dispose') {
+      ui.dispose();
+    }
+    await ui.select(show.value);
+    assert.doesNotMatch(ui.message(), /Could not load provider models/);
+    if (change !== 'abort' && change !== 'dispose') {
+      assert.match(ui.message(), /No editor error/);
+    }
+  });
+}
+
+for (const change of ['project', 'client', 'instance', 'abort', 'dispose'] as const) {
+  test(`a delayed editor failure cannot survive ${change}`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    await ui.command();
+    ui.setProviderError(true);
+    const gate = ui.delayProviders();
+    const pending = ui.select('developers');
+    await gate.requested;
+    if (change === 'project') {
+      ui.setProject(join(root, 'other'));
+    }
+    if (change === 'client') {
+      Object.assign(ui.api, {
+        client: Object.assign(Object.create(Object.getPrototypeOf(ui.api.client) as object) as object, ui.api.client),
+      });
+    }
+    if (change === 'instance') {
+      ui.emit('server.instance.disposed');
+    }
+    if (change === 'abort') {
+      ui.controller.abort();
+    }
+    if (change === 'dispose') {
+      ui.dispose();
+    }
+    gate.resolve();
+    await pending;
+    assert.equal(ui.toasts.length, 0);
+    if (change !== 'abort' && change !== 'dispose') {
+      await ui.command('config-composer.compose');
+      await ui.select('last-editor-error');
+      assert.match(ui.message(), /No editor error/);
+    }
+  });
+}
+
+test('last error inspection returns to an unchanged membership draft without saving or retrying', async (t) => {
+  const root = await fixture(t);
+  const ui = uiHarness(root);
+  await ui.command('config-composer.membership');
+  await ui.select('+agents');
+  await ui.select('nested/pinned');
+  await ui.select('group');
+  await ui.select('+clear');
+  await ui.select('+add');
+  await ui.select('reviewers');
+  const source = join(root, 'opencode.jsonc');
+  const changed = config + '\n// Changed outside the editor\n';
+  await writeFile(source, changed);
+  await ui.select('+save');
+  await ui.confirm();
+  assert.match(ui.toasts.at(-1)!.message, /changed/i);
+  for (let index = 0; index < 2; index++) {
+    await ui.select('\u0000last-editor-error');
+    assert.match(ui.message(), /changed/i);
+    await ui.escape();
+    assert.equal(ui.title(), 'nested/pinned: groups');
+    assert.ok(ui.dialog !== undefined && 'options' in ui.dialog);
+    assert.ok(ui.dialog.options.some((option) => option.value === 'reviewers'));
+    assert.ok(ui.dialog.options.every((option) => option.value !== 'developers'));
+  }
+  assert.equal(ui.toasts.length, 1);
+  assert.equal(ui.updates, 0);
+  assert.equal(await readFile(source, 'utf8'), changed);
+  await ui.escape();
+});
+
+for (const event of ['server.connected', 'server.instance.disposed'] as const) {
+  test(`an open error inspector clears when ${event} arrives`, async (t) => {
+    const root = await fixture(t);
+    const ui = uiHarness(root);
+    await ui.command();
+    ui.setProviderError(true);
+    await ui.select('developers');
+    await ui.command('config-composer.compose');
+    await ui.select('last-editor-error');
+    assert.match(ui.message(), /Could not load provider models/);
+    ui.emit(event);
+    assert.doesNotMatch(ui.message(), /Could not load provider models/);
+    assert.match(ui.message(), /No editor error/);
+  });
+}
 
 test('compose only shows reference notices while running references need attention', async (t) => {
   const root = await fixture(t);
