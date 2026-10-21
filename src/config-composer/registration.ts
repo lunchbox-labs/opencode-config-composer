@@ -1,6 +1,15 @@
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { packageName } from './package-name.ts';
+
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
+}
 
 export function serverEntry(spec: unknown, root: string): boolean {
   if (typeof spec !== 'string') {
@@ -14,12 +23,12 @@ export function serverEntry(spec: unknown, root: string): boolean {
     return version !== '' && /^[a-z0-9.*+~^<>=| -]+$/i.test(version);
   }
   try {
-    const path = resolve(spec.startsWith('file:') ? fileURLToPath(spec) : resolve(root, spec));
+    const path = canonicalPath(spec.startsWith('file:') ? fileURLToPath(spec) : resolve(root, spec));
     return [
       fileURLToPath(new URL('../server.ts', import.meta.url)),
       fileURLToPath(new URL('../server.js', import.meta.url)),
       resolve(fileURLToPath(new URL('../../', import.meta.url))),
-    ].includes(path);
+    ].some((candidate) => canonicalPath(candidate) === path);
   } catch {
     return false;
   }

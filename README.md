@@ -26,6 +26,15 @@ can make that baseline differ from the authored native inputs.
 You can download a verified build from its Actions run artifact while it is retained.
 The tarball contains plugin files and metadata, not bundled runtime dependencies; install it
 through npm so those dependencies are resolved. It is not a standalone offline bundle.
+For a local install, register the installed package directory in both configuration files, for example
+`./node_modules/@lunchbox-labs/opencode-config-composer` relative to each configuration file.
+Direct `.tgz` registrations are not supported for Composer editors or reference notices; install the archive first.
+Use one Config Composer installation; simultaneous versions or duplicate registrations are unsupported.
+
+Reference notices report missing, disabled, unselected or unverified agent, command and skill references.
+They use the running composition's diagnostics and OpenCode's inventories, independently of editor preview
+validation. An unavailable notice does not change permissions or stop the running composition.
+Editors still require a current configuration snapshot to preview and save changes correctly.
 
 ## Documentation
 

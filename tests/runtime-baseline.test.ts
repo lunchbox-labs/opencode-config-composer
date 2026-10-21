@@ -129,7 +129,7 @@ test('missing baseline, changed workspace, and globals changed by a later plugin
   assert.throws(() => readRuntimeBaseline(config, context), /changed|baseline/i);
 });
 
-test('later agent changes and metadata on a foreign plugin cannot masquerade as a native baseline', () => {
+test('editor guards reject later agent changes without depending on registration spelling', () => {
   const config: Config = { plugin: [packageName], agent: { worker: { model: 'fixture/native' } } };
   publishRuntimeBaseline(config, {}, context, {}, { worker: { model: 'fixture/native' } });
   config.agent!.worker!.model = 'fixture/later';
@@ -137,7 +137,8 @@ test('later agent changes and metadata on a foreign plugin cannot masquerade as 
   const entry = config.plugin![0];
   assert.ok(Array.isArray(entry));
   config.plugin = [['another-plugin', entry[1]]];
-  assert.throws(() => readRuntimeBaseline(config, context), /missing|ambiguous/);
+  config.agent!.worker!.model = 'fixture/native';
+  assert.deepEqual(readRuntimeBaseline(config, context).agent, { worker: { model: 'fixture/native' } });
 });
 
 test('applied choices publication snapshots caller-owned values without mutating registration options', () => {
@@ -233,11 +234,6 @@ test('applied choices require current matching globals, agents, commands, skills
     },
     (config) => {
       marker(config).revision = { sources: 'invalid', effective: revision.effective };
-    },
-    (config) => {
-      const entry = config.plugin![0];
-      assert.ok(Array.isArray(entry));
-      config.plugin = [['another-plugin', entry[1]]];
     },
   ];
   for (const mutate of mutations) {

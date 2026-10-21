@@ -27,6 +27,15 @@ test('post-load notices resolve authoritative skills, show missing context, dedu
     {},
     { observedNativeFiles: 'a'.repeat(64), diagnostics },
   );
+  // Advisory notices survive unavailable editor metadata and downstream configuration changes.
+  const entry = config.plugin![0];
+  assert.ok(Array.isArray(entry));
+  const metadata = entry[1].__configComposerRuntime as Record<string, unknown>;
+  for (const field of ['version', 'native', 'applied', 'agent', 'appliedAgents']) {
+    Reflect.deleteProperty(metadata, field);
+  }
+  config.model = 'downstream/changed';
+  entry[0] = 'file:///different-spelling/same-installation';
   const toasts: { message: string }[] = [];
   let found = false;
   const api = {

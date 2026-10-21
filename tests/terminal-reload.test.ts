@@ -74,7 +74,7 @@ test(
         assert.ok(error instanceof Error);
         assert.match(error.message, /did not publish a new native registration/);
         assert.ok(error.cause instanceof Error);
-        assert.match(error.cause.message, /runtime baseline version is missing or ambiguous/);
+        assert.match(error.cause.message, /server did not provide a readable editor snapshot/);
         return true;
       })
       .finally(() => {

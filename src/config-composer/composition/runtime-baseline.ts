@@ -19,6 +19,21 @@ import type { ResolvedModelSettings } from './runtime.ts';
 
 const key = '__configComposerRuntime';
 
+/** The marker identifies our data; installation paths are not part of the read protocol.
+ * A single Config Composer installation is supported. Multiple registrations are not reconciled.
+ */
+function runtimeMarker(config: unknown): unknown {
+  if (!record(config) || !Array.isArray(config.plugin)) {
+    return undefined;
+  }
+  for (const entry of config.plugin) {
+    if (Array.isArray(entry) && record(entry[1]) && Object.hasOwn(entry[1], key)) {
+      return entry[1][key];
+    }
+  }
+  return undefined;
+}
+
 function validateParameters(value: unknown): asserts value is ConfigurationParameters {
   parseParameters(value);
 }
@@ -138,17 +153,15 @@ export function publishRuntimeBaseline(
   },
 ): void {
   const plugins = config.plugin ?? [];
-  const matches = plugins.flatMap((entry, index) =>
-    (Array.isArray(entry) && entry[1] === options) ||
-    serverEntry(Array.isArray(entry) ? entry[0] : entry, configurationDirectory())
-      ? [index]
-      : [],
+  const index = plugins.findIndex(
+    (entry) =>
+      (Array.isArray(entry) && entry[1] === options) ||
+      serverEntry(Array.isArray(entry) ? entry[0] : entry, configurationDirectory()),
   );
-  // A manually invoked hook need not have a registration. Exact editor previews require the published marker.
-  if (matches.length !== 1) {
+  // A manually invoked hook need not have an authored registration.
+  if (index === -1) {
     return;
   }
-  const index = matches[0];
   const entry = plugins[index];
   const spec = Array.isArray(entry) ? entry[0] : entry;
   const original = Array.isArray(entry) ? entry[1] : {};
@@ -187,7 +200,7 @@ export function publishRuntimeBaseline(
 export function readRuntimeBaseline(
   config: unknown,
   location: RuntimeLocation,
-  registrationRoot = configurationDirectory(),
+  _registrationRoot?: string,
 ): EditorNativeBaseline {
   const fail = (detail: string): never => {
     throw new SettingsError(
@@ -197,14 +210,9 @@ export function readRuntimeBaseline(
   if (!record(config) || !Array.isArray(config.plugin)) {
     return fail('The server did not publish its composition baseline.');
   }
-  const markers: unknown[] = config.plugin.flatMap((entry: unknown) =>
-    Array.isArray(entry) && serverEntry(entry[0], registrationRoot) && record(entry[1]) && Object.hasOwn(entry[1], key)
-      ? [entry[1][key]]
-      : [],
-  );
-  const marker = markers[0];
-  if (markers.length !== 1 || !record(marker) || marker.version !== 1 || typeof marker.id !== 'string') {
-    return fail('The runtime baseline version is missing or ambiguous.');
+  const marker = runtimeMarker(config);
+  if (!record(marker) || marker.version !== 1 || typeof marker.id !== 'string') {
+    return fail('The server did not provide a readable editor snapshot.');
   }
   if (marker.root !== resolve(location.root) || marker.directory !== resolve(location.directory)) {
     return fail('The runtime baseline belongs to another workspace or directory.');
@@ -308,17 +316,13 @@ export function readRuntimeBaseline(
 export function readRuntimeRevision(
   config: unknown,
   location: RuntimeLocation,
-  registrationRoot = configurationDirectory(),
+  _registrationRoot?: string,
 ): { id: string; revision?: CompositionRevision; observedNativeFiles: string } {
-  readRuntimeBaseline(config, location, registrationRoot);
+  readRuntimeBaseline(config, location);
   if (!record(config) || !Array.isArray(config.plugin)) {
     throw new SettingsError('The server did not publish an applied revision. Restart the matching plugin.');
   }
-  const marker: unknown = config.plugin.flatMap((entry: unknown) =>
-    Array.isArray(entry) && serverEntry(entry[0], registrationRoot) && record(entry[1]) && record(entry[1][key])
-      ? [entry[1][key]]
-      : [],
-  )[0];
+  const marker = runtimeMarker(config);
   const hash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   if (!record(marker) || typeof marker.id !== 'string' || !hash(marker.observedNativeFiles)) {
     throw new SettingsError('The running plugin cannot attest applied revisions. Restart the matching plugin.');
@@ -357,9 +361,9 @@ export function readRuntimeRevision(
 export function readRuntimeChoices(
   config: unknown,
   location: RuntimeLocation,
-  registrationRoot = configurationDirectory(),
+  _registrationRoot?: string,
 ): { id: string; choices: Record<string, ResolvedModelSettings> } {
-  const revision = readRuntimeRevision(config, location, registrationRoot);
+  const revision = readRuntimeRevision(config, location);
   const fail = (): never => {
     throw new SettingsError(
       'Applied runtime choices are unavailable. Reload the matching Config Composer server plugin.',
@@ -368,11 +372,7 @@ export function readRuntimeChoices(
   if (!record(config) || !Array.isArray(config.plugin)) {
     return fail();
   }
-  const marker: unknown = config.plugin.flatMap((entry: unknown) =>
-    Array.isArray(entry) && serverEntry(entry[0], registrationRoot) && record(entry[1]) && record(entry[1][key])
-      ? [entry[1][key]]
-      : [],
-  )[0];
+  const marker = runtimeMarker(config);
   const plain = (value: unknown): value is Record<string, unknown> =>
     record(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
   if (
@@ -419,20 +419,14 @@ export function readRuntimeChoices(
 export function readRuntimeReferenceDiagnostics(
   config: unknown,
   location: RuntimeLocation,
-  registrationRoot = configurationDirectory(),
+  _registrationRoot?: string,
 ): { id: string; diagnostics: ReferenceDiagnostic[] } {
-  readRuntimeBaseline(config, location, registrationRoot);
-  if (!record(config) || !Array.isArray(config.plugin)) {
-    throw new SettingsError('Runtime diagnostics are unavailable.');
-  }
-  const markers: unknown[] = config.plugin.flatMap((entry: unknown) =>
-    Array.isArray(entry) && serverEntry(entry[0], registrationRoot) && record(entry[1]) && Object.hasOwn(entry[1], key)
-      ? [entry[1][key]]
-      : [],
-  );
-  const marker = markers[0];
+  const marker = runtimeMarker(config);
   if (!record(marker) || typeof marker.id !== 'string') {
-    throw new SettingsError('Runtime diagnostics are unavailable.');
+    throw new SettingsError('Config Composer did not publish reference diagnostics. Check the server plugin errors.');
+  }
+  if (marker.root !== resolve(location.root) || marker.directory !== resolve(location.directory)) {
+    throw new SettingsError('Reference diagnostics belong to another workspace or directory. Refresh the notices.');
   }
   return { id: marker.id, diagnostics: readReferenceDiagnostics(marker.referenceDiagnostics ?? []) };
 }
