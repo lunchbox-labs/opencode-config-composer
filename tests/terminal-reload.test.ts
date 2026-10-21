@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 import { readRuntimeBaseline } from '../src/config-composer/composition/runtime-baseline.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { reloadFromTerminal } from './integration/terminal-editor.ts';
@@ -64,15 +65,34 @@ test('terminal reload still rejects a changed native baseline after registration
 test(
   'terminal reload retains the missing-marker error when bounded readiness expires',
   { timeout: 20_000 },
-  async () => {
+  async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     const f = fixture([() => previous, missingBaseline]);
-    await assert.rejects(f.run(), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.match(error.message, /did not publish a new native registration/);
-      assert.ok(error.cause instanceof Error);
-      assert.match(error.cause.message, /runtime baseline version is missing or ambiguous/);
-      return true;
-    });
+    let settled = false;
+    const outcome = assert
+      .rejects(f.run(), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /did not publish a new native registration/);
+        assert.ok(error.cause instanceof Error);
+        assert.match(error.cause.message, /runtime baseline version is missing or ambiguous/);
+        return true;
+      })
+      .finally(() => {
+        settled = true;
+      });
+    // Flush promise continuations before each tick so the next real 50ms
+    // readiness wait is registered. setImmediate is deliberately not mocked.
+    for (let wait = 0; wait < 200; wait++) {
+      await setImmediate();
+      assert.equal(settled, false, 'readiness must not expire before its final wait');
+      assert.equal(f.reads(), wait + 2);
+      t.mock.timers.tick(49);
+      await setImmediate();
+      assert.equal(f.reads(), wait + 2, 'readiness waits the full 50ms between samples');
+      assert.equal(settled, false);
+      t.mock.timers.tick(1);
+    }
+    await outcome;
     assert.equal(f.reads(), 201);
     assert.equal(f.agentReads(), 0);
   },

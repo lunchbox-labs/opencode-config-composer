@@ -41,9 +41,15 @@ independently, and new pushes cancel obsolete pull-request integration runs.
 The running inspector has its own partition so its terminal scenarios do not share
 the runtime editor suite's eight-minute budget. Test assertions and deadlines are unchanged.
 
-The Check workflow runs the standalone TUI startup and shipped review/programming
-workflow cases. The other native cases run in the Linux and Windows Integration matrix,
-without a duplicate Check execution. `npm run test:native` still runs all native files locally.
+The Check workflow retains the standalone TUI startup and shipped review/programming
+cases against both the minimum and latest-compatible host on Linux. It and the complete
+`npm run test:native` release suite use two separate Node test workers to overlap
+independent files; tests within each file remain sequential. Consumer
+installs, homes, databases and ports remain private to each fixture, and packing reads
+the already-built checkout without running build scripts. The portable Linux/Windows
+Integration matrix retains its existing partitions and one file worker per job. Its
+minimum-registration lanes also verify the bounded-readiness unit test's mock clock
+on both platforms; native readiness still uses the real 200 × 50ms bound.
 
 ## What the harness exercises
 

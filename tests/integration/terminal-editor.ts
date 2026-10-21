@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { setTimeout } from 'node:timers/promises';
+import timers from 'node:timers/promises';
 import type { compositionFixture } from './composition-fixture.ts';
 import type { nativeTerminal } from './terminal.ts';
 
@@ -43,7 +43,7 @@ export async function reloadFromTerminal(
       assert.deepEqual(current.baseline, previous.baseline, 'scoped apply retains the native baseline');
       return;
     }
-    await setTimeout(50);
+    await timers.setTimeout(50);
   }
   throw new Error('The terminal reload did not publish a new native registration', { cause: pendingRegistration });
 }

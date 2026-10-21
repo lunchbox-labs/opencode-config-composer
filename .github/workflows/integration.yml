@@ -64,6 +64,8 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      - name: Test terminal reload readiness clock
+        run: npm exec --call 'node --experimental-strip-types --test tests/terminal-reload.test.ts'
       - run: npm run test:integration -- --suite registration
         env:
           OPENCODE_TEST_VERSION: ${{ matrix.opencode }}
