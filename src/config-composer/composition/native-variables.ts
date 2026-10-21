@@ -1,3 +1,4 @@
+import { changedInput } from '../save-diagnostics.ts';
 import { realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { configurationFile, configurationPath } from '../configuration.ts';
@@ -71,7 +72,7 @@ export async function substituteNativeConfig(
 export function observedNativeVariables(variables: NativeVariables): void {
   for (const [name, value] of variables.environment) {
     if (process.env[name] !== value) {
-      throw new SettingsError('Native substitution environment changed. Reopen the editor.');
+      throw changedInput('Native substitution environment changed. Reopen the editor.', `env:${name}`, 'environment');
     }
   }
 }
