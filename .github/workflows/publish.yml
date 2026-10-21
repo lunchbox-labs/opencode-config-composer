@@ -1,11 +1,6 @@
 name: Publish @lunchbox-labs/opencode-config-composer
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Stable vX.Y.Z version to release from this main commit
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -21,17 +16,13 @@ jobs:
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      RELEASE_TAG: ${{ inputs.tag }}
     outputs:
       access: ${{ steps.release.outputs.access }}
       name: ${{ steps.release.outputs.name }}
       version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
       commit: ${{ github.sha }}
     steps:
-      - name: Require a stable version tag
-        shell: bash
-        run: '[[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]'
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
@@ -90,7 +81,7 @@ jobs:
         run: node scripts/release-lifecycle.mjs prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
           NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
           NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
@@ -126,7 +117,7 @@ jobs:
         run: node scripts/release-lifecycle.mjs npm
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
           NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
           NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
@@ -161,7 +152,7 @@ jobs:
         run: node scripts/release-lifecycle.mjs finish
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
           NPM_PACKAGE_NAME: ${{ needs.verify.outputs.name }}
           NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
