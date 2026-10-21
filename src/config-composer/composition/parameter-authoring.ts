@@ -55,6 +55,14 @@ export function parameterValue(snapshot: Snapshot, target: ConfigurationTarget):
   const source = snapshot.sources.documents.find((source) => source.id === target.sourceId);
   return parseParameters(valueAt(source?.value, [...target.path, 'parameters']) ?? {});
 }
+export function parseParameterInput(field: ParameterField, text: string): number | Record<string, unknown> | undefined {
+  if (field === 'reset' || text.trim() === '') {
+    return undefined;
+  }
+  const value = field === 'options' ? parseCustomOptions(text) : Number(text);
+  parseParameters({ [field]: value });
+  return value;
+}
 export function planParameter(
   snapshot: Snapshot,
   target: ConfigurationTarget,
@@ -68,11 +76,7 @@ export function planParameter(
   if (selected === undefined || file === undefined) {
     throw new SettingsError('Choose an available writable parameter destination and target.');
   }
-  let value: unknown;
-  if (field !== 'reset' && text.trim() !== '') {
-    value = field === 'options' ? parseCustomOptions(text) : Number(text);
-    parseParameters({ [field]: value });
-  }
+  const value = parseParameterInput(field, text);
   const path = [...target.path, 'parameters', ...(field === 'reset' ? [] : [field])];
   const next = editJson(file.text, path, value);
   return {

@@ -1085,6 +1085,31 @@ export function registerSettings(
     if (!isCurrent()) {
       return;
     }
+    if (change?.registry === 'configurationPresets' && change.operation === 'create') {
+      const target = {
+        sourceId: change.sourceId,
+        path: ['configurationPresets', change.name],
+        label: `Preset: ${change.name}`,
+      };
+      const reviewPreset = async (value: typeof preview) => {
+        const bound =
+          editorSettings(value.sources, snapshot.nativeModels).modelPresets[change.name].model !== undefined;
+        return parameterReview(snapshot, target, value, bound ? await models() : []);
+      };
+      const details = await reviewPreset(preview);
+      if (!isCurrent()) {
+        return;
+      }
+      const previousReview = review;
+      review = {
+        title: previousReview?.title ?? 'Save composition definition?',
+        details: [previousReview?.details, details].filter((value) => value !== undefined).join('\n\n'),
+        validate: async (value) => {
+          await previousReview?.validate?.(value);
+          await reviewPreset(value);
+        },
+      };
+    }
     const projection = (value: typeof preview) =>
       JSON.stringify({
         model: value.resolved.model,
