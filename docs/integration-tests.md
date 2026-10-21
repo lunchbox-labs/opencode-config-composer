@@ -41,10 +41,10 @@ independently, and new pushes cancel obsolete pull-request integration runs.
 The running inspector has its own partition so its terminal scenarios do not share
 the runtime editor suite's eight-minute budget. Test assertions and deadlines are unchanged.
 
-The Check workflow runs `npm run test:native`, the complete native release suite,
-against both the minimum and latest-compatible host on Linux. This validates the same
-file scheduling used by Publish without dispatching a release. Two separate Node test
-workers overlap independent files; tests within each file remain sequential. Consumer
+The Check workflow retains the standalone TUI startup and shipped review/programming
+cases against both the minimum and latest-compatible host on Linux. It and the complete
+`npm run test:native` release suite use two separate Node test workers to overlap
+independent files; tests within each file remain sequential. Consumer
 installs, homes, databases and ports remain private to each fixture, and packing reads
 the already-built checkout without running build scripts. The portable Linux/Windows
 Integration matrix retains its existing partitions and one file worker per job. Its
