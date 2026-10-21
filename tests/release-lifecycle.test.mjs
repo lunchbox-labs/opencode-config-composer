@@ -126,14 +126,17 @@ async function fixture(t, initial = {}) {
       return;
     }
     if (path === '/repos/owner/repo/releases' && request.method === 'GET') {
-      json(200, state.release ? [state.release] : []);
+      json(200, state.release && !state.staleReleaseList ? [state.release] : []);
       return;
     }
     if (path === '/repos/owner/repo/releases/generate-notes' && request.method === 'POST') {
       assert.deepEqual(body, { tag_name: tag, target_commitish: commit });
       json(
         state.notesFailure ? 503 : 200,
-        state.notes ?? { name: 'Generated release title', body: 'Generated release notes' },
+        state.notes ?? {
+          name: 'Generated release title',
+          body: 'Generated release notes',
+        },
       );
       return;
     }
@@ -145,7 +148,10 @@ async function fixture(t, initial = {}) {
         ...(state.releaseRace ? { name: 'Concurrent title', body: 'Concurrent body' } : {}),
         immutable: false,
       };
-      json(state.releaseRace ?? 201, state.release);
+      json(state.releaseRace ?? 201, {
+        ...state.release,
+        ...state.createdResponse,
+      });
       return;
     }
     if (path === '/repos/owner/repo/releases/42' && request.method === 'PATCH') {
@@ -270,7 +276,9 @@ test('one lifecycle creates exact tag and draft, publishes npm, attaches bytes, 
 
 test('user draft targeting main with no tag is reused with the exact intended commit', async (t) => {
   const { prepareRelease } = await lifecycle();
-  const { state, options } = await fixture(t, { release: draft({ name: 'User title', body: 'User notes' }) });
+  const { state, options } = await fixture(t, {
+    release: draft({ name: 'User title', body: 'User notes' }),
+  });
   await prepareRelease(options);
   assert.equal(state.tag, commit);
   assert.deepEqual(state.writes, ['POST /repos/owner/repo/git/refs']);
@@ -580,7 +588,9 @@ test('release note generation failure stops before draft creation or npm publica
 
 test('malformed generated notes stop before draft creation', async (t) => {
   const { prepareRelease } = await lifecycle();
-  const { state, options } = await fixture(t, { notes: { name: 'Title', body: null } });
+  const { state, options } = await fixture(t, {
+    notes: { name: 'Title', body: null },
+  });
   await assert.rejects(prepareRelease(options), /invalid generated release notes/);
   assert.equal(state.release, undefined);
   assert.equal(state.publishes, 0);
@@ -613,7 +623,9 @@ test('lifecycle diagnostics expose controlled phase and typed HTTP status withou
   }
   assert.equal(phase, 'notes');
   assert.match(lifecycleFailureMessage('prepare', phase, failure), /phase=notes code=http status=503/);
-  const unsafe = Object.assign(new Error('token-secret-response'), { status: 403 });
+  const unsafe = Object.assign(new Error('token-secret-response'), {
+    status: 403,
+  });
   assert.equal(
     lifecycleFailureMessage('secret-stage', 'secret-phase', unsafe),
     'Release lifecycle configuration failed: phase=operation code=request; no response details logged.',
@@ -646,5 +658,57 @@ for (const status of [403, 422]) {
     assert.match(diagnostic, new RegExp(`phase=tag-create code=http status=${status}`));
     assert.match(diagnostic, /tag-creation rulesets/);
     assert.ok(!diagnostic.includes('secret-body'));
+  });
+}
+
+test('successful draft creation uses its response even while the release list is stale', async (t) => {
+  const { prepareRelease } = await lifecycle();
+  const { state, options } = await fixture(t, { staleReleaseList: true });
+  assert.deepEqual(await prepareRelease(options), { action: 'draft', id: 42 });
+  assert.equal(state.release.tag_name, tag);
+  assert.equal(state.release.draft, true);
+  assert.equal(state.calls.filter((call) => call === 'GET /repos/owner/repo/releases').length, 1);
+});
+
+for (const createdResponse of [
+  { id: 0 },
+  { id: '42' },
+  { id: 1.5 },
+  { tag_name: 'v9.9.9' },
+  { draft: false },
+  { prerelease: true },
+  { immutable: true },
+]) {
+  test(`invalid successful draft creation response is rejected ${JSON.stringify(createdResponse)}`, async (t) => {
+    const { prepareRelease } = await lifecycle();
+    const { state, options } = await fixture(t, { createdResponse });
+    await assert.rejects(prepareRelease(options));
+    assert.equal(state.publishes, 0);
+  });
+}
+
+for (const releaseRace of [409, 422]) {
+  test(`draft creation conflict HTTP${releaseRace} with stale listing preserves typed rejection`, async (t) => {
+    const { prepareRelease, lifecycleFailureMessage } = await lifecycle();
+    const { options } = await fixture(t, {
+      releaseRace,
+      staleReleaseList: true,
+    });
+    let phase;
+    await assert.rejects(
+      prepareRelease({
+        ...options,
+        onPhase: (value) => {
+          phase = value;
+        },
+      }),
+      (error) => {
+        assert.match(
+          lifecycleFailureMessage('prepare', phase, error),
+          new RegExp(`phase=draft-create code=http status=${releaseRace}`),
+        );
+        return true;
+      },
+    );
   });
 }

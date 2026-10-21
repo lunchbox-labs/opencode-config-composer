@@ -42,7 +42,12 @@ test('manual lifecycle scopes writes and orders verify, prepare, npm, attachment
   const { readFile } = await import('node:fs/promises');
   const { parse } = await import('yaml');
   const workflow = parse(await readFile(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8'));
+  assert.equal(workflow.name, 'Publish');
   assert.deepEqual(workflow.on, { workflow_dispatch: null });
+  assert.equal(workflow['run-name'], undefined);
+  assert.equal(workflow.jobs.prepare.name, 'Prepare ${{ needs.verify.outputs.tag }}');
+  assert.equal(workflow.jobs.publish.name, 'Publish npm ${{ needs.verify.outputs.tag }}');
+  assert.equal(workflow.jobs.attach.name, 'Publish GitHub ${{ needs.verify.outputs.tag }}');
   assert.equal(workflow.jobs.verify.env, undefined);
   assert.equal(workflow.jobs.verify.outputs.tag, '${{ steps.release.outputs.tag }}');
   assert.deepEqual(workflow.permissions, { contents: 'read' });

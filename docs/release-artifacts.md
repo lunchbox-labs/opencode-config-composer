@@ -3,12 +3,18 @@
 Merge the desired package version into main, then manually run the publish workflow
 from main. There are no version or tag inputs: package.json is the sole version source,
 and the workflow derives its `vX.Y.Z` tag automatically. No tag or draft preparation is required.
+After validation, downstream job labels display the derived version tag. The workflow
+run title stays generic; no version input or separate version variable is required.
 The workflow fixes the selected main commit, validates package metadata, runs checks,
 and verifies that packing the same build twice produces identical bytes.
 
 For a new draft, GitHub's official generated release notes provide its name and body,
 using the release tag and pinned commit and honoring the repository's release.yml defaults.
 Existing draft titles and bodies are preserved, including concurrent draft creation.
+
+A successful draft-creation response is validated directly rather than requiring the
+release list to reflect it immediately. Creation conflicts still require an existing
+matching draft or release; a missing match fails with the original HTTP status.
 
 The workflow creates or reuses the exact matching tag and stable draft, publishes the
 verified tarball to npm, downloads and verifies the registry's exact tarball, attaches
@@ -25,13 +31,13 @@ cannot be retrofitted onto immutable releases. If an npm version exists but its 
 creating replacement GitHub state; investigate that mismatch manually. Partial failures leave the draft in
 place for retry. If main advances, rerun the original workflow run to retain its commit.
 
-The asset for version 0.0.6 is
-`lunchbox-labs-opencode-config-composer-0.0.6.tgz`. It contains published plugin files
+The asset for version 0.0.7 is
+`lunchbox-labs-opencode-config-composer-0.0.7.tgz`. It contains published plugin files
 and metadata, but **does not bundle runtime dependencies** such as ajv, jsonc-parser,
 and yaml. Install through npm to resolve dependencies:
 
 ```sh
-npm install ./lunchbox-labs-opencode-config-composer-0.0.6.tgz
+npm install ./lunchbox-labs-opencode-config-composer-0.0.7.tgz
 ```
 
 This is not a standalone or fully offline installation bundle. Registry propagation
