@@ -11,7 +11,7 @@ export interface AuthoringUi {
   prompt: (title: string, value: string, confirmed: (value: string) => void | Promise<void>) => void;
   back: () => void;
   refresh: () => void;
-  propose: (snapshot: Snapshot, change: DefinitionChange) => Promise<void>;
+  propose: (snapshot: Snapshot, change: DefinitionChange, details?: string) => Promise<void>;
   groupModel: (snapshot: Snapshot, name: string) => void | Promise<void>;
   presetModel: (snapshot: Snapshot, name: string) => void | Promise<void>;
   createPreset: (selected: (choice: ConfigurationPreset) => void | Promise<void>) => void | Promise<void>;
@@ -327,6 +327,82 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
                   ui.propose(snapshot, { operation: 'patch', registry, name, path: ['extends'], value: profile }),
               })),
           ]),
+      });
+    }
+    if (registry !== 'componentGroups') {
+      actions.push({
+        title: 'Duplicate as…',
+        value: 'duplicate',
+        description: 'Copy authored settings; keep references, original and active selection',
+        run: () =>
+          ui.prompt('Duplicate as', '', (value) => {
+            const nextName = groupName(value.trim());
+            if (Object.hasOwn(snapshot.sources.registry[registry] ?? {}, nextName)) {
+              throw new SettingsError('That definition already exists.');
+            }
+            const destinations = definitionDestinations(snapshot);
+            if (destinations.length === 0) {
+              throw new SettingsError('No writable composition source is available.');
+            }
+            const authored = structuredClone(snapshot.sources.registry[registry]?.[name]);
+            const dependencies = new Set<string>();
+            const modelReference = (configuration: ConfigurationPreset | undefined) => {
+              if (configuration?.modelRef !== undefined) {
+                dependencies.add(configuration.modelRef);
+              }
+            };
+            if (registry === 'profiles') {
+              const profile = snapshot.sources.registry.profiles?.[name];
+              if (profile?.extends !== undefined) {
+                dependencies.add(`profile:${profile.extends}`);
+              }
+              for (const layer of profile?.layers ?? []) {
+                if (layer.componentGroup !== undefined) {
+                  dependencies.add(`group:${layer.componentGroup}`);
+                } else {
+                  dependencies.add(`preset:${layer.configurationPreset}`);
+                  for (const group of layer.target.componentGroups ?? []) {
+                    dependencies.add(`group:${group}`);
+                  }
+                  for (const agent of layer.target.agents ?? []) {
+                    dependencies.add(`agent:${agent}`);
+                  }
+                }
+              }
+              for (const [agent, configuration] of Object.entries(profile?.overrides?.agents ?? {})) {
+                dependencies.add(`agent:${agent}`);
+                modelReference(configuration);
+              }
+              for (const agent of Object.keys(profile?.agentAvailability ?? {})) {
+                dependencies.add(`agent:${agent}`);
+              }
+            } else {
+              modelReference(snapshot.sources.registry.configurationPresets?.[name]);
+            }
+            const details =
+              `Copy of ${name}. Original and active selection stay unchanged.\n` +
+              `The copy still depends on its referenced definitions/native settings: ${dependencies.size === 0 ? 'none' : [...dependencies].join(', ')}.\n` +
+              'Copies authored semantic fields only; attached comments are not copied.';
+            ui.menu(
+              'Save duplicate in…',
+              destinations.map((file) => ({
+                title: file.path,
+                value: file.path,
+                run: () =>
+                  ui.propose(
+                    snapshot,
+                    {
+                      operation: 'create',
+                      registry,
+                      name: nextName,
+                      sourceId: file.path,
+                      value: authored,
+                    },
+                    details,
+                  ),
+              })),
+            );
+          }),
       });
     }
     actions.push({
