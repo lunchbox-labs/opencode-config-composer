@@ -117,6 +117,66 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
   };
   const layers = (name: string) => {
     const pending = structuredClone(snapshot.sources.registry.profiles?.[name].layers ?? []);
+    const targets = (layer: Extract<ProfileLayer, { configurationPreset: string }>) => {
+      const original = layer.target;
+      const agents = [...(original.agents ?? [])];
+      const groups = [...(original.componentGroups ?? [])];
+      const availableAgents = snapshot.agents.map((agent) => agent.name);
+      const availableGroups = Object.keys(snapshot.sources.registry.componentGroups ?? {});
+      const ordered = (authored: string[] | undefined, selected: string[]) => [
+        ...(authored ?? []).filter((name) => selected.includes(name)),
+        ...selected.filter((name) => !(authored ?? []).includes(name)),
+      ];
+      const choices = (
+        kind: 'agent' | 'group',
+        selected: string[],
+        available: string[],
+        authored: string[],
+      ): Action[] =>
+        [...new Set([...available, ...authored])].map((name) => ({
+          title: `${selected.includes(name) ? '✓ ' : ''}${name}`,
+          value: `${kind}:${name}`,
+          category: kind === 'agent' ? 'Agents' : 'Groups',
+          description: available.includes(name)
+            ? 'Explicit preset target'
+            : 'Unavailable or disabled existing target; select to toggle',
+          run: () => {
+            const index = selected.indexOf(name);
+            if (index < 0) {
+              selected.push(name);
+            } else {
+              selected.splice(index, 1);
+            }
+            ui.refresh();
+          },
+        }));
+      // Keep unavailable references visible even after deselection so they can be restored.
+      ui.menu('Edit preset targets', () => [
+        {
+          title: 'Save targets to layer draft',
+          value: '+save',
+          disabled: agents.length + groups.length === 0,
+          description: 'Choose at least one agent or group; Save layers reviews and writes the changes',
+          run: () => {
+            if (agents.length + groups.length === 0) {
+              return;
+            }
+            layer.target = {
+              ...original,
+              ...(original.agents !== undefined || agents.length > 0
+                ? { agents: ordered(original.agents, agents) }
+                : {}),
+              ...(original.componentGroups !== undefined || groups.length > 0
+                ? { componentGroups: ordered(original.componentGroups, groups) }
+                : {}),
+            };
+            ui.back();
+          },
+        },
+        ...choices('agent', agents, availableAgents, original.agents ?? []),
+        ...choices('group', groups, availableGroups, original.componentGroups ?? []),
+      ]);
+    };
     const append = (layer: ProfileLayer) => {
       pending.push(layer);
       ui.back();
@@ -137,6 +197,9 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
             : 'Component group',
         run: () =>
           ui.menu(`Layer ${index + 1}`, [
+            ...(layer.componentGroup === undefined
+              ? [{ title: 'Edit targets', value: 'targets', run: () => targets(layer) }]
+              : []),
             {
               title: 'Move to position…',
               value: 'position',
