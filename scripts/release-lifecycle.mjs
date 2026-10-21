@@ -141,7 +141,7 @@ export async function prepareRelease(options) {
       target_commitish: options.commit,
     });
     assert.ok(typeof notes?.name === 'string' && typeof notes?.body === 'string', 'invalid generated release notes');
-    await api(
+    const created = await api(
       '/releases',
       'POST',
       {
@@ -154,9 +154,21 @@ export async function prepareRelease(options) {
       },
       true,
     );
-    release = await matchingRelease(options);
+    if (created?.conflictStatus !== undefined) {
+      release = await matchingRelease(options);
+      if (!release) {
+        options.onPhase?.('draft-create');
+        throw new LifecycleHttpError(created.conflictStatus);
+      }
+    } else {
+      release = created;
+      assert.equal(release?.draft, true, 'new release must be a draft');
+    }
   }
   assert.ok(release, 'matching release is missing');
+  assert.ok(Number.isSafeInteger(release.id) && release.id > 0, 'invalid release identity');
+  assert.equal(release.tag_name, options.tag, 'release tag differs');
+  assert.equal(typeof release.draft, 'boolean', 'invalid release draft state');
   assert.equal(release.prerelease, false, 'release must be stable');
   if (release.draft) {
     assert.notEqual(release.immutable, true, 'draft must be mutable');
@@ -167,7 +179,10 @@ export async function prepareRelease(options) {
 export async function publishNpmRelease(options) {
   await exactTag(options);
   // A published release is allowed only for an already-published exact npm match.
-  const release = await preflightDraftRelease({ ...options, allowPublishedReadOnly: true });
+  const release = await preflightDraftRelease({
+    ...options,
+    allowPublishedReadOnly: true,
+  });
   const { registry = 'https://registry.npmjs.org', fetch: request = globalThis.fetch } = options;
   const bytes = await readFile(options.tarball);
   const { stdout } = await promisify(execFile)('tar', ['-xzOf', options.tarball, 'package/package.json'], {
@@ -226,7 +241,10 @@ export async function publishNpmRelease(options) {
         (new URL(registry).protocol === 'http:' && tarballURL.origin === new URL(registry).origin),
       'npm tarball must use HTTPS',
     );
-    const archive = await request(tarballURL, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    const archive = await request(tarballURL, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    });
     assert.ok(archive.ok, 'published npm tarball unavailable');
     assert.ok(bytes.equals(Buffer.from(await archive.arrayBuffer())), 'published npm tarball bytes differ');
     return { action: 'unchanged' };
@@ -260,7 +278,10 @@ export async function finishRelease(options) {
     },
   });
   const before = await matchingRelease(options);
-  const result = await attachPublishedTarball({ ...options, allowPublishedReadOnly: true });
+  const result = await attachPublishedTarball({
+    ...options,
+    allowPublishedReadOnly: true,
+  });
   const release = await matchingRelease(options);
   assert.equal(release.id, before.id, 'release identity changed during attachment');
   assert.equal(release.prerelease, false, 'release must be stable');
@@ -317,7 +338,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       assert.equal(files.length, 1, 'exactly one verified tarball required');
       options.tarball = join(process.cwd(), 'release', files[0]);
     }
-    const operation = { prepare: prepareRelease, npm: publishNpmRelease, finish: finishRelease }[stage];
+    const operation = {
+      prepare: prepareRelease,
+      npm: publishNpmRelease,
+      finish: finishRelease,
+    }[stage];
     assert.ok(operation, 'invalid lifecycle stage');
     const result = await operation(options);
     console.log(`Release ${stage}: ${result.action}.`);

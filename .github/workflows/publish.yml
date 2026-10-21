@@ -1,4 +1,4 @@
-name: Publish @lunchbox-labs/opencode-config-composer
+name: Publish
 on:
   workflow_dispatch:
 
@@ -63,6 +63,7 @@ jobs:
           retention-days: 3
 
   prepare:
+    name: Prepare ${{ needs.verify.outputs.tag }}
     environment: release
     needs: verify
     runs-on: ubuntu-latest
@@ -97,6 +98,7 @@ jobs:
           NPM_PACKAGE_VERSION: ${{ needs.verify.outputs.version }}
 
   publish:
+    name: Publish npm ${{ needs.verify.outputs.tag }}
     needs: [verify, prepare]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -136,7 +138,7 @@ jobs:
 
   attach:
     environment: release
-    name: Attach the npm tarball and publish the release
+    name: Publish GitHub ${{ needs.verify.outputs.tag }}
     needs: [verify, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 5
