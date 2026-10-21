@@ -21,7 +21,7 @@ When source creation adds a configuration directory after startup, the same depe
 preparation runs before the next explicit reload. Cancelled creation still leaves the
 source absent. Native plugin loading and composition run normally.
 
-The [Integration workflow](../.github/workflows/integration.yml) runs the same functional
+The [Integration Tests workflow](../.github/workflows/integration.yml) runs the same functional
 cases on `ubuntu-latest` and `windows-latest` for pull requests, pushes to `main`, and
 manual dispatch. Each platform runs these suites:
 
