@@ -42,7 +42,9 @@ test('manual lifecycle scopes writes and orders verify, prepare, npm, attachment
   const { readFile } = await import('node:fs/promises');
   const { parse } = await import('yaml');
   const workflow = parse(await readFile(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8'));
-  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
+  assert.deepEqual(workflow.on, { workflow_dispatch: null });
+  assert.equal(workflow.jobs.verify.env, undefined);
+  assert.equal(workflow.jobs.verify.outputs.tag, '${{ steps.release.outputs.tag }}');
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.deepEqual(workflow.jobs.prepare.needs, 'verify');
   assert.deepEqual(workflow.jobs.prepare.permissions, { contents: 'write' });
@@ -60,6 +62,7 @@ test('manual lifecycle scopes writes and orders verify, prepare, npm, attachment
     assert.equal(steps[checkout].with.ref, '${{ github.workflow_sha }}');
     assert.equal(steps[checkout].with['persist-credentials'], false);
     const operation = steps.find((step) => step.run === `node scripts/release-lifecycle.mjs ${stage}`);
+    assert.equal(operation.env.RELEASE_TAG, '${{ needs.verify.outputs.tag }}');
     assert.equal(operation.env.RELEASE_COMMIT, '${{ needs.verify.outputs.commit }}');
     assert.equal(operation.env.NPM_PACKAGE_NAME, '${{ needs.verify.outputs.name }}');
     if (stage !== 'prepare') {
@@ -68,4 +71,35 @@ test('manual lifecycle scopes writes and orders verify, prepare, npm, attachment
   }
   assert.equal(workflow.jobs.verify.outputs.commit, '${{ github.sha }}');
   assert.ok(workflow.jobs.verify.steps.some((step) => step.run?.includes('cmp release/*.tgz repeated-pack/*.tgz')));
+});
+
+test('release CLI derives its tag from package.json without a tag input', async (t) => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = await mkdtemp(join(tmpdir(), 'release-output-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const output = join(root, 'output');
+  await promisify(execFile)(
+    process.execPath,
+    [fileURLToPath(new URL('../scripts/validate-release.mjs', import.meta.url))],
+    {
+      env: { ...process.env, RELEASE_TAG: undefined, GITHUB_OUTPUT: output },
+    },
+  );
+  await assert.rejects(
+    promisify(execFile)(
+      process.execPath,
+      [fileURLToPath(new URL('../scripts/validate-release.mjs', import.meta.url))],
+      {
+        env: { ...process.env, RELEASE_TAG: 'v9.9.9', GITHUB_OUTPUT: output },
+      },
+    ),
+    /release tag must equal/,
+  );
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.ok((await readFile(output, 'utf8')).split('\n').includes(`tag=v${manifest.version}`));
 });

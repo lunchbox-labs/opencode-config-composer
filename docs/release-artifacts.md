@@ -1,7 +1,8 @@
 # Releasing Config Composer
 
 Merge the desired package version into main, then manually run the publish workflow
-from main with its stable `vX.Y.Z` version. The version comes from package.json; the supplied tag must match it. No tag or draft preparation is required.
+from main. There are no version or tag inputs: package.json is the sole version source,
+and the workflow derives its `vX.Y.Z` tag automatically. No tag or draft preparation is required.
 The workflow fixes the selected main commit, validates package metadata, runs checks,
 and verifies that packing the same build twice produces identical bytes.
 
@@ -34,9 +35,14 @@ npm install ./lunchbox-labs-opencode-config-composer-0.0.6.tgz
 ```
 
 This is not a standalone or fully offline installation bundle. Registry propagation
-is retried for about two minutes before attachment. Logs identify the lifecycle stage
+is retried for about two minutes before attachment. Logs identify the lifecycle stage, controlled phase, and HTTP status when available
 without exposing credentials or response bodies.
 
 The existing immutable 0.0.5 release cannot receive assets. Use the
 [npm package](https://www.npmjs.com/package/@lunchbox-labs/opencode-config-composer/v/0.0.5)
 or [published tarball](https://registry.npmjs.org/@lunchbox-labs/opencode-config-composer/-/opencode-config-composer-0.0.5.tgz).
+
+The workflow token must be allowed to create version tags by repository/organization
+rulesets; `contents: write` alone does not bypass tag-creation restrictions. A rejected
+tag creation reports its controlled phase and HTTP status without response bodies.
+The workflow never changes rulesets or uses an alternate credential to bypass them.

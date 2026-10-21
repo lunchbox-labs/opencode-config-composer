@@ -595,3 +595,56 @@ for (const initial of [{ registry: true }, { registry: true, tag: commit }, { re
     assert.equal(state.publishes, 0);
   });
 }
+
+test('lifecycle diagnostics expose controlled phase and typed HTTP status without response details', async (t) => {
+  const { prepareRelease, lifecycleFailureMessage } = await lifecycle();
+  const { options } = await fixture(t, { notesFailure: true });
+  let phase;
+  let failure;
+  try {
+    await prepareRelease({
+      ...options,
+      onPhase: (value) => {
+        phase = value;
+      },
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(phase, 'notes');
+  assert.match(lifecycleFailureMessage('prepare', phase, failure), /phase=notes code=http status=503/);
+  const unsafe = Object.assign(new Error('token-secret-response'), { status: 403 });
+  assert.equal(
+    lifecycleFailureMessage('secret-stage', 'secret-phase', unsafe),
+    'Release lifecycle configuration failed: phase=operation code=request; no response details logged.',
+  );
+});
+
+for (const status of [403, 422]) {
+  test(`tag creation rejection HTTP${status} keeps safe status and ruleset diagnostic`, async (t) => {
+    const { prepareRelease, lifecycleFailureMessage } = await lifecycle();
+    const { options } = await fixture(t);
+    let phase;
+    let failure;
+    const request = async (url, init) =>
+      String(url).endsWith('/git/refs') && init?.method === 'POST'
+        ? new Response(JSON.stringify({ message: 'secret-body' }), { status })
+        : fetch(url, init);
+    try {
+      await prepareRelease({
+        ...options,
+        fetch: request,
+        onPhase: (value) => {
+          phase = value;
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    assert.equal(phase, 'tag-create');
+    const diagnostic = lifecycleFailureMessage('prepare', phase, failure);
+    assert.match(diagnostic, new RegExp(`phase=tag-create code=http status=${status}`));
+    assert.match(diagnostic, /tag-creation rulesets/);
+    assert.ok(!diagnostic.includes('secret-body'));
+  });
+}
