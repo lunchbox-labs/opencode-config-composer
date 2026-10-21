@@ -31,13 +31,13 @@ cannot be retrofitted onto immutable releases. If an npm version exists but its 
 creating replacement GitHub state; investigate that mismatch manually. Partial failures leave the draft in
 place for retry. If main advances, rerun the original workflow run to retain its commit.
 
-The asset for version 0.0.7 is
-`lunchbox-labs-opencode-config-composer-0.0.7.tgz`. It contains published plugin files
+The asset for version 0.0.6 is
+`lunchbox-labs-opencode-config-composer-0.0.6.tgz`. It contains published plugin files
 and metadata, but **does not bundle runtime dependencies** such as ajv, jsonc-parser,
 and yaml. Install through npm to resolve dependencies:
 
 ```sh
-npm install ./lunchbox-labs-opencode-config-composer-0.0.7.tgz
+npm install ./lunchbox-labs-opencode-config-composer-0.0.6.tgz
 ```
 
 This is not a standalone or fully offline installation bundle. Registry propagation
