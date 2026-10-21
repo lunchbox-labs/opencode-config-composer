@@ -1,4 +1,4 @@
-name: Integration
+name: Integration Tests
 on:
   pull_request:
   push:
@@ -7,7 +7,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Preserve cancellation across the workflow's display-name change.
+  group: Integration-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   native:
@@ -27,6 +28,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+          cache: npm
+          cache-dependency-path: package-lock.json
       - run: npm ci
         timeout-minutes: 3
       - name: Test the installed package in native OpenCode
@@ -58,6 +61,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+          cache: npm
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run test:integration -- --suite registration
         env:

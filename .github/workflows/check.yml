@@ -35,6 +35,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+          cache: npm
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run check
       - name: Resolve and install a compatible OpenCode binary

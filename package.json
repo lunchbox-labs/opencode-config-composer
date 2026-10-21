@@ -46,8 +46,9 @@
     "test:package": "npm run build && node --experimental-strip-types --import ./tests/isolated-state.mjs --test tests/package.integration.ts",
     "test:integration": "npm run build && node --experimental-strip-types scripts/integration.mjs",
     "test:native": "npm run build && node scripts/opencode.mjs test",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run test:package",
-    "prepack": "npm run build"
+    "check": "npm run check:static && npm test && npm run test:package",
+    "prepack": "npm run build",
+    "check:static": "concurrently --names typecheck,lint,format --kill-others-on-fail \"npm run typecheck\" \"npm run lint\" \"npm run format:check\""
   },
   "dependencies": {
     "ajv": "8.20.0",
@@ -64,6 +65,7 @@
     "@opentui/solid": "0.4.5",
     "@types/node": "24.19.1",
     "@xterm/headless": "6.0.0",
+    "concurrently": "10.0.6",
     "eslint": "10.11.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-regexp": "3.3.1",
