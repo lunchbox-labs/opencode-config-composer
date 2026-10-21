@@ -36,13 +36,9 @@ export function validateRelease(manifest, tag) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  const tag = process.env.RELEASE_TAG ?? `v${manifest.version}`;
-  const result = validateRelease(manifest, tag);
+  const result = validateRelease(manifest, process.env.RELEASE_TAG);
   if (process.env.GITHUB_OUTPUT) {
-    appendFileSync(
-      process.env.GITHUB_OUTPUT,
-      `access=${result.access}\nname=${result.name}\nversion=${result.version}\ntag=${tag}\n`,
-    );
+    appendFileSync(process.env.GITHUB_OUTPUT, `access=${result.access}\n`);
   }
   console.log(`Validated ${result.name}@${result.version} for ${result.access} publication.`);
 }
