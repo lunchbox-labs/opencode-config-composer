@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import type { Config, PluginInput } from '@opencode-ai/plugin';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { type TestContext, test } from 'node:test';
 import { loadCompositionSources } from '../src/config-composer/composition/sources.ts';
 import { resolveProfileRuntime } from '../src/config-composer/composition/runtime.ts';
@@ -281,4 +281,36 @@ test('groups select authoritative native command names without duplicate definit
   delete config.command!['native-name'];
   await hooks.config!(config);
   assert.deepEqual(config.command, {});
+});
+
+test('reference notices need only scoped diagnostics, not editor baseline fields or installation identity', async () => {
+  const { readRuntimeReferenceDiagnostics, readRuntimeBaseline } =
+    await import('../src/config-composer/composition/runtime-baseline.ts');
+  const location = { root: resolve('/project'), directory: resolve('/project') };
+  const diagnostics = [{ kind: 'skills', name: 'review', status: 'pending' }];
+  const config = {
+    plugin: [
+      [
+        'file:///C:/local/package',
+        {
+          __configComposerRuntime: {
+            id: 'running-instance',
+            ...location,
+            referenceDiagnostics: diagnostics,
+          },
+        },
+      ],
+    ],
+    model: 'another-plugin/changed',
+  };
+  assert.deepEqual(readRuntimeReferenceDiagnostics(config, location), { id: 'running-instance', diagnostics });
+  assert.throws(() => readRuntimeBaseline(config, location), /snapshot|baseline/i);
+  assert.throws(
+    () => readRuntimeReferenceDiagnostics(config, { ...location, directory: '/other' }),
+    /another workspace/,
+  );
+  assert.throws(() => readRuntimeReferenceDiagnostics({}, location), /did not publish reference diagnostics/i);
+  const marker = config.plugin[0][1] as { __configComposerRuntime: { referenceDiagnostics: unknown } };
+  marker.__configComposerRuntime.referenceDiagnostics = 'broken';
+  assert.throws(() => readRuntimeReferenceDiagnostics(config, location), /diagnostic metadata is invalid/i);
 });

@@ -26,12 +26,12 @@ export async function reloadFromTerminal(
     const current = await fixture.editor.runtime().catch((error: unknown) => {
       // An unpublished sample is not yet a usable registration after disposal.
       // Retry only this baseline diagnostic, within the existing readiness bound.
-      // Persistent missing/ambiguous metadata still fails with its original cause;
+      // Persistent missing/unreadable metadata still fails with its original cause;
       // transport failures and changed/invalid configuration fail immediately.
       if (
         !(error instanceof Error) ||
         error.message !==
-          'The runtime baseline version is missing or ambiguous. Exact native baseline is unavailable. Reload the matching Config Composer server plugin and reopen the editor.'
+          'The server did not provide a readable editor snapshot. Exact native baseline is unavailable. Reload the matching Config Composer server plugin and reopen the editor.'
       ) {
         throw error;
       }
