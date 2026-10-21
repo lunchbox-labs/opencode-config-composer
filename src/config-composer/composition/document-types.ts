@@ -55,6 +55,8 @@ export interface Components {
 
 /** Any subset of component kinds is valid. Agent names resolve against native and custom agents. */
 export interface ComponentGroup {
+  /** Single-line choice metadata, at most 160 characters; never inherited as settings. */
+  description?: string;
   agents?: string[];
   skills?: string[];
   commands?: string[];
@@ -83,6 +85,8 @@ export interface CompositionOverrides {
 }
 
 export interface CompositionProfile {
+  /** Single-line choice metadata, at most 160 characters; never inherited as settings. */
+  description?: string;
   extends?: string;
   /** Later profile occurrences replace earlier decisions; absence inherits earlier/native availability. */
   agentAvailability?: Record<string, boolean>;

@@ -491,3 +491,20 @@ test('JSONC acceptance still permits comments, trailing commas, and equal keys i
     profiles: { one: {}, two: {} },
   });
 });
+
+test('profile and group descriptions are bounded plain text metadata only', () => {
+  for (const registry of ['profiles', 'componentGroups']) {
+    for (const description of ['', 'Review only', 'a'.repeat(160)]) {
+      assert.doesNotThrow(() => parseCompositionDocument(JSON.stringify({ [registry]: { work: { description } } })));
+    }
+    for (const description of ['a'.repeat(161), 'two\nlines', '\u001b[31mred', 42]) {
+      assert.throws(() => parseCompositionDocument(JSON.stringify({ [registry]: { work: { description } } })));
+    }
+  }
+  for (const value of [
+    { configurationPresets: { work: { description: 'No executable metadata' } } },
+    { componentGroups: { work: { configuration: { description: 'No executable metadata' } } } },
+  ]) {
+    assert.throws(() => parseCompositionDocument(JSON.stringify(value)));
+  }
+});
