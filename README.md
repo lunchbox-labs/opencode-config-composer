@@ -23,6 +23,10 @@ This lets it resolve configuration and agent availability before the other plugi
 bodies. Downstream body changes preserve Config Composer’s editor baseline; running a transformer first
 can make that baseline differ from the authored native inputs.
 
+You can download a verified build from its Actions run artifact while it is retained.
+The tarball contains plugin files and metadata, not bundled runtime dependencies; install it
+through npm so those dependencies are resolved. It is not a standalone offline bundle.
+
 ## Documentation
 
 - [User Guide](https://github.com/lunchbox-labs/opencode-config-composer/wiki/User-Guide)
