@@ -49,7 +49,7 @@ test(
     await nativeSkill(f.host, 'pinned', 'allow');
     for (const choice of ['whole', 'allow', 'deny'] as const) {
       const committed = await f.editor.select(choice);
-      await f.editor.reload(committed);
+      await f.editor.applySelection(committed);
       if (choice === 'whole') {
         assert.deepEqual(
           (await f.host.api<{ agent: { worker: { permission: unknown } } }>('/config')).agent.worker.permission,

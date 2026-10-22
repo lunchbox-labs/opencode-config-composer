@@ -3,8 +3,10 @@ name: config-composer-explain
 description: Explain Config Composer groups, profile selection, precedence, and runtime evidence.
 ---
 
-Use [the schema reference](references/schema.md) and `/compose-configs` → Effective for server-attested field decisions. Do not reconstruct authored frontmatter from normalized native config. Explain the configured value, its origin, and any blocked Composer candidate.
+Use [the schema reference](references/schema.md) and `/view-configs` for server-attested field decisions. Do not reconstruct authored frontmatter from normalized native config. Explain the configured value, its origin, and any blocked Composer candidate.
 
 Definitions are shared; selection is per canonical source and worktree. Root groups always apply. Follow default and None are distinct. A failed composition publishes “Composer not applied” and has no applied revision. A valid authority permits selecting a valid profile to recover.
 
-Native bodies remain opaque. Native Markdown changes require a restart before review; native JSON has a separate global cache restart requirement. Applying does not reliably clear all retained session model/variant selections. Inspect stored fallback separately and recommend `/models` or `/variants` when the user wants to change those selections.
+Definitions and their source/state identity remain those loaded for each directory/worktree in the server process. Edits require restarting the OpenCode server process; reconnecting the TUI does not load them. `/view-configs` reads loaded attestation and the current external choice, so file edits do not change inspection. `/profiles` switches among loaded profiles, the loaded default, and Shared only.
+
+Native bodies remain opaque and host-owned. Profile application uses the idle native instance lifecycle and refuses directly observed native file changes with a restart instruction. Failed startup with incomplete attestation requires correcting the input and restarting the server. Saved choices remain pending if application cannot be verified. Applying does not reliably clear retained session model/variant selections; recommend native `/models` or `/variants` when the user wants to change those selections. Other plugins' inputs and host lifecycle remain independent.

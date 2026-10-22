@@ -115,23 +115,24 @@ test(
       if (index === 0) {
         await f.host.start();
       } else {
-        await f.host.api('/instance/dispose', {});
+        await f.host.stop();
+        await f.host.start();
       }
       const config = await f.host.api<{ model: string; agent: Record<string, Record<string, unknown>> }>('/config');
       assert.equal(config.model, f.native.model);
       assert.equal(config.agent.worker.model, undefined);
       assert.equal(config.agent.worker.temperature, undefined);
       assert.equal(config.agent.worker.mode, 'primary');
-      const runtime = await f.editor.runtime();
-      assert.equal(runtime.status, 'error');
-      assert.equal(runtime.revision, undefined);
-      assert.match(runtime.diagnostic!, /Composer not applied.*Expected/);
+      await assert.rejects(f.editor.runtime(), /Composer not applied.*Expected/);
       const agents = await f.host.api<{ name: string; mode: string }[]>('/agent');
       assert.equal(agents.find((agent) => agent.name === 'worker')?.mode, 'primary');
     }
     assert.equal(await readFile(f.paths.native, 'utf8'), nativeBytes);
     await f.write(f.paths.shared, {});
     await f.host.api('/instance/dispose', {});
+    await assert.rejects(f.editor.runtime(), /Composer not applied.*Expected/);
+    await f.host.stop();
+    await f.host.start();
     assert.equal((await f.editor.runtime()).status, 'applied');
   },
 );

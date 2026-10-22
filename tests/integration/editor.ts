@@ -18,7 +18,7 @@ export async function installedEditor(host: Awaited<ReturnType<typeof nativeHarn
   const apply = (await import(
     pathToFileURL(join(host.installed.directory, 'dist/config-composer/composition/apply.js')).href
   )) as typeof Apply;
-  const connection = async (): Promise<Storage.EditorConnection> => {
+  const connection = async (): Promise<Storage.ConfigurationConnection> => {
     const path = await host.api<{ directory: string; worktree: string }>('/path');
     const location = {
       root: resolve(path.worktree !== '' && path.worktree !== '/' ? path.worktree : path.directory),
@@ -43,12 +43,12 @@ export async function installedEditor(host: Awaited<ReturnType<typeof nativeHarn
       },
     };
   };
-  const context = async () => storage.loadEditorContext(await connection());
+  const context = async () => storage.loadConfigurationContext(await connection());
   const runtime = async () => {
     const conn = await connection();
     return baseline.readRuntimeContext(await conn.config(), conn.location);
   };
-  const reload = async (saved?: Storage.EditorContext, overrides: Partial<Apply.ApplyPort> = {}) => {
+  const applySelection = async (saved?: Storage.ConfigurationContext, overrides: Partial<Apply.ApplyPort> = {}) => {
     const committed = saved ?? (await context());
     return apply.applySavedComposition(committed, committed.runtime, {
       assertCurrent: () => committed.connection.assertCurrent(),
@@ -57,7 +57,7 @@ export async function installedEditor(host: Awaited<ReturnType<typeof nativeHarn
       refresh: async () => {
         const config = await host.api('/config');
         await Promise.all([host.api('/config/providers'), host.api('/agent'), host.api('/command')]);
-        return baseline.readRuntimeRevision(config, committed.connection.location);
+        return baseline.readRuntimeContext(config, committed.connection.location);
       },
       ...overrides,
     });
@@ -67,5 +67,5 @@ export async function installedEditor(host: Awaited<ReturnType<typeof nativeHarn
     const preview = await storage.previewSelection(current, choice);
     return storage.saveSelectionGuarded(current, preview);
   };
-  return { storage, context, runtime, reload, select };
+  return { storage, context, runtime, applySelection, select };
 }

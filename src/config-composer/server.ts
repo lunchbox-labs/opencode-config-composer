@@ -1,23 +1,27 @@
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { resolve } from 'node:path';
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { configurationDirectory } from './configuration.ts';
 import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
 import { SettingsError, record } from './settings.ts';
-import { loadSource, pluginOptions } from './composition/sources.ts';
+import { type LoadedSource, loadSource, pluginOptions } from './composition/sources.ts';
 import { resolveComposition } from './composition/runtime.ts';
 import { type RuntimeMarker, configFields, metadata, publishRuntime } from './composition/runtime-baseline.ts';
 import {
   type NativeObservation,
   compositionRevision,
-  digest,
   discoveryContext,
+  nativeGlobalJsonPaths,
   observeNative,
 } from './composition/revision.ts';
 import {
+  type SelectionEnvironment,
+  type SelectionLocator,
   publishSelectionProof,
-  readSelection,
+  readSelectionAt,
   selectionLifetime,
+  selectionLocator,
   selectionStateDirectory,
   verifySelection,
 } from './composition/selection-state.ts';
@@ -25,6 +29,65 @@ import type { NativeBaseline } from './composition/document-types.ts';
 interface Previous {
   native: Record<string, unknown>;
   applied: Record<string, unknown>;
+}
+// Native global JSON is cached for the server process. Rebootstrap must never
+// promote changed disk bytes to evidence that the native cache was refreshed.
+interface Definition {
+  id: string;
+  options: { configFile?: string };
+  configurationDirectory: string;
+  selectionEnvironment: SelectionEnvironment;
+  source?: LoadedSource;
+  selectionLocator?: SelectionLocator;
+  error?: string;
+}
+interface Startup {
+  definitions: Map<string, Promise<Definition>>;
+  globalBaselines: Map<string, string>;
+}
+function startup(): Startup {
+  const key = Symbol.for('@lunchbox-labs/config-composer/startup-definitions');
+  const existing: unknown = Reflect.get(globalThis, key);
+  if (existing !== undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- This process-private symbol is shared by duplicate module evaluations.
+    return existing as Startup;
+  }
+  const value: Startup = { definitions: new Map(), globalBaselines: new Map() };
+  Reflect.set(globalThis, key, value);
+  return value;
+}
+async function definition(directory: string, worktree: string, rawOptions: unknown): Promise<Definition> {
+  const registry = startup().definitions;
+  const key = JSON.stringify([directory, worktree]);
+  let captured = registry.get(key);
+  if (captured === undefined) {
+    captured = (async () => {
+      const value: Definition = {
+        id: randomUUID(),
+        options: {},
+        configurationDirectory: configurationDirectory(),
+        selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
+      };
+      try {
+        value.options = pluginOptions(rawOptions);
+        const { path, canonicalPath, fingerprint, explicit, document } = await loadSource(
+          value.options,
+          value.configurationDirectory,
+        );
+        value.source = { path, canonicalPath, fingerprint, explicit, document };
+        value.selectionLocator = await selectionLocator(value.selectionEnvironment, {
+          root: worktree,
+          baseFile: canonicalPath,
+        });
+      } catch (error) {
+        value.error = error instanceof Error ? error.message : String(error);
+      }
+      return value;
+    })();
+    // Cache the first promise, including failures, before any concurrent initialization can enter.
+    registry.set(key, captured);
+  }
+  return structuredClone(await captured);
 }
 const roots = new WeakMap<object, Previous>();
 const nested = new WeakMap<object, Previous>();
@@ -53,14 +116,13 @@ function restore(
   return result;
 }
 const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
-  const options = pluginOptions(rawOptions);
   const directory = resolve(typeof input.directory === 'string' ? input.directory : process.cwd());
   const worktree = resolve(
     typeof input.worktree === 'string' && input.worktree !== '' && input.worktree !== '/' ? input.worktree : directory,
   );
   const location = { root: worktree, directory };
-  const configDirectory = configurationDirectory();
-  const selectionEnvironment = { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() };
+  const loaded = await definition(directory, worktree, rawOptions);
+  const { options, configurationDirectory: configDirectory, selectionEnvironment } = loaded;
   await publishSelectionProof(selectionEnvironment);
   await validateBundledSkills();
   return {
@@ -81,7 +143,12 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
       };
       let native: NativeBaseline | undefined;
       let observation: NativeObservation | undefined;
-      const identities: Pick<RuntimeMarker, 'source' | 'selection'> = {};
+      let globalJsonBaseline: string | undefined;
+      const identities: Pick<RuntimeMarker, 'definitionId' | 'source' | 'selectionLocator' | 'selection'> = {
+        definitionId: loaded.id,
+        source: loaded.source,
+        selectionLocator: loaded.selectionLocator,
+      };
       try {
         const previous = roots.get(config);
         const restored = restore(
@@ -121,13 +188,17 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
         observation = await observeNative(
           discoveryContext(directory, typeof input.worktree === 'string' ? input.worktree : worktree),
         );
-        const source = await loadSource(options, configDirectory);
-        identities.source = {
-          path: source.path,
-          canonicalPath: source.canonicalPath,
-          fingerprint: digest(source.text ?? null),
-        };
-        const selection = await readSelection(selectionEnvironment, { root: worktree, baseFile: source.canonicalPath });
+        const globalKey = nativeGlobalJsonPaths(observation.context)[0];
+        const globalBaselines = startup().globalBaselines;
+        globalJsonBaseline = globalBaselines.get(globalKey) ?? observation.globalJson;
+        globalBaselines.set(globalKey, globalJsonBaseline);
+        if (loaded.error !== undefined || loaded.source === undefined || loaded.selectionLocator === undefined) {
+          throw new SettingsError(
+            `${loaded.error ?? 'Incomplete startup definition.'} Restart the OpenCode server process after correcting the configuration.`,
+          );
+        }
+        const source = loaded.source;
+        const selection = await readSelectionAt(selectionEnvironment, loaded.selectionLocator);
         identities.selection = {
           path: selection.path,
           choice: selection.choice,
@@ -136,18 +207,10 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
         };
         const candidate = resolveComposition(source.document, selection.choice, native, observation.authority);
         const revision = compositionRevision(source, selection, candidate);
-        const checked = await loadSource(options, configDirectory);
-        if (
-          checked.identity !== source.identity ||
-          checked.text !== source.text ||
-          checked.canonicalPath !== source.canonicalPath
-        ) {
-          throw new SettingsError('Composition source changed while loading.');
-        }
         await verifySelection(selection);
         const after = await observeNative(observation.context);
         if (!isDeepStrictEqual(after, observation)) {
-          throw new SettingsError('Native agent metadata changed. Restart OpenCode, then review again.');
+          throw new SettingsError('Native inputs changed. Restart the OpenCode server process, then review again.');
         }
         // The complete candidate and all observed inputs are valid before any managed mutation.
         for (const field of ['model', 'small_model'] as const) {
@@ -177,6 +240,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           status: 'applied',
           native: metadata(native),
           observation,
+          globalJsonBaseline,
           revision,
           candidate: { ...candidate, ...metadata(candidate) },
         });
@@ -191,6 +255,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           diagnostic: `Composer not applied. ${error instanceof Error ? error.message : String(error)}`,
           ...(native === undefined ? {} : { native: metadata(native) }),
           ...(observation === undefined ? {} : { observation }),
+          ...(globalJsonBaseline === undefined ? {} : { globalJsonBaseline }),
         });
         throw error;
       }

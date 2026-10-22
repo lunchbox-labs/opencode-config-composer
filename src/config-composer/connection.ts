@@ -20,13 +20,13 @@ export async function verifySharedFilesystem(api: TuiPluginApi, root: string, se
     }
   } catch {
     throw new SettingsError(
-      'Could not verify a shared filesystem with this OpenCode server. Settings were not changed. Use the editor on the server machine.',
+      'Could not verify a shared filesystem with this OpenCode server. Settings were not changed. Use Config Composer on the server machine.',
     );
   } finally {
     await rm(probe, { recursive: true, force: true });
   }
   if (api.client !== client || api.lifecycle.signal.aborted) {
-    throw new SettingsError('The server connection changed. Reopen the settings editor.');
+    throw new SettingsError('The server connection changed. Reopen Config Composer.');
   }
   return client;
 }

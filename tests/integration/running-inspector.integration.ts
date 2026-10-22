@@ -9,7 +9,7 @@ test(
     await f.write(f.paths.shared, { profiles: { a: { agent: { worker: { model: 'fixture/beta' } } } } });
     await f.host.start();
     const sent = await f.send();
-    await f.editor.reload(await f.editor.select('a'));
+    await f.editor.applySelection(await f.editor.select('a'));
     const runtime = await f.editor.runtime();
     assert.equal(runtime.candidate?.decisions['/agent/worker/model'].value, 'fixture/beta');
     assert.doesNotMatch(JSON.stringify(runtime), /NATIVE_WORKER|NATIVE_REVIEW/);

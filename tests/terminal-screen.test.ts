@@ -9,7 +9,7 @@ test('native select readiness waits beyond autocomplete and first paint for focu
   const search = terminalSearch(screen);
   const write = (text: string) => new Promise<void>((resolve) => screen.write(text, resolve));
   // Cursor locations and DECTCEM transitions reproduce the failed Windows capture.
-  await write('\x1b[47;4H/compose-configs        Compose configuration\x1b[49;6H/compose-configs\x1b[?25h');
+  await write('\x1b[47;4H/view-configs        View configuration\x1b[49;6H/view-configs\x1b[?25h');
   assert.equal(search.focused(), false, 'command autocomplete is not the Compose search input');
   await write(
     '\x1b[?25l\x1b[16;65HCompose configs\x1b[18;65HSearch…\x1b[22;65HModels, variants and parameters\x1b[55;180H',
@@ -38,8 +38,8 @@ test('native select readiness waits beyond autocomplete and first paint for focu
   assert.equal(search.promptFocused(), false, 'the restored main input must regain focus');
   await write('\x1b[?25h');
   assert.equal(search.promptFocused(), true);
-  await write('/compose-configs');
-  assert.equal(search.echoed('/compose-configs'), true);
+  await write('/view-configs');
+  assert.equal(search.echoed('/view-configs'), true);
 });
 
 test('native filtered selection becomes ready only after its highlighted paint', async (t) => {

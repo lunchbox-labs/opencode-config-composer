@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import timers from 'node:timers/promises';
 import type { compositionFixture } from './composition-fixture.ts';
 import type { nativeTerminal } from './terminal.ts';
-export async function reloadFromTerminal(
+export async function applyFromTerminal(
   fixture: Awaited<ReturnType<typeof compositionFixture>>,
   terminal: Awaited<ReturnType<typeof nativeTerminal>>,
 ) {
@@ -15,7 +15,7 @@ export async function reloadFromTerminal(
   let pending: Error | undefined;
   for (let attempt = 0; attempt < 200; attempt++) {
     const current = await fixture.editor.runtime().catch((error: unknown) => {
-      if (!(error instanceof Error) || !error.message.startsWith('Unreadable runtime marker.')) {
+      if (!(error instanceof Error) || !error.message.startsWith('No runtime marker.')) {
         throw error;
       }
       pending = error;
@@ -28,7 +28,7 @@ export async function reloadFromTerminal(
     }
     await timers.setTimeout(50);
   }
-  throw new Error('The terminal reload did not publish a new native registration', { cause: pending });
+  throw new Error('The terminal profile apply did not publish a new native registration', { cause: pending });
 }
 
 export async function readPreview(

@@ -27,7 +27,7 @@ test(
     for (const choice of ['a', 'b', 'a', null, undefined] as const) {
       const committed = await f.editor.select(choice);
       assert.equal(committed.selection.choice, choice);
-      const revision = await f.editor.reload(committed);
+      const revision = await f.editor.applySelection(committed);
       const runtime = await f.editor.runtime();
       assert.notEqual(runtime.id, previous.id);
       assert.deepEqual(runtime.revision, revision);

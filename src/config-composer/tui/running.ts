@@ -1,7 +1,7 @@
 import { record } from '../settings.ts';
 import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
 export const sessionNotice =
-  'Composer configuration is applied to this instance. Existing sessions can retain their model and variant. Use /models and /variants (Default clears an old variant) to change retained selections. The public API cannot reliably clear every current selection.';
+  'Existing sessions can retain their model and variant. Use /models and /variants (Default clears an old variant) to change retained selections. The public API cannot reliably clear every current selection.';
 export async function retainedSession(api: TuiPluginApi): Promise<string> {
   const route = api.route.current;
   if (route.name !== 'session' || typeof route.params?.sessionID !== 'string') {

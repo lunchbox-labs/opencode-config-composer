@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { type NativeFrontmatterContext, nativeAgentSourceRoots, readNativeAgentFrontmatter } from '../frontmatter.ts';
 import type { NativeAuthority, ResolvedCandidate } from './document-types.ts';
-import type { Source } from './sources.ts';
+import type { LoadedSource } from './sources.ts';
 import type { SelectionSnapshot } from './selection-state.ts';
 export interface CompositionRevision {
   sources: string;
@@ -16,6 +16,8 @@ export interface NativeObservation {
   authority: NativeAuthority;
   metadata: string;
   json: string;
+  globalJson: string;
+  commands: string;
 }
 export function discoveryContext(directory: string, worktree: string): NativeFrontmatterContext {
   return {
@@ -63,6 +65,10 @@ async function observation(path: string, bytes = false): Promise<unknown> {
     throw error;
   }
 }
+export function nativeGlobalJsonPaths(context: NativeFrontmatterContext): string[] {
+  const root = nativeAgentSourceRoots(context)[0];
+  return ['config', 'config.json', 'opencode.json', 'opencode.jsonc'].map((name) => join(root, name));
+}
 export function nativeJsonPaths(context: NativeFrontmatterContext): string[] {
   const roots = nativeAgentSourceRoots(context);
   const jsonPaths = new Set(
@@ -79,28 +85,27 @@ export function nativeJsonPaths(context: NativeFrontmatterContext): string[] {
   if (explicit !== undefined && explicit !== '') {
     jsonPaths.add(explicit);
   }
-  return [...jsonPaths];
+  return [...new Set([...jsonPaths, ...nativeGlobalJsonPaths(context)])];
 }
-/** Native command bodies are opaque; only discover their file identities for the write refusal. */
+/** Native command bodies are opaque; fingerprint bytes and identities without interpreting their contents. */
 export async function nativeCommandPaths(context: NativeFrontmatterContext): Promise<string[]> {
   const paths: string[] = [];
-  const visited = new Set<string>();
-  const scan = async (directory: string): Promise<void> => {
+  const scan = async (directory: string, parents = new Set<string>()): Promise<void> => {
     const identity = await realpath(directory).catch((error: unknown) => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
         return undefined;
       }
       throw error;
     });
-    if (identity === undefined || visited.has(identity)) {
+    if (identity === undefined || parents.has(identity)) {
       return;
     }
-    visited.add(identity);
+    const ancestors = new Set([...parents, identity]);
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       const info = entry.isSymbolicLink() ? await stat(path) : entry;
       if (info.isDirectory()) {
-        await scan(path);
+        await scan(path, ancestors);
       } else if (info.isFile() && entry.name.endsWith('.md')) {
         paths.push(path);
       }
@@ -111,7 +116,7 @@ export async function nativeCommandPaths(context: NativeFrontmatterContext): Pro
       await scan(join(root, name));
     }
   }
-  return paths;
+  return paths.sort();
 }
 export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
   const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
@@ -134,15 +139,17 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
     authority,
     metadata: digest([discovery, sources]),
     json: digest(await Promise.all(nativeJsonPaths(context).map((path) => observation(path, true)))),
+    globalJson: digest(await Promise.all(nativeGlobalJsonPaths(context).map((path) => observation(path, true)))),
+    commands: digest(await Promise.all((await nativeCommandPaths(context)).map((path) => observation(path, true)))),
   };
 }
 export function compositionRevision(
-  source: Source,
+  source: LoadedSource,
   state: SelectionSnapshot,
   candidate: ResolvedCandidate,
 ): CompositionRevision {
   return {
-    sources: digest([source.path, source.canonicalPath, source.text, state.text ?? null]),
+    sources: digest([source.path, source.canonicalPath, source.fingerprint, state.text ?? null]),
     effective: digest({
       ...candidate,
       agent: Object.fromEntries(

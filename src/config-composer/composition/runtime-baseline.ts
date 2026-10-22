@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { SettingsError, record } from '../settings.ts';
 import { serverEntry } from '../registration.ts';
 import { configurationDirectory } from '../configuration.ts';
 import type { NativeBaseline, ResolvedCandidate } from './document-types.ts';
 import type { CompositionRevision, NativeObservation } from './revision.ts';
+import type { LoadedSource } from './sources.ts';
+import { readCompositionDocument } from './document.ts';
 import { builtins } from './runtime.ts';
-import type { SelectionEnvironment } from './selection-state.ts';
+import type { SelectionEnvironment, SelectionLocator } from './selection-state.ts';
 export interface RuntimeLocation {
   root: string;
   directory: string;
@@ -20,17 +22,22 @@ export interface RuntimeMarker {
   options: { configFile?: string };
   status: 'applied' | 'error';
   builtins: typeof builtins;
-  source?: { path: string; canonicalPath: string; fingerprint: string };
+  definitionId: string;
+  source?: LoadedSource;
+  selectionLocator?: SelectionLocator;
   selection?: { path: string; choice?: string | null; revision: number; identity?: string };
   diagnostic?: string;
   native?: NativeBaseline;
   observation?: NativeObservation;
+  globalJsonBaseline?: string;
   selectionEnvironment: SelectionEnvironment;
   revision?: CompositionRevision;
   candidate?: ResolvedCandidate;
   applied: NativeBaseline;
 }
 export interface AttestedRuntime extends RuntimeMarker {
+  source: LoadedSource;
+  selectionLocator: SelectionLocator;
   native: NativeBaseline;
   observation: NativeObservation;
 }
@@ -148,6 +155,9 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   const marker: unknown = config.plugin.flatMap((entry: unknown) =>
     Array.isArray(entry) && record(entry[1]) && Object.hasOwn(entry[1], key) ? [entry[1][key]] : [],
   )[0];
+  if (marker === undefined) {
+    return fail('No runtime marker.');
+  }
   if (!record(marker) || marker.version !== 2 || typeof marker.id !== 'string' || !record(marker.location)) {
     return fail('Unreadable runtime marker.');
   }
@@ -160,8 +170,26 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   if (!isDeepStrictEqual(transport(marker.applied), transport(metadata(configFields(config))))) {
     return fail('Configuration changed after Composer.');
   }
+  if (marker.source === undefined || marker.selectionLocator === undefined) {
+    return fail(typeof marker.diagnostic === 'string' ? marker.diagnostic : 'Incomplete loaded definition.');
+  }
   const hash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   if (
+    typeof marker.definitionId !== 'string' ||
+    marker.definitionId === '' ||
+    !record(marker.source) ||
+    typeof marker.source.path !== 'string' ||
+    !isAbsolute(marker.source.path) ||
+    typeof marker.source.canonicalPath !== 'string' ||
+    !isAbsolute(marker.source.canonicalPath) ||
+    !hash(marker.source.fingerprint) ||
+    typeof marker.source.explicit !== 'boolean' ||
+    !record(marker.selectionLocator) ||
+    typeof marker.selectionLocator.root !== 'string' ||
+    !isAbsolute(marker.selectionLocator.root) ||
+    typeof marker.selectionLocator.path !== 'string' ||
+    !isAbsolute(marker.selectionLocator.path) ||
+    marker.selectionLocator.baseFile !== marker.source.canonicalPath ||
     typeof marker.configurationDirectory !== 'string' ||
     !record(marker.options) ||
     (Object.hasOwn(marker.options, 'configFile') && typeof marker.options.configFile !== 'string') ||
@@ -170,12 +198,21 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
     typeof marker.selectionEnvironment.lifetime !== 'string' ||
     !hash(marker.observation.metadata) ||
     !hash(marker.observation.json) ||
+    !hash(marker.observation.globalJson) ||
+    !hash(marker.observation.commands) ||
     !record(marker.observation.authority) ||
     !record(marker.observation.context) ||
     typeof marker.observation.context.directory !== 'string' ||
     typeof marker.observation.context.worktree !== 'string'
   ) {
     return fail('Invalid server attestation.');
+  }
+  try {
+    if (!isDeepStrictEqual(readCompositionDocument(marker.source.document), marker.source.document)) {
+      return fail('Invalid loaded definition.');
+    }
+  } catch {
+    return fail('Invalid loaded definition.');
   }
   for (const kind of ['agent', 'command']) {
     if (
@@ -212,9 +249,14 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   if (marker.status === 'error' && Object.hasOwn(marker, 'revision')) {
     return fail('Error marker claims an applied revision.');
   }
+  if (marker.globalJsonBaseline === undefined) {
+    throw new SettingsError(
+      'Native global cache baseline is unavailable. Restart the OpenCode server process, then review again.',
+    );
+  }
+  if (!hash(marker.globalJsonBaseline)) {
+    return fail('Invalid server attestation.');
+  }
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Runtime, target, field and authority shape checks above establish this internal transport boundary.
   return structuredClone(marker) as unknown as AttestedRuntime;
-}
-export function readRuntimeRevision(config: unknown, location: RuntimeLocation): RuntimeMarker {
-  return readRuntimeContext(config, location);
 }
