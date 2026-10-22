@@ -1,9 +1,9 @@
 import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
 import type { dialogNavigation } from '../../tui/navigation.ts';
+import type { AttestedRuntime } from '../composition/runtime-baseline.ts';
 import type { ConfigurationContext } from '../storage.ts';
 import type { CatalogModel } from '../settings.ts';
 import type { FieldDecision, Selection } from '../composition/document-types.ts';
-import { builtins } from '../composition/runtime.ts';
 export interface ConfigurationView {
   api: TuiPluginApi;
   nav: ReturnType<typeof dialogNavigation>;
@@ -13,18 +13,13 @@ export interface ConfigurationView {
   choose(choice: Selection): Promise<void>;
   details(title: string, text: string): void;
 }
-export function roster(view: ConfigurationView, kind: 'agent' | 'command'): string[] {
-  return [
-    ...new Set([
-      ...(kind === 'agent' ? Object.keys(builtins) : []),
-      ...Object.keys(view.context.runtime.native[kind] ?? {}),
-      ...(kind === 'agent' ? Object.keys(view.context.runtime.observation.authority) : []),
-    ]),
-  ].sort();
-}
 export const permissionNotice =
   'Agent-level permission contribution. Global and built-in inheritance remains host-owned.\nOmitted rules do not mean no enforcement.';
-export function fieldDetail(view: ConfigurationView, key: string, decision: FieldDecision | undefined): string {
+export function fieldDetail(
+  view: { context: { runtime: AttestedRuntime; source: { path: string } } },
+  key: string,
+  decision: FieldDecision | undefined,
+): string {
   if (decision === undefined) {
     return 'No authored value at this level. Native inheritance remains host-owned.';
   }

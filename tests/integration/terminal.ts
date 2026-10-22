@@ -141,11 +141,29 @@ export async function nativeTerminal(
     await waitInput(() => search.selected(label, query), `the highlighted option ${JSON.stringify(label)}`);
     await press('\r', ...next);
   };
+  const chooseFixed = async (label: string, ...next: string[]) => {
+    await waitInput(() => text().includes('▶ '), 'a focused fixed-menu selection');
+    assert.equal(search.focused(), false, 'fixed menus have no search input');
+    for (let attempt = 0; attempt < 32; attempt++) {
+      if (
+        text()
+          .split('\n')
+          .some((line) => line.trim() === `▶ ${label}`)
+      ) {
+        await press('\r', ...next);
+        return;
+      }
+      const before = revision;
+      await press('\x1b[B');
+      await waitInput(() => revision > before, 'the next fixed-menu selection');
+    }
+    assert.fail(`Fixed menu option ${label} not found:\n${text()}`);
+  };
   const command = async (name: string, ...labels: string[]) => {
     await waitInput(search.promptFocused, 'the main conversation input');
     await press(name, name);
     await waitInput(() => search.echoed(name), `the command query ${JSON.stringify(name)}`);
     await press('\r', ...labels);
   };
-  return { text, wait, press, choose, command, stop };
+  return { text, wait, press, choose, chooseFixed, command, stop };
 }

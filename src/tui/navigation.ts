@@ -4,7 +4,8 @@ type Render = () => ReturnType<TuiPluginApi['ui']['DialogAlert']>;
 const backValue = '\u0000back';
 
 /** Retain parent views while using V1's replacement-only dialog API. */
-export function dialogNavigation(api: TuiPluginApi) {
+export type FixedMenu = (props: TuiDialogSelectProps<string>) => ReturnType<TuiPluginApi['ui']['DialogSelect']>;
+export function dialogNavigation(api: TuiPluginApi, fixedMenu: FixedMenu) {
   let frames: Render[] = [];
   let revision = 0;
   let replacing = false;
@@ -102,10 +103,10 @@ export function dialogNavigation(api: TuiPluginApi) {
       display(parent);
     }
   };
-  const select = (props: TuiDialogSelectProps<string>) => {
+  const select = (props: TuiDialogSelectProps<string>, render: FixedMenu) => {
     let selected = props.current;
     return () =>
-      api.ui.DialogSelect({
+      render({
         ...props,
         get current() {
           return selected;
@@ -140,9 +141,10 @@ export function dialogNavigation(api: TuiPluginApi) {
         },
       });
   };
-  const menu = (props: TuiDialogSelectProps<string>, root = false) => show(select(props), root);
+  const menu = (props: TuiDialogSelectProps<string>, root = false) => show(select(props, api.ui.DialogSelect), root);
+  const fixed = (props: TuiDialogSelectProps<string>, root = false) => show(select(props, fixedMenu), root);
   const alert = (props: Parameters<TuiPluginApi['ui']['DialogAlert']>[0]) => show(() => api.ui.DialogAlert(props));
   const confirm = (props: Parameters<TuiPluginApi['ui']['DialogConfirm']>[0]) =>
     show(() => api.ui.DialogConfirm(props));
-  return { menu, alert, confirm, close, reset, checkpoint };
+  return { menu, fixed, alert, confirm, close, reset, checkpoint };
 }

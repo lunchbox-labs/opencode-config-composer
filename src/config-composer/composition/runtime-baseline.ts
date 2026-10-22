@@ -139,7 +139,7 @@ function transport(value: unknown): unknown {
       .map(([key, value]) => [key, key === 'permission' ? permissionTransport(value) : transport(value)]),
   );
 }
-export function readRuntimeContext(config: unknown, location: RuntimeLocation): AttestedRuntime {
+export function readLoadedRuntime(config: unknown, location: RuntimeLocation): AttestedRuntime {
   const fail = (text: string): never => {
     throw new SettingsError(
       `${text} Exact native authority is unavailable. Restart OpenCode and reopen Config Composer.`,
@@ -160,11 +160,13 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   if (marker.location.root !== resolve(location.root) || marker.location.directory !== resolve(location.directory)) {
     return fail('Runtime belongs to another location.');
   }
-  if (!record(marker.native) || !record(marker.observation) || !record(marker.selectionEnvironment)) {
+  if (
+    !record(marker.native) ||
+    !record(marker.applied) ||
+    !record(marker.observation) ||
+    !record(marker.selectionEnvironment)
+  ) {
     return fail(typeof marker.diagnostic === 'string' ? marker.diagnostic : 'Incomplete server attestation.');
-  }
-  if (!isDeepStrictEqual(transport(marker.applied), transport(metadata(configFields(config))))) {
-    return fail('Configuration changed after Composer.');
   }
   if (marker.source === undefined || marker.selectionLocator === undefined) {
     return fail(typeof marker.diagnostic === 'string' ? marker.diagnostic : 'Incomplete loaded definition.');
@@ -206,10 +208,43 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   } catch {
     return fail('Invalid loaded definition.');
   }
+  if (marker.status === 'applied') {
+    const candidate = marker.candidate;
+    const origin = (value: unknown) =>
+      record(value) &&
+      typeof value.kind === 'string' &&
+      (value.source === undefined || typeof value.source === 'string') &&
+      (value.pointer === undefined || typeof value.pointer === 'string');
+    if (
+      !record(candidate) ||
+      !(candidate.profile === null || typeof candidate.profile === 'string') ||
+      !record(candidate.decisions) ||
+      !record(candidate.memberships) ||
+      !Object.values(candidate.decisions).every(
+        (decision) =>
+          record(decision) &&
+          Object.hasOwn(decision, 'value') &&
+          origin(decision.origin) &&
+          (decision.blockedComposer === undefined ||
+            (record(decision.blockedComposer) && origin(decision.blockedComposer.origin))),
+      ) ||
+      !Object.values(candidate.memberships).every(
+        (membership) =>
+          record(membership) &&
+          Array.isArray(membership.groups) &&
+          membership.groups.every((group: unknown) => typeof group === 'string') &&
+          origin(membership.origin),
+      )
+    ) {
+      return fail('Invalid applied Composer attribution.');
+    }
+  }
   for (const kind of ['agent', 'command']) {
     if (
-      Object.hasOwn(marker.native, kind) &&
-      (!record(marker.native[kind]) || !Object.values(marker.native[kind]).every(record))
+      [marker.native, marker.applied].some(
+        (baseline) =>
+          Object.hasOwn(baseline, kind) && (!record(baseline[kind]) || !Object.values(baseline[kind]).every(record)),
+      )
     ) {
       return fail('Invalid native targets.');
     }
@@ -267,4 +302,25 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   }
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Runtime, target, field and authority shape checks above establish this internal transport boundary.
   return structuredClone(marker) as unknown as AttestedRuntime;
+}
+
+/** Read-only provenance is conservative: every permission rule keeps its authored order. */
+export function sameConfigurationValue(field: string, previous: unknown, current: unknown): boolean {
+  const ordered = (value: unknown): unknown =>
+    record(value)
+      ? Object.entries(value).map(([key, policy]) => [key, record(policy) ? Object.entries(policy) : policy])
+      : value;
+  return field === 'permission'
+    ? isDeepStrictEqual(ordered(previous), ordered(current))
+    : isDeepStrictEqual(previous, current);
+}
+/** Mutation requires the whole native contribution to remain attested. Inspection does not. */
+export function readRuntimeContext(config: unknown, location: RuntimeLocation): AttestedRuntime {
+  const runtime = readLoadedRuntime(config, location);
+  if (!record(config) || !isDeepStrictEqual(transport(runtime.applied), transport(metadata(configFields(config))))) {
+    throw new SettingsError(
+      'Configuration changed after Composer. Exact native authority is unavailable. Restart OpenCode and reopen Config Composer.',
+    );
+  }
+  return runtime;
 }

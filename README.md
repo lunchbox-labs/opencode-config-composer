@@ -1,6 +1,6 @@
 # Config Composer
 
-Share native OpenCode settings through agent-owned groups and one selected profile per worktree. Choose profiles with `/profiles` and inspect loaded definitions and applied values with read-only `/view-configs`. Tested against OpenCode V1 1.19.x.
+Share native OpenCode settings through agent-owned groups and one selected profile per worktree. Choose profiles with `/profiles` and inspect loaded definitions and applied values with read-only `/view-configs`. The prompt shows the applied profile; the inspector hides built-in agents until toggled. Tested against OpenCode V1 1.19.x.
 
 Add the package to `plugin` in both `opencode.jsonc` and `tui.jsonc`:
 
