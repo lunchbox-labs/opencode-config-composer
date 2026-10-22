@@ -7,6 +7,7 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import type { TuiDialogConfirmProps, TuiDialogSelectProps, TuiPluginApi, TuiToast } from '@opencode-ai/plugin/tui';
 import descriptor from '../src/config-composer/server.ts';
 import { registerConfiguration } from '../src/config-composer/tui.ts';
+import { appliedProfile } from '../src/config-composer/tui/inspection.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { loadConfigurationContext } from '../src/config-composer/storage.ts';
 import { readSelectionAt, saveSelection } from '../src/config-composer/composition/selection-state.ts';
@@ -58,6 +59,7 @@ async function fixture(
     command: { review: { template: 'OPAQUE', agent: 'worker' } },
   };
   await hook(config);
+  let nativeAgents: Record<string, unknown>[] = [];
   let current: Dialog | undefined;
   let closed: (() => void) | undefined;
   const commands: { slashName: string; run: () => void }[] = [];
@@ -75,7 +77,7 @@ async function fixture(
     rendered.push(props.title);
   };
   const api = {
-    state: { path: { directory: root, worktree: root } },
+    state: { config, path: { directory: root, worktree: root } },
     route: { current: { name: 'session', params: { sessionID: 'one' } } },
     lifecycle: { signal: lifecycle.signal, onDispose: () => {} },
     keymap: {
@@ -124,7 +126,17 @@ async function fixture(
           return { data: true };
         },
       },
-      app: { agents: async () => ({ data: [] }) },
+      app: {
+        agents: async () => ({
+          data: [
+            ...['build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary'].map((name) => ({
+              name,
+              native: true,
+            })),
+            ...nativeAgents,
+          ],
+        }),
+      },
       command: { list: async () => ({ data: [] }) },
     },
     ui: {
@@ -150,7 +162,7 @@ async function fixture(
       },
     },
   } as unknown as TuiPluginApi;
-  registerConfiguration(api);
+  registerConfiguration(api, api.ui.DialogSelect);
   const wait = async (title: string) => {
     for (let i = 0; i < 1000; i++) {
       if (current?.title === title) {
@@ -272,6 +284,9 @@ async function fixture(
     get disposed() {
       return disposed;
     },
+    setNativeAgents: (agents: Record<string, unknown>[]) => {
+      nativeAgents = agents;
+    },
     setBusy: () => {
       busy = true;
     },
@@ -305,8 +320,13 @@ test('profile preview confirms selection and writes no definition bytes', async 
 test('inspection opens untouched builtins and explains native inheritance', async (t) => {
   const f = await fixture(t);
   await f.open('view-configs', 'Configuration');
+  assert.equal(
+    f.current!.options!.some((option) => option.title === 'agent build'),
+    false,
+  );
+  await f.choose('Show built-in agents', 'Configuration');
   await f.choose('agent build', 'agent build');
-  assert.equal(f.current?.options?.find((option) => option.title === 'model')?.description, 'Inherit');
+  assert.equal(f.current!.options!.find((option) => option.title === 'model')?.description, 'Inherit');
   await f.choose('model', 'agent build · model');
   assert.match(await f.detailText(), /No authored value at this level\. Native inheritance remains host-owned\./);
   assert.equal(f.disposed, 0);
@@ -334,7 +354,7 @@ test('inspection exposes shared groups and inactive profiles without edit action
   await f.open('view-configs', 'Configuration');
   await f.choose('agent helper', 'agent helper');
   await f.choose('groups', 'agent helper · groups');
-  assert.match(f.current?.message ?? '', /Application order: \["workers"\]/);
+  assert.match(f.current?.message ?? '', /Loaded application order: \["workers"\]/);
   assert.match(f.current?.message ?? '', /Native agent configuration/);
   await f.open('view-configs', 'Configuration');
   await f.choose('Profile definitions', 'Profile definitions');
@@ -352,8 +372,8 @@ test('inspection keeps loaded raw pins after native file edits', async (t) => {
   const details = await f.detailText();
   assert.match(details, /Pinned by frontmatter/);
   assert.doesNotMatch(details, /p\/b|awaiting reload/);
-  assert.match(details, /Verified applied instance: "p\/native"/);
-  assert.match(details, /Configured\nmodel:/);
+  assert.match(details, /Loaded configuration contribution: "p\/native"/);
+  assert.match(details, /model:/);
 });
 for (const pin of [
   'model: p/native',
@@ -433,7 +453,7 @@ test('inspection ignores source-only edits without pending notices', async (t) =
   await writeFile(f.source, (await f.read()) + '\n');
   await f.open('view-configs', 'Configuration');
   await f.choose('Runtime status and sources', 'Runtime status and sources');
-  assert.match(await f.detailText(), /Saved selection matches verified applied instance/);
+  assert.match(await f.detailText(), /Current loaded server configuration/);
   assert.equal(f.toasts.length, 0);
 });
 test('requested profile switch rejects native edits without disposal or proactive warnings', async (t) => {
@@ -631,3 +651,145 @@ for (const boundary of ['provider', 'runtime'] as const) {
     assert.equal(f.disposed, 0);
   });
 }
+
+test('inspection tolerates later native contributions and never attributes them to frontmatter', async (t) => {
+  const f = await fixture(t, 'model: p/native');
+  f.config.agent.worker.model = 'p/b';
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  await f.choose('model', 'agent worker · model');
+  const detail = await f.detailText();
+  assert.match(detail, /p\/b/);
+  assert.match(detail, /Loaded value differs from Composer’s recorded contribution/);
+  assert.doesNotMatch(detail, /Pinned by frontmatter/);
+  await f.open('profiles', 'Config Composer');
+  assert.match(f.current?.message ?? '', /Configuration changed after Composer/);
+});
+test('read-only inspection needs neither a runtime marker nor shared filesystem access', async (t) => {
+  const f = await fixture(t);
+  f.config.plugin = [];
+  f.api.client.file.read = async () => {
+    throw new Error('must not read files');
+  };
+  await rm(join(f.root, 'opencode'), { recursive: true, force: true });
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  await f.choose('model', 'agent worker · model');
+  assert.match(await f.detailText(), /p\/native/);
+  assert.doesNotMatch(await f.detailText(), /Pinned by frontmatter/);
+});
+test('hidden custom agents stay inspectable while built-in agents start hidden', async (t) => {
+  const f = await fixture(t, '', {}, { private: { hidden: true }, build: { model: 'p/b' } });
+  await f.open('view-configs', 'Configuration');
+  assert.equal(
+    f.current?.options?.some((option) => option.title === 'agent private'),
+    true,
+  );
+  assert.equal(
+    f.current.options.some((option) => option.title === 'agent build'),
+    false,
+  );
+  await f.choose('Show built-in agents', 'Configuration');
+  assert.equal(
+    f.current.options.some((option) => option.title === 'agent build'),
+    true,
+  );
+  await f.choose('Hide built-in agents', 'Configuration');
+  assert.equal(
+    f.current.options.some((option) => option.title === 'agent build'),
+    false,
+  );
+});
+
+test('native resolved permissions are distinct from contributions and reordered rules lose attribution', async (t) => {
+  const f = await fixture(t, '', { permission: { bash: { '*': 'ask', 'git *': 'allow' } } });
+  f.setNativeAgents([
+    {
+      name: 'worker',
+      native: false,
+      permission: [
+        { permission: '*', pattern: '*', action: 'allow' },
+        { permission: 'bash', pattern: '*', action: 'ask' },
+      ],
+    },
+  ]);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  await f.choose('permission', 'agent worker · permission');
+  const initial = await f.detailText();
+  assert.match(initial, /Loaded configuration contribution/);
+  assert.match(initial, /Effective native permission rules \(\/agent\), in evaluation order/);
+  assert.match(initial, /"permission": "\*"/);
+  assert.match(initial, /config-composer\.jsonc/);
+  Reflect.set(f.config.agent.worker, 'permission', { bash: { 'git *': 'allow', '*': 'ask' } });
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  await f.choose('permission', 'agent worker · permission');
+  const changed = await f.detailText();
+  assert.match(changed, /Loaded value differs from Composer’s recorded contribution/);
+  assert.doesNotMatch(changed, /config-composer\.jsonc/);
+});
+test('saved pending profile never replaces the applied profile label', async (t) => {
+  const f = await fixture(t);
+  assert.equal(appliedProfile(f.config, f.root, f.root), 'Shared only');
+  f.setBusy();
+  await f.choose('○ b', 'Apply profile selection?');
+  await f.confirm('Saved; not applied');
+  assert.equal(appliedProfile(f.config, f.root, f.root), 'Shared only');
+  await f.open('view-configs', 'Configuration');
+  await f.choose('Runtime status and sources', 'Runtime status and sources');
+  assert.match(await f.detailText(), /Applied profile: Shared only/);
+  assert.doesNotMatch(await f.detailText(), /Applied profile: b/);
+});
+for (const missing of ['applied', 'candidate', 'decisions'] as const) {
+  test(`malformed ${missing} attribution leaves actual native settings inspectable`, async (t) => {
+    const f = await fixture(t);
+    const { readLoadedRuntime } = await import('../src/config-composer/composition/runtime-baseline.ts');
+    const runtime = readLoadedRuntime(f.config, { directory: f.root, root: f.root });
+    if (missing === 'decisions') {
+      Reflect.deleteProperty(runtime.candidate!, missing);
+    } else {
+      Reflect.deleteProperty(runtime, missing);
+    }
+    Reflect.set(f.config, 'plugin', [[packageName, { __configComposerRuntime: runtime }]]);
+    await f.open('view-configs', 'Configuration');
+    await f.choose('agent worker', 'agent worker');
+    await f.choose('groups', 'agent worker · groups');
+    assert.match(await f.detailText(), /Loaded membership attribution unavailable/);
+    await f.escape('agent worker');
+    await f.choose('model', 'agent worker · model');
+    assert.match(await f.detailText(), /Loaded configuration contribution: "p\/native"/);
+    assert.match(await f.detailText(), /Composer source attribution unavailable/);
+  });
+}
+test('config-only disabled agents are inspectable without suggesting an active inherited value', async (t) => {
+  const f = await fixture(t, '', {}, { disabled: { disable: true, model: 'p/a' } });
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent disabled', 'agent disabled');
+  await f.choose('model', 'agent disabled · model');
+  assert.match(await f.detailText(), /Agent unavailable in the native roster/);
+  assert.doesNotMatch(await f.detailText(), /Effective native model: Inherit/);
+});
+test('an effective native model different from the config contribution is explicitly distinguished', async (t) => {
+  const f = await fixture(t, 'model: p/native');
+  f.setNativeAgents([{ name: 'worker', native: false, model: { providerID: 'p', modelID: 'b' } }]);
+  f.api.client.file.read = async () => {
+    throw new Error('Inspection must not prove local filesystem access');
+  };
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  await f.choose('model', 'agent worker · model');
+  const detail = await f.detailText();
+  assert.match(detail, /Loaded configuration contribution: "p\/native"/);
+  assert.match(detail, /Effective native model: "p\/b"/);
+  assert.match(detail, /Source attribution above covers only the config contribution/);
+});
+test('field menu descriptions redact credentials while keeping useful options visible', async (t) => {
+  const f = await fixture(t, '', { options: { reasoningEffort: 'high', apiKey: 'PRIVATE_SENTINEL' } });
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  const description = f.current?.options?.find((option) => option.title === 'options')?.description ?? '';
+  assert.doesNotMatch(description, /PRIVATE_SENTINEL/);
+  assert.match(description, /reasoningEffort/);
+  assert.match(description, /high/);
+});

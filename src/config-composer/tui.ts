@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
-import { dialogNavigation } from '../tui/navigation.ts';
+import { type FixedMenu, dialogNavigation } from '../tui/navigation.ts';
 import { verifySharedFilesystem } from './connection.ts';
 import { SettingsError, catalogModels } from './settings.ts';
 import {
@@ -17,11 +17,12 @@ import { type ApplyPort, applySavedComposition } from './composition/apply.ts';
 import { sessionNotice } from './tui/running.ts';
 import { configurationErrorText, diagnosticPages, inspectionText } from './tui/configuration-error.ts';
 import { openProfiles, selectionLabel } from './tui/profile.ts';
+import { loadInspection } from './tui/inspection.ts';
 import { openEffective } from './tui/effective.ts';
 import { type ConfigurationView, fieldDetail } from './tui/view.ts';
 import type { Selection } from './composition/document-types.ts';
-export function registerConfiguration(api: TuiPluginApi): void {
-  const nav = dialogNavigation(api);
+export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): void {
+  const nav = dialogNavigation(api, fixedMenu);
   let busy = false;
   const run = (action: () => void | Promise<void>) => {
     if (busy || api.lifecycle.signal.aborted) {
@@ -166,7 +167,7 @@ export function registerConfiguration(api: TuiPluginApi): void {
         return;
       }
       nav.reset();
-      nav.menu({
+      nav.fixed({
         title: 'Saved; not applied',
         options: [
           { title: 'Reason', value: 'reason', description: configurationErrorText(error) },
@@ -193,6 +194,11 @@ export function registerConfiguration(api: TuiPluginApi): void {
     }
   };
   const open = async (mode: 'profiles' | 'inspect') => {
+    if (mode === 'inspect') {
+      const snapshot = await loadInspection(api, connection());
+      openEffective({ api, nav, run, details, snapshot });
+      return;
+    }
     const context = await loadConfigurationContext(connection());
     const confirm = (view: ConfigurationView, preview: Preview, title: string, destination: string) => {
       api.ui.dialog.setSize('xlarge');
@@ -287,11 +293,7 @@ export function registerConfiguration(api: TuiPluginApi): void {
         }
       },
     };
-    if (mode === 'profiles') {
-      openProfiles(view);
-    } else {
-      openEffective(view);
-    }
+    openProfiles(view);
   };
   const unregister = api.keymap.registerLayer({
     commands: [
@@ -318,7 +320,8 @@ export function registerConfiguration(api: TuiPluginApi): void {
 export default {
   id: 'config-composer',
   tui: async (api) => {
-    registerConfiguration(api);
-    await Promise.resolve();
+    const { fixedMenu, registerProfileSlot } = await import('./tui/widgets.js');
+    registerConfiguration(api, (props) => fixedMenu(api, props));
+    registerProfileSlot(api);
   },
 } satisfies TuiPluginModule;

@@ -64,10 +64,10 @@ test(
     await terminal.choose('○ review', 'Apply profile selection?');
     await applyFromTerminal(f, terminal);
     assert.equal((await f.editor.context()).selection.choice, 'review');
-    await terminal.press('\x1b', 'ctrl+p');
+    await terminal.press('\x1b', 'ctrl+p', 'Profile: review');
     await terminal.command('/view-configs', 'Configuration');
     await terminal.choose('agent worker', 'agent worker', 'model');
-    await terminal.choose(
+    await terminal.chooseFixed(
       'model',
       'agent worker · model',
       'Pinned by frontmatter',
@@ -94,7 +94,7 @@ test(
     await writeFile(agent, '---\nmode: [invalid]\n---\nBODY_NEW');
     await terminal.command('/view-configs', 'Configuration');
     await terminal.choose('agent worker', 'agent worker');
-    await terminal.choose('model', 'agent worker · model', 'fixture/alpha');
+    await terminal.chooseFixed('model', 'agent worker · model', 'fixture/alpha');
     await terminal.press('\x1b', 'agent worker');
     await terminal.press('\x1b', 'Configuration');
     await terminal.press('\x1b', 'ctrl+p');
@@ -102,6 +102,36 @@ test(
     await terminal.choose('Shared only', 'Config Composer', 'Restart the OpenCode server process');
     assert.doesNotMatch(terminal.text(), /Composer revision applied/);
     assert.equal((await f.editor.runtime()).id, previous.id);
+    assert.equal(f.host.requests.length, 0);
+  },
+);
+test(
+  'terminal inspection shows downstream native values without borrowing Composer attribution',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'terminal-downstream');
+    const later = join(f.host.configRoot, 'later-plugin.mjs');
+    await writeFile(
+      later,
+      `export default { id: 'later-config', server: async () => ({ config: async (config) => { config.agent.worker.temperature = 0.7; } }) };`,
+    );
+    await f.write(f.paths.native, { ...f.native, plugin: [f.host.installed.directory, later] });
+    await f.write(f.paths.shared, { agent: { worker: { temperature: 0.2 } } });
+    await f.host.start();
+    await assert.rejects(f.editor.runtime(), /Configuration changed after Composer/);
+    const session = await f.host.api<{ id: string }>('/session', { title: 'Downstream contribution' });
+    const terminal = await nativeTerminal(f.host, session.id, 'terminal-downstream');
+    await terminal.wait(['ctrl+p', 'Profile: Shared only']);
+    await terminal.command('/view-configs', 'Configuration');
+    await terminal.choose('agent worker', 'agent worker');
+    await terminal.chooseFixed(
+      'temperature',
+      'agent worker · temperature',
+      'Loaded configuration contribution: 0.7',
+      'exact source unavailable',
+      'Effective native temperature: 0.7',
+    );
+    assert.doesNotMatch(terminal.text(), /Pinned by frontmatter/);
     assert.equal(f.host.requests.length, 0);
   },
 );

@@ -45,7 +45,7 @@ function harness() {
   } as unknown as TuiPluginApi;
   return {
     api,
-    navigation: dialogNavigation(api),
+    navigation: dialogNavigation(api, api.ui.DialogSelect),
     controller,
     get current() {
       return current;
