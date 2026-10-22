@@ -623,3 +623,107 @@ test('selection and authoring menus show each declaration description without pa
   await actions.find((action) => action.value === 'profiles')!.run();
   check('work', 'About profiles');
 });
+
+test('searchable definitions preserve registry identity and route to exact declaring targets', async (t) => {
+  const { openAuthoring } = await import('../src/config-composer/tui/authoring.ts');
+  const { configurationTargets, planParameter } =
+    await import('../src/config-composer/composition/parameter-authoring.ts');
+  const root = await fixture(t);
+  const snapshot = await loadSnapshot(root);
+  type Action = Exclude<Parameters<AuthoringUi['menu']>[1], () => unknown>[number];
+  let actions: Action[] = [];
+  let selected: ReturnType<typeof configurationTargets>[number] | undefined;
+  const ui: AuthoringUi = {
+    menu: (_title, next) => {
+      actions = typeof next === 'function' ? next() : next;
+    },
+    prompt: () => {},
+    back: () => {},
+    refresh: () => {},
+    groupModel: () => {},
+    presetModel: () => {},
+    createPreset: () => {},
+    propose: async () => {},
+    parameters: (target) => {
+      selected = target;
+    },
+    permissions: () => {},
+  };
+  openAuthoring(snapshot, ui);
+  const search = actions.find((action) => action.value === '+find');
+  assert.ok(search !== undefined);
+  await search.run();
+  assert.ok(actions.some((action) => action.value === 'profiles:work'));
+  const group = actions.find((action) => action.value === 'componentGroups:work');
+  assert.ok(group !== undefined);
+  assert.ok(group.description?.includes('definitions.jsonc') === true);
+  await group.run();
+  await actions.find((action) => action.value === '+parameters')!.run();
+  const canonical = configurationTargets(snapshot, join(root, 'definitions.jsonc')).find(
+    (target) => target.path[0] === 'componentGroups',
+  )!;
+  assert.deepEqual(selected, canonical);
+  assert.deepEqual(
+    planParameter(snapshot, selected, 'temperature', '0.2'),
+    planParameter(snapshot, canonical, 'temperature', '0.2'),
+  );
+});
+
+test('direct settings routes match source-first editors and reject read-only destinations', async (t) => {
+  const { openParameters } = await import('../src/config-composer/tui/parameters.ts');
+  const { openPermissions } = await import('../src/config-composer/tui/permissions.ts');
+  const { configurationTargets } = await import('../src/config-composer/composition/parameter-authoring.ts');
+  const root = await fixture(t);
+  const snapshot = await loadSnapshot(root);
+  const source = join(root, 'definitions.jsonc');
+  const target = configurationTargets(snapshot, source).find((item) => item.path[0] === 'componentGroups')!;
+  type Action = Exclude<Parameters<AuthoringUi['menu']>[1], () => unknown>[number];
+  let actions: Action[] = [];
+  let confirmed: ((value: string) => void | Promise<void>) | undefined;
+  const parameterCalls: unknown[][] = [];
+  const base = {
+    menu: (_title: string, next: Action[] | (() => Action[])) => {
+      actions = typeof next === 'function' ? next() : next;
+    },
+    prompt: (_title: string, _value: string, callback: typeof confirmed) => {
+      confirmed = callback;
+    },
+    back: () => {},
+    refresh: () => {},
+  };
+  const parameters = {
+    ...base,
+    propose: async (...args: Parameters<Parameters<typeof openParameters>[1]['propose']>) => {
+      parameterCalls.push(args);
+    },
+  };
+  openParameters(snapshot, parameters);
+  await actions.find((action) => action.value === source)!.run();
+  await actions.find((action) => action.value === JSON.stringify(target.path))!.run();
+  await actions.find((action) => action.value === 'temperature')!.run();
+  await confirmed!('0.2');
+  openParameters(snapshot, parameters, target);
+  await actions.find((action) => action.value === 'temperature')!.run();
+  await confirmed!('0.2');
+  assert.deepEqual(parameterCalls[0], parameterCalls[1]);
+  const permissionCalls: unknown[][] = [];
+  const permissions = {
+    ...base,
+    propose: async (...args: Parameters<Parameters<typeof openPermissions>[1]['propose']>) => {
+      permissionCalls.push(args);
+    },
+    preview: async () => {},
+    create: async () => {},
+  };
+  openPermissions(snapshot, permissions);
+  await actions.find((action) => action.value === source)!.run();
+  await actions.find((action) => action.value === JSON.stringify(target.path))!.run();
+  await actions.find((action) => action.value === '+save')!.run();
+  openPermissions(snapshot, permissions, target);
+  await actions.find((action) => action.value === '+save')!.run();
+  assert.deepEqual(permissionCalls[0], permissionCalls[1]);
+  assert.deepEqual((await loadSnapshot(root)).resolved, snapshot.resolved, 'navigation and drafts write nothing');
+  snapshot.files.find((file) => file.path === source)!.writable = false;
+  assert.throws(() => openParameters(snapshot, parameters, target), /writable/);
+  assert.throws(() => openPermissions(snapshot, permissions, target), /writable/);
+});

@@ -58,7 +58,7 @@ import { type DefinitionChange, planDefinition } from './composition/authoring.t
 import { profileShortcutRegistration } from './tui/shortcuts.ts';
 import { planScope, planSelection } from './composition/activation.ts';
 import { openParameters } from './tui/parameters.ts';
-import { planParameter } from './composition/parameter-authoring.ts';
+import { type ConfigurationTarget, planParameter } from './composition/parameter-authoring.ts';
 import { parameterReview, validateParameterChoice } from './composition/parameter-review.ts';
 import { openActivation } from './tui/activation.ts';
 import { openMembershipRepair } from './tui/membership-repair.ts';
@@ -1433,6 +1433,126 @@ export function registerSettings(
       return run(() => runningInspector(true));
     });
   };
+  const permissionEditor = (snapshot: Snapshot, target?: ConfigurationTarget) => {
+    const ask = (title: string, value: string, confirmed: (value: string) => void | Promise<void>) =>
+      navigation.prompt({
+        title,
+        value,
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+        onConfirm: (value) => run(() => confirmed(value)),
+      });
+    openPermissions(
+      snapshot,
+      {
+        menu,
+        prompt: ask,
+        back: navigation.back,
+        refresh: navigation.refresh,
+        create: (sourceId, name) =>
+          proposeDefinition(snapshot, {
+            operation: 'create',
+            registry: 'configurationPresets',
+            name,
+            sourceId,
+            value: { permissions: [] },
+          }),
+        propose: (target, rules) =>
+          proposeComposition(snapshot, planPermissions(snapshot, target, rules), undefined, {
+            title: 'Save configured permission rules?',
+            details: `${permissionStatus}\n\n${rules === undefined ? 'Remove local contributions.' : rules.map((rule, index) => `${index + 1}. ${rule.tool} ${rule.pattern ?? '*'} → ${rule.action}`).join('\n')}`,
+          }),
+        preview: async (target, rules) => {
+          const current = navigation.checkpoint();
+          const candidate = await previewFilePlan(planPermissions(snapshot, target, rules));
+          if (!current()) {
+            return;
+          }
+          const local = rules.map((rule, index) => ({
+            agent: 'local',
+            rule,
+            origin: {
+              sourceId: target.sourceId,
+              pointer: `/${[...target.path, 'permissions', String(index), 'action'].map((part) => part.replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`,
+              layer: 'selected definition',
+              operation: 'set' as const,
+              references: [],
+              overwritten: [],
+            },
+          }));
+          const testMatch = (agent: string, contributions: typeof candidate.resolved.permissions) =>
+            ask('Permission tool to test', 'bash', (tool) =>
+              ask('Permission input to test', '', (input) => {
+                const result = previewPermission(contributions, agent, tool, input);
+                navigation.alert({
+                  title: 'Configured permission match',
+                  message: `${permissionStatus}\n\n${result.fallback === 'native' ? 'No Composer rule matches. Defer to native globals/defaults; no native action is inferred.' : `${result.action}: ${result.matched.permission} ${result.matched.pattern}\n${result.origin?.sourceId ?? ''}#${result.origin?.pointer ?? ''}\nEarlier matching contributions: ${result.origin?.overwritten.map((origin) => `${origin.sourceId ?? ''}#${origin.pointer}`).join(', ') ?? 'none'}`}\n\n${candidate.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}`,
+                });
+              }),
+            );
+          menu('Permission preview scope', [
+            {
+              title: 'This definition’s rules only',
+              value: '+local',
+              description: 'Excludes other layers and active selections',
+              run: () => testMatch('local', local),
+            },
+            {
+              title: 'Global configured rules',
+              value: '+global',
+              run: () =>
+                testMatch(
+                  'global',
+                  candidate.resolved.globalPermissions.map((item) => ({ ...item, agent: 'global' })),
+                ),
+            },
+            ...candidate.resolved.selectedAgents.map((agent) => ({
+              title: agent,
+              value: `agent:${agent}`,
+              description: 'All configured active contributions in replay order',
+              run: () =>
+                testMatch(agent, [
+                  ...candidate.resolved.globalPermissions.map((item) => ({ ...item, agent })),
+                  ...candidate.resolved.permissions,
+                ]),
+            })),
+          ]);
+        },
+      },
+      target,
+    );
+  };
+  const parameterEditor = (snapshot: Snapshot, target?: ConfigurationTarget) => {
+    openParameters(
+      snapshot,
+      {
+        menu,
+        prompt: (title, value, confirmed) =>
+          navigation.prompt({
+            title,
+            value,
+            // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
+            onConfirm: (value) => run(() => confirmed(value)),
+          }),
+        propose: async (target, field, text) => {
+          const current = navigation.checkpoint();
+          const plan = planParameter(snapshot, target, field, text);
+          const preview = await previewFilePlan(plan);
+          const details = parameterReview(snapshot, target, preview, await models());
+          if (!current()) {
+            return;
+          }
+          await proposeComposition(snapshot, plan, undefined, {
+            title: 'Save model parameters?',
+            details,
+            validate: async (candidate) => {
+              parameterReview(snapshot, target, candidate, await models());
+            },
+          });
+        },
+      },
+      target,
+    );
+  };
   const composeMenu = async () => {
     const current = navigation.checkpoint();
     await referenceWarnings.refresh(false);
@@ -1477,88 +1597,7 @@ export function registerSettings(
             if (!isCurrent()) {
               return;
             }
-            const ask = (title: string, value: string, confirmed: (value: string) => void | Promise<void>) =>
-              navigation.prompt({
-                title,
-                value,
-                // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
-                onConfirm: (value) => run(() => confirmed(value)),
-              });
-            openPermissions(snapshot, {
-              menu,
-              prompt: ask,
-              back: navigation.back,
-              refresh: navigation.refresh,
-              create: (sourceId, name) =>
-                proposeDefinition(snapshot, {
-                  operation: 'create',
-                  registry: 'configurationPresets',
-                  name,
-                  sourceId,
-                  value: { permissions: [] },
-                }),
-              propose: (target, rules) =>
-                proposeComposition(snapshot, planPermissions(snapshot, target, rules), undefined, {
-                  title: 'Save configured permission rules?',
-                  details: `${permissionStatus}\n\n${rules === undefined ? 'Remove local contributions.' : rules.map((rule, index) => `${index + 1}. ${rule.tool} ${rule.pattern ?? '*'} → ${rule.action}`).join('\n')}`,
-                }),
-              preview: async (target, rules) => {
-                const current = navigation.checkpoint();
-                const candidate = await previewFilePlan(planPermissions(snapshot, target, rules));
-                if (!current()) {
-                  return;
-                }
-                const local = rules.map((rule, index) => ({
-                  agent: 'local',
-                  rule,
-                  origin: {
-                    sourceId: target.sourceId,
-                    pointer: `/${[...target.path, 'permissions', String(index), 'action'].map((part) => part.replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`,
-                    layer: 'selected definition',
-                    operation: 'set' as const,
-                    references: [],
-                    overwritten: [],
-                  },
-                }));
-                const testMatch = (agent: string, contributions: typeof candidate.resolved.permissions) =>
-                  ask('Permission tool to test', 'bash', (tool) =>
-                    ask('Permission input to test', '', (input) => {
-                      const result = previewPermission(contributions, agent, tool, input);
-                      navigation.alert({
-                        title: 'Configured permission match',
-                        message: `${permissionStatus}\n\n${result.fallback === 'native' ? 'No Composer rule matches. Defer to native globals/defaults; no native action is inferred.' : `${result.action}: ${result.matched.permission} ${result.matched.pattern}\n${result.origin?.sourceId ?? ''}#${result.origin?.pointer ?? ''}\nEarlier matching contributions: ${result.origin?.overwritten.map((origin) => `${origin.sourceId ?? ''}#${origin.pointer}`).join(', ') ?? 'none'}`}\n\n${candidate.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}`,
-                      });
-                    }),
-                  );
-                menu('Permission preview scope', [
-                  {
-                    title: 'This definition’s rules only',
-                    value: '+local',
-                    description: 'Excludes other layers and active selections',
-                    run: () => testMatch('local', local),
-                  },
-                  {
-                    title: 'Global configured rules',
-                    value: '+global',
-                    run: () =>
-                      testMatch(
-                        'global',
-                        candidate.resolved.globalPermissions.map((item) => ({ ...item, agent: 'global' })),
-                      ),
-                  },
-                  ...candidate.resolved.selectedAgents.map((agent) => ({
-                    title: agent,
-                    value: `agent:${agent}`,
-                    description: 'All configured active contributions in replay order',
-                    run: () =>
-                      testMatch(agent, [
-                        ...candidate.resolved.globalPermissions.map((item) => ({ ...item, agent })),
-                        ...candidate.resolved.permissions,
-                      ]),
-                  })),
-                ]);
-              },
-            });
+            permissionEditor(snapshot);
           },
         },
         {
@@ -1570,32 +1609,7 @@ export function registerSettings(
             if (!isCurrent()) {
               return;
             }
-            openParameters(snapshot, {
-              menu,
-              prompt: (title, value, confirmed) =>
-                navigation.prompt({
-                  title,
-                  value,
-                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
-                  onConfirm: (value) => run(() => confirmed(value)),
-                }),
-              propose: async (target, field, text) => {
-                const current = navigation.checkpoint();
-                const plan = planParameter(snapshot, target, field, text);
-                const preview = await previewFilePlan(plan);
-                const details = parameterReview(snapshot, target, preview, await models());
-                if (!current()) {
-                  return;
-                }
-                await proposeComposition(snapshot, plan, undefined, {
-                  title: 'Save model parameters?',
-                  details,
-                  validate: async (candidate) => {
-                    parameterReview(snapshot, target, candidate, await models());
-                  },
-                });
-              },
-            });
+            parameterEditor(snapshot);
           },
         },
         {
@@ -1630,6 +1644,8 @@ export function registerSettings(
               return;
             }
             openAuthoring(snapshot, {
+              parameters: (target) => parameterEditor(snapshot, target),
+              permissions: (target) => permissionEditor(snapshot, target),
               menu,
               back: navigation.back,
               refresh: navigation.refresh,

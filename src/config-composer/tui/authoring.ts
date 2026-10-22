@@ -1,4 +1,6 @@
 import { definitionDescription } from './definition-description.ts';
+import { type ConfigurationTarget, configurationTargets } from '../composition/parameter-authoring.ts';
+import { permissionTargets } from '../composition/permission-authoring.ts';
 import { moveToPosition } from './move-to-position.ts';
 import type { TuiDialogSelectOption } from '@opencode-ai/plugin/tui';
 import type { Snapshot } from '../storage.ts';
@@ -10,6 +12,8 @@ import { openParameterDraft } from './parameters.ts';
 
 type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
 export interface AuthoringUi {
+  parameters?: (target: ConfigurationTarget) => void | Promise<void>;
+  permissions?: (target: ConfigurationTarget) => void | Promise<void>;
   menu: (title: string, actions: Action[] | (() => Action[])) => void;
   prompt: (title: string, value: string, confirmed: (value: string) => void | Promise<void>) => void;
   back: () => void;
@@ -345,6 +349,34 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
   };
   const definition = (registry: DefinitionRegistry, name: string) => {
     const actions: Action[] = [];
+    const sourceId = snapshot.sources.provenance[`/${registry}/${name}`].sourceId;
+    for (const [kind, targets, open] of [
+      ['parameters', sourceId === undefined ? [] : configurationTargets(snapshot, sourceId), ui.parameters],
+      ['permissions', sourceId === undefined ? [] : permissionTargets(snapshot, sourceId), ui.permissions],
+    ] as const) {
+      const local = targets.filter((target) => target.path[0] === registry && target.path[1] === name);
+      if (open !== undefined && local.length > 0) {
+        actions.push({
+          title: kind === 'parameters' ? 'Parameters saved here' : 'Permissions saved here',
+          value: `+${kind}`,
+          description: sourceId,
+          run: () => {
+            if (local.length === 1) {
+              return open(local[0]);
+            }
+            ui.menu(
+              `${name}: ${kind} target`,
+              local.map((target) => ({
+                title: target.label,
+                value: JSON.stringify(target.path),
+                description: `/${target.path.join('/')} · ${sourceId}`,
+                run: () => open(target),
+              })),
+            );
+          },
+        });
+      }
+    }
     if (registry === 'componentGroups') {
       actions.push(
         ...(['agents', 'skills', 'commands'] as const).map((kind) => ({
@@ -532,12 +564,31 @@ export function openAuthoring(snapshot: Snapshot, ui: AuthoringUi): void {
           }),
       },
     ]);
-  ui.menu(
-    'Composition definitions',
-    (['componentGroups', 'configurationPresets', 'profiles'] as const).map((registry) => ({
+  ui.menu('Composition definitions', [
+    {
+      title: 'Find a definition…',
+      value: '+find',
+      description: 'Search groups, presets and profiles by name',
+      run: () =>
+        ui.menu(
+          'Find a definition',
+          (['componentGroups', 'configurationPresets', 'profiles'] as const).flatMap((registry) =>
+            Object.keys(snapshot.sources.registry[registry] ?? {})
+              .sort()
+              .map((name) => ({
+                title: name,
+                value: `${registry}:${name}`,
+                category: titles[registry],
+                description: `${titles[registry]} · ${definitionDescription(snapshot, registry, name)}`,
+                run: () => definition(registry, name),
+              })),
+          ),
+        ),
+    },
+    ...(['componentGroups', 'configurationPresets', 'profiles'] as const).map((registry) => ({
       title: titles[registry],
       value: registry,
       run: () => registryMenu(registry),
     })),
-  );
+  ]);
 }
