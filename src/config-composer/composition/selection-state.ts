@@ -211,16 +211,6 @@ export async function readSelectionAt(
   }
   return observe(locator.path);
 }
-export async function readSelection(
-  environment: SelectionEnvironment,
-  identity: { root: string; baseFile: string },
-): Promise<SelectionSnapshot> {
-  return readSelectionAt(
-    environment,
-    await selectionLocator(environment, { ...identity, baseFile: await canonical(resolve(identity.baseFile)) }),
-  );
-}
-
 export async function verifySelection(snapshot: SelectionSnapshot): Promise<void> {
   const current = await observe(snapshot.path);
   if (current.text !== snapshot.text || current.identity !== snapshot.identity) {
@@ -251,8 +241,7 @@ export async function withSelectionLock<T>(snapshot: SelectionSnapshot, operatio
   }
 }
 
-/** Caller must hold withSelectionLock. */
-export async function writeSelectionLocked(
+async function writeSelectionLocked(
   snapshot: SelectionSnapshot,
   choice: Selection,
   validate: () => Promise<void>,

@@ -34,8 +34,6 @@ interface Previous {
 // promote changed disk bytes to evidence that the native cache was refreshed.
 interface Definition {
   id: string;
-  options: { configFile?: string };
-  configurationDirectory: string;
   selectionEnvironment: SelectionEnvironment;
   source?: LoadedSource;
   selectionLocator?: SelectionLocator;
@@ -64,20 +62,15 @@ async function definition(directory: string, worktree: string, rawOptions: unkno
     captured = (async () => {
       const value: Definition = {
         id: randomUUID(),
-        options: {},
-        configurationDirectory: configurationDirectory(),
         selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
       };
       try {
-        value.options = pluginOptions(rawOptions);
-        const { path, canonicalPath, fingerprint, explicit, document } = await loadSource(
-          value.options,
-          value.configurationDirectory,
-        );
-        value.source = { path, canonicalPath, fingerprint, explicit, document };
+        const options = pluginOptions(rawOptions);
+        const configDirectory = configurationDirectory();
+        value.source = await loadSource(options, configDirectory);
         value.selectionLocator = await selectionLocator(value.selectionEnvironment, {
           root: worktree,
-          baseFile: canonicalPath,
+          baseFile: value.source.canonicalPath,
         });
       } catch (error) {
         value.error = error instanceof Error ? error.message : String(error);
@@ -122,7 +115,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
   );
   const location = { root: worktree, directory };
   const loaded = await definition(directory, worktree, rawOptions);
-  const { options, configurationDirectory: configDirectory, selectionEnvironment } = loaded;
+  const { selectionEnvironment } = loaded;
   await publishSelectionProof(selectionEnvironment);
   await validateBundledSkills();
   return {
@@ -233,8 +226,6 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
         });
         publishRuntime(target, rawOptions, {
           location,
-          configurationDirectory: configDirectory,
-          options,
           selectionEnvironment,
           ...identities,
           status: 'applied',
@@ -247,8 +238,6 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
       } catch (error) {
         publishRuntime(target, rawOptions, {
           location,
-          configurationDirectory: configDirectory,
-          options,
           selectionEnvironment,
           ...identities,
           status: 'error',

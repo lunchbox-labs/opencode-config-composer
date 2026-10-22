@@ -16,7 +16,6 @@ export interface LoadedSource {
   canonicalPath: string;
   fingerprint: string;
   document: CompositionDocument;
-  explicit: boolean;
 }
 export function pluginOptions(value: unknown): { configFile?: string } {
   if (
@@ -54,7 +53,6 @@ export async function loadSource(
     return {
       path,
       canonicalPath,
-      explicit,
       fingerprint: createHash('sha256').update('null').digest('hex'),
       document: readCompositionDocument({}),
     };
@@ -81,7 +79,6 @@ export async function loadSource(
   return {
     path,
     canonicalPath,
-    explicit,
     fingerprint: createHash('sha256').update(JSON.stringify(file.text)).digest('hex'),
     document: parseSourceDocument(file.text, path),
   };
