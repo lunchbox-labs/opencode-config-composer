@@ -5,6 +5,7 @@ import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { configurationDirectory } from './configuration.ts';
 import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
 import { SettingsError, record } from './settings.ts';
+import { nativeAgentSettings } from './membership.ts';
 import { type LoadedSource, loadSource, pluginOptions } from './composition/sources.ts';
 import { resolveComposition } from './composition/runtime.ts';
 import { type RuntimeMarker, configFields, metadata, publishRuntime } from './composition/runtime-baseline.ts';
@@ -169,7 +170,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
                     value,
                     nested.get(value),
                     kind === 'agent'
-                      ? ['model', 'variant', 'temperature', 'top_p', 'options', 'mode', 'permission']
+                      ? ['groups', 'model', 'variant', 'temperature', 'top_p', 'options', 'mode', 'permission']
                       : ['agent', 'model', 'subtask'],
                   ),
                 ];
@@ -236,6 +237,25 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           candidate: { ...candidate, ...metadata(candidate) },
         });
       } catch (error) {
+        // Native may continue after a failed config hook. Strip membership on
+        // fresh copies, and retain its original authority for repeated hooks.
+        const failedNative = native ?? configFields(target);
+        if (record(target.agent)) {
+          target.agent = Object.fromEntries(
+            Object.entries(target.agent).map(([name, agent]) => {
+              if (!record(agent)) {
+                return [name, agent];
+              }
+              const applied = structuredClone(nativeAgentSettings(agent));
+              nested.set(applied, {
+                native: structuredClone(failedNative.agent?.[name] ?? agent),
+                applied: structuredClone(applied),
+              });
+              return [name, applied];
+            }),
+          );
+        }
+        roots.set(config, { native: structuredClone(failedNative), applied: configFields(target) });
         publishRuntime(target, rawOptions, {
           location,
           selectionEnvironment,

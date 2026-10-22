@@ -2,13 +2,7 @@
   "groups": [
     {
       "name": "coding",
-      "members": {
-        "agent": [
-          "build",
-          "plan"
-        ]
-      }
-    }
+    },
   ],
   "profiles": {
     "development": {
@@ -16,10 +10,10 @@
         {
           "name": "coding",
           "agent": {
-            "temperature": 0.2
-          }
-        }
-      ]
+            "temperature": 0.2,
+          },
+        },
+      ],
     },
     "review": {
       "groups": [
@@ -28,12 +22,12 @@
           "agent": {
             "temperature": 0,
             "permission": {
-              "edit": "ask"
-            }
-          }
-        }
-      ]
-    }
+              "edit": "ask",
+            },
+          },
+        },
+      ],
+    },
   },
-  "defaultProfile": "development"
+  "defaultProfile": "development",
 }

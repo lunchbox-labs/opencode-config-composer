@@ -2,38 +2,26 @@
   "groups": [
     {
       "name": "review",
-      "members": {
-        "agent": [
-          "plan",
-          "explore"
-        ]
-      },
       "agent": {
         "permission": {
           "bash": {
             "git *": "ask",
-            "npm *": "deny"
-          }
-        }
-      }
+            "npm *": "deny",
+          },
+        },
+      },
     },
     {
       "name": "programming",
-      "members": {
-        "agent": [
-          "build",
-          "general"
-        ]
-      },
       "agent": {
         "permission": {
           "bash": {
             "git *": "allow",
-            "npm *": "ask"
-          }
-        }
-      }
-    }
+            "npm *": "ask",
+          },
+        },
+      },
+    },
   ],
   "profiles": {
     "cautious": {
@@ -42,11 +30,11 @@
           "name": "programming",
           "agent": {
             "permission": {
-              "bash": "ask"
-            }
-          }
-        }
-      ]
-    }
-  }
+              "bash": "ask",
+            },
+          },
+        },
+      ],
+    },
+  },
 }

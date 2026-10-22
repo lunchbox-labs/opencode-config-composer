@@ -74,6 +74,9 @@ function patch(value: unknown, kind: 'agent' | 'command', path: string) {
       if (!record(v)) {
         fail(at, 'Expected an options object.');
       }
+      if (Object.hasOwn(v, 'groups')) {
+        fail(`${at}/groups`, 'Group membership belongs on the native agent, not in options.');
+      }
     } else {
       permission(v, at);
     }
@@ -130,7 +133,7 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
   const names = new Set<string>();
   groups.forEach((group: unknown, index: number) => {
     const at = `/groups/${index}`;
-    object(group, ['name', 'description', 'members', 'agent', 'command'], at);
+    object(group, ['name', 'description', 'agent'], at);
     name(group.name, at + '/name');
     if (names.has(group.name)) {
       fail(at, 'Duplicate group identity.');
@@ -139,28 +142,8 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
     if (Object.hasOwn(group, 'description') && typeof group.description !== 'string') {
       fail(at, 'Expected description string.');
     }
-    object(group.members, ['agent', 'command'], at + '/members');
-    let count = 0;
-    for (const kind of ['agent', 'command'] as const) {
-      if (Object.hasOwn(group.members, kind)) {
-        const entries = group.members[kind];
-        if (!Array.isArray(entries)) {
-          fail(at, 'Expected member array.');
-        }
-        for (const item of entries) {
-          name(item, at);
-        }
-        if (new Set(entries).size !== entries.length) {
-          fail(at, 'Duplicate member.');
-        }
-        count += entries.length;
-      }
-      if (Object.hasOwn(group, kind)) {
-        patch(group[kind], kind, `${at}/${kind}`);
-      }
-    }
-    if (count === 0) {
-      fail(at, 'At least one nonempty member array is required.');
+    if (Object.hasOwn(group, 'agent')) {
+      patch(group.agent, 'agent', `${at}/agent`);
     }
   });
   const profiles = Object.hasOwn(value, 'profiles') ? value.profiles : {};
@@ -191,7 +174,7 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
       const seen = new Set<string>();
       profile.groups.forEach((group: unknown, index: number) => {
         const path = `${at}/groups/${index}`;
-        object(group, ['name', 'agent', 'command'], path);
+        object(group, ['name', 'agent'], path);
         name(group.name, path);
         if (!names.has(group.name)) {
           fail(path, 'Unknown group.');
@@ -200,10 +183,8 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
           fail(path, 'Duplicate group reference.');
         }
         seen.add(group.name);
-        for (const k of ['agent', 'command'] as const) {
-          if (Object.hasOwn(group, k)) {
-            patch(group[k], k, `${path}/${k}`);
-          }
+        if (Object.hasOwn(group, 'agent')) {
+          patch(group.agent, 'agent', `${path}/agent`);
         }
       });
     }

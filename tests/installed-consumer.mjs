@@ -46,7 +46,7 @@ await mkdir(join(root, 'settings'), { recursive: true });
 await writeFile(
   join(root, 'settings', 'composer.jsonc'),
   JSON.stringify({
-    groups: [{ name: 'workers', members: { agent: ['worker'] }, agent: { temperature: 0 } }],
+    groups: [{ name: 'workers', agent: { temperature: 0 } }],
     profiles: { work: { agent: { worker: { model: 'fixture/model' } } } },
     defaultProfile: 'work',
   }),
@@ -54,7 +54,7 @@ await writeFile(
 process.env.OPENCODE_CONFIG_DIR = root;
 process.env.OPENCODE_TEST_HOME = root;
 const hooks = await server.server({ directory: root, worktree: root }, { configFile: 'settings/composer.jsonc' });
-const config = { agent: { worker: { prompt: 'PACKAGED_NATIVE_BODY' } } };
+const config = { agent: { worker: { groups: ['workers'], prompt: 'PACKAGED_NATIVE_BODY' } } };
 await hooks.config(config);
 assert.equal(config.agent.worker.model, 'fixture/model');
 assert.equal(config.agent.worker.temperature, 0);

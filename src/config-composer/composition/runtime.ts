@@ -1,4 +1,5 @@
 import { SettingsError, record } from '../settings.ts';
+import { nativeAgentSettings, readAgentGroups } from '../membership.ts';
 import { agentFields, commandFields, pointer } from './document.ts';
 import type {
   CompositionDocument,
@@ -64,13 +65,6 @@ export function resolveComposition(
       throw new SettingsError(`Unknown native ${kind} target ${name}.`);
     }
   };
-  for (const group of document.groups) {
-    for (const kind of ['agent', 'command'] as const) {
-      for (const name of group.members[kind] ?? []) {
-        check(kind, name);
-      }
-    }
-  }
   for (const layer of [document, ...Object.values(document.profiles)]) {
     for (const kind of ['agent', 'command'] as const) {
       for (const name of Object.keys(layer[kind] ?? {})) {
@@ -78,7 +72,7 @@ export function resolveComposition(
       }
     }
   }
-  // Validate all authored command references, including inactive profiles and group patches.
+  // Validate all authored command references, including inactive profiles.
   const validateReference = (patch: unknown) => {
     if (record(patch) && Object.hasOwn(patch, 'agent')) {
       const target = String(patch.agent);
@@ -92,11 +86,8 @@ export function resolveComposition(
     for (const patch of Object.values(layer.command ?? {})) {
       validateReference(patch);
     }
-    for (const group of layer.groups ?? []) {
-      validateReference(group.command);
-    }
   }
-  const result: ResolvedCandidate = { profile, agent: {}, command: {}, decisions: {} };
+  const result: ResolvedCandidate = { profile, agent: {}, command: {}, memberships: {}, decisions: {} };
   const composer = new Map<string, { value: unknown; origin: Origin }>();
   const assign = (
     kind: 'agent' | 'command',
@@ -160,37 +151,56 @@ export function resolveComposition(
       };
     }
   };
-  const group = (
-    patch: { name: string; agent?: Record<string, unknown>; command?: Record<string, unknown> },
-    origin: Origin,
-  ) => {
-    const root = document.groups.find((group) => group.name === patch.name);
-    if (root === undefined) {
-      throw new SettingsError(`Unknown group ${patch.name}.`);
-    }
-    const members = root.members;
-    for (const kind of ['agent', 'command'] as const) {
-      for (const name of members[kind] ?? []) {
-        assign(kind, name, patch[kind] ?? {}, { ...origin, pointer: `${origin.pointer}/${kind}` });
-      }
-    }
-  };
-  document.groups.forEach((item, index) => group(item, { kind: 'group', pointer: `/groups/${index}` }));
   for (const kind of ['agent', 'command'] as const) {
     for (const [name, value] of Object.entries(native[kind] ?? {})) {
-      const patch = Object.fromEntries(
-        Object.entries(value).filter(
-          ([key, v]) =>
-            !(
-              kind === 'agent' &&
-              ['options', 'permission'].includes(key) &&
-              record(v) &&
-              Object.keys(v).length === 0 &&
-              Object.hasOwn(result[kind][name] ?? {}, key)
-            ),
-        ),
-      );
+      const patch = kind === 'agent' ? nativeAgentSettings(value) : value;
       assign(kind, name, patch, { kind: 'native' });
+    }
+  }
+  const groups = new Map(document.groups.map((group, index) => [group.name, { group, index }]));
+  const profileGroups = new Map(
+    (profile === null ? [] : (document.profiles[profile].groups ?? [])).map((group, index) => [
+      group.name,
+      { group, index },
+    ]),
+  );
+  for (const name of targets.agent) {
+    const authored = Object.hasOwn(authority, name) ? authority[name].groups : undefined;
+    const supplied = Object.hasOwn(native.agent ?? {}, name) ? native.agent?.[name] : undefined;
+    const declaration =
+      authored !== undefined
+        ? {
+            groups: readAgentGroups(authored.value, authored.source.path),
+            origin: { kind: 'frontmatter' as const, source: authored.source.path },
+          }
+        : supplied !== undefined && Object.hasOwn(supplied, 'groups')
+          ? {
+              groups: readAgentGroups(supplied.groups, `Native agent ${name}`),
+              origin: { kind: 'native' as const, pointer: `/agent/${pointer(name)}/groups` },
+            }
+          : undefined;
+    if (declaration === undefined) {
+      continue;
+    }
+    Object.defineProperty(result.memberships, name, {
+      value: declaration,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    for (const groupName of declaration.groups) {
+      const shared = groups.get(groupName);
+      if (shared === undefined) {
+        throw new SettingsError(`Agent ${name}: unknown group ${groupName}.`);
+      }
+      assign('agent', name, shared.group.agent ?? {}, { kind: 'group', pointer: `/groups/${shared.index}/agent` });
+      const selected = profileGroups.get(groupName);
+      if (selected !== undefined && profile !== null) {
+        assign('agent', name, selected.group.agent ?? {}, {
+          kind: 'profile-group',
+          pointer: `/profiles/${pointer(profile)}/groups/${selected.index}/agent`,
+        });
+      }
     }
   }
   for (const field of ['model', 'small_model', 'default_agent', 'permission'] as const) {
@@ -220,9 +230,6 @@ export function resolveComposition(
   layer(document, { kind: 'root' });
   if (profile !== null) {
     const selected = document.profiles[profile];
-    selected.groups?.forEach((item, index) =>
-      group(item, { kind: 'profile-group', pointer: `/profiles/${pointer(profile)}/groups/${index}` }),
-    );
     layer(selected, { kind: 'profile', pointer: `/profiles/${pointer(profile)}` });
   }
   for (const [name, metadata] of Object.entries(authority)) {

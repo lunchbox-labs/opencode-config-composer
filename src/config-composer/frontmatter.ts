@@ -6,6 +6,7 @@ import { dirname, extname, join, relative, sep } from 'node:path';
 import matter from 'gray-matter';
 import jsYaml from 'js-yaml';
 import { SettingsError, record } from './settings.ts';
+import { readAgentGroups, withoutGroups } from './membership.ts';
 
 export type AuthoredAgentField = 'model' | 'variant' | 'temperature' | 'top_p' | 'options' | 'mode' | 'permission';
 
@@ -27,6 +28,8 @@ export interface AuthoredAgentValue {
 }
 
 export interface NativeAgentFrontmatter {
+  /** Last explicitly authored membership array; absent later sources do not clear it. */
+  groups?: { value: string[]; source: NativeFrontmatterSource };
   /** An own field entry means presence, including false, zero, empty strings and objects. */
   fields: Partial<Record<AuthoredAgentField, AuthoredAgentValue>>;
   sources: NativeFrontmatterSource[];
@@ -40,9 +43,11 @@ export interface NativeFrontmatterContext {
   home?: string;
 }
 
-// OpenCode v1.19.0 packages/core/src/v1/config/agent.ts. These keys are not provider options.
+// OpenCode v1.19.0 packages/core/src/v1/config/agent.ts, plus Composer groups metadata.
+// These keys are not provider options.
 const nativeAgentKeys = new Set([
   'name',
+  'groups',
   'model',
   'variant',
   'prompt',
@@ -87,6 +92,9 @@ function validateMetadata(data: Record<string, unknown>, path: string): void {
   const invalid = (key: string) => {
     throw diagnostic(path, `invalid native ${key} field; authored authority is unavailable.`);
   };
+  if (Object.hasOwn(data, 'groups')) {
+    readAgentGroups(data.groups, `${path}: groups`);
+  }
   // Native overwrites a header's prompt with its body before validation. It is never metadata authority.
   for (const key of ['name', 'model', 'variant', 'description', 'color']) {
     if (Object.hasOwn(data, key) && typeof data[key] !== 'string') {
@@ -260,8 +268,13 @@ function authoredFields(
   if (Object.hasOwn(data, 'options') || Object.keys(extras).length !== 0) {
     pin(
       'options',
-      { ...(record(data.options) ? data.options : {}), ...extras },
-      { ...(Object.hasOwn(data, 'options') ? { options: data.options } : {}), ...extras },
+      { ...(record(data.options) ? withoutGroups(data.options) : {}), ...extras },
+      {
+        ...(Object.hasOwn(data, 'options')
+          ? { options: record(data.options) ? withoutGroups(data.options) : data.options }
+          : {}),
+        ...extras,
+      },
     );
   }
   if (Object.hasOwn(data, 'tools') || Object.hasOwn(data, 'permission')) {
@@ -420,6 +433,11 @@ export async function readNativeAgentFrontmatter(
             batch.set(name, path);
             const earlier = agents.get(name);
             agents.set(name, {
+              ...(Object.hasOwn(data, 'groups')
+                ? { groups: { value: readAgentGroups(data.groups, source.path), source } }
+                : earlier?.groups === undefined
+                  ? {}
+                  : { groups: earlier.groups }),
               fields: { ...earlier?.fields, ...authoredFields(data, source, primary) },
               sources: [...(earlier?.sources ?? []), source],
             });

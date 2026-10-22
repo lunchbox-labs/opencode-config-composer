@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://unpkg.com/@lunchbox-labs/opencode-config-composer/schema.json",
   "title": "Config Composer",
-  "description": "One shared definition file, always-active ordered groups and one worktree profile.",
+  "description": "Shared agent group settings and one worktree profile; agents own ordered membership.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -82,7 +82,10 @@
           "type": "number"
         },
         "options": {
-          "type": "object"
+          "type": "object",
+          "not": {
+            "required": ["groups"]
+          }
         },
         "mode": {
           "enum": ["primary", "subagent", "all"]
@@ -95,11 +98,21 @@
             {
               "type": "object",
               "properties": {
-                "todowrite": { "enum": ["allow", "ask", "deny"] },
-                "question": { "enum": ["allow", "ask", "deny"] },
-                "webfetch": { "enum": ["allow", "ask", "deny"] },
-                "websearch": { "enum": ["allow", "ask", "deny"] },
-                "doom_loop": { "enum": ["allow", "ask", "deny"] }
+                "todowrite": {
+                  "enum": ["allow", "ask", "deny"]
+                },
+                "question": {
+                  "enum": ["allow", "ask", "deny"]
+                },
+                "webfetch": {
+                  "enum": ["allow", "ask", "deny"]
+                },
+                "websearch": {
+                  "enum": ["allow", "ask", "deny"]
+                },
+                "doom_loop": {
+                  "enum": ["allow", "ask", "deny"]
+                }
               },
               "additionalProperties": {
                 "anyOf": [
@@ -149,56 +162,11 @@
         "agent": {
           "$ref": "#/$defs/agent"
         },
-        "command": {
-          "$ref": "#/$defs/command"
-        },
         "description": {
           "type": "string"
-        },
-        "members": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "agent": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "\\S"
-              },
-              "uniqueItems": true
-            },
-            "command": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "\\S"
-              },
-              "uniqueItems": true
-            }
-          },
-          "anyOf": [
-            {
-              "required": ["agent"],
-              "properties": {
-                "agent": {
-                  "minItems": 1
-                }
-              }
-            },
-            {
-              "required": ["command"],
-              "properties": {
-                "command": {
-                  "minItems": 1
-                }
-              }
-            }
-          ]
         }
       },
-      "required": ["name", "members"]
+      "required": ["name"]
     },
     "groupPatch": {
       "type": "object",
@@ -211,9 +179,6 @@
         },
         "agent": {
           "$ref": "#/$defs/agent"
-        },
-        "command": {
-          "$ref": "#/$defs/command"
         }
       },
       "required": ["name"]

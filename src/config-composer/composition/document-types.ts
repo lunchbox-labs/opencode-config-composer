@@ -19,11 +19,9 @@ export interface CommandPatch extends Record<string, unknown> {
 export interface GroupPatch {
   name: string;
   agent?: AgentPatch;
-  command?: CommandPatch;
 }
 export interface Group extends GroupPatch {
   description?: string;
-  members: { agent?: string[]; command?: string[] };
 }
 export interface Profile {
   description?: string;
@@ -62,7 +60,12 @@ export interface FieldDecision {
   origin: Origin;
   blockedComposer?: { value: unknown; origin: Origin };
 }
+export interface GroupMembership {
+  groups: string[];
+  origin: Origin;
+}
 export interface ResolvedCandidate extends NativeBaseline {
+  memberships: Partial<Record<string, GroupMembership>>;
   profile: string | null;
   agent: Record<string, Record<string, unknown>>;
   command: Record<string, Record<string, unknown>>;

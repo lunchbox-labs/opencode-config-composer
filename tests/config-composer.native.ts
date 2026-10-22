@@ -15,16 +15,19 @@ test(
     await writeFile(join(f.host.project, '.opencode/agents/worker.md'), laterMarkdown);
     const bodies = {
       worker:
-        '---\nmodel: fixture/beta\nvariant: high\ntemperature: 0\ntop_p: 0\noptions: { flag: false }\npermission: deny\n---\nOPAQUE_WORKER_BODY',
-      empty: '---\nmodel: ""\nvariant: ""\noptions: {}\npermission: {}\n---\nOPAQUE_EMPTY_BODY',
+        '---\ngroups: [all]\nmodel: fixture/beta\nvariant: high\ntemperature: 0\ntop_p: 0\noptions: { flag: false }\npermission: deny\n---\nOPAQUE_WORKER_BODY',
+      empty: '---\ngroups: [all]\nmodel: ""\nvariant: ""\noptions: {}\npermission: {}\n---\nOPAQUE_EMPTY_BODY',
       scalar: '---\npermission: deny\n---\nOPAQUE_SCALAR_BODY',
       tools: '---\ntools: { bash: false, read: true }\n---\nOPAQUE_TOOLS_BODY',
     };
     for (const [name, body] of Object.entries(bodies)) {
       await writeFile(join(f.host.configRoot, 'agents', `${name}.md`), body);
     }
-    await writeFile(join(f.host.configRoot, 'modes/legacy.md'), '---\nmode: subagent\n---\nOPAQUE_MODE_BODY');
-    await writeFile(join(f.host.configRoot, 'modes/omitted.md'), '---\n---\nOPAQUE_MODE_BODY');
+    await writeFile(
+      join(f.host.configRoot, 'modes/legacy.md'),
+      '---\ngroups: [all]\nmode: subagent\n---\nOPAQUE_MODE_BODY',
+    );
+    await writeFile(join(f.host.configRoot, 'modes/omitted.md'), '---\ngroups: [all]\n---\nOPAQUE_MODE_BODY');
     await writeFile(
       join(f.host.project, 'opencode.jsonc'),
       JSON.stringify({
@@ -44,7 +47,7 @@ test(
       permission: { read: 'allow' },
     };
     await f.write(f.paths.shared, {
-      groups: [{ name: 'all', members: { agent: ['worker', 'empty', 'legacy', 'omitted'] }, agent: patch }],
+      groups: [{ name: 'all', agent: patch }],
       agent: { worker: patch, empty: patch, legacy: { mode: 'subagent' }, omitted: { mode: 'subagent' } },
       profiles: { review: { groups: [{ name: 'all', agent: patch }], agent: { worker: patch, empty: patch } } },
       defaultProfile: 'review',
@@ -102,7 +105,7 @@ test(
         })),
       ),
       {
-        groups: [{ name: 'bad', members: { agent: ['worker'] }, agent: { permission: { webfetch: {} } } }],
+        groups: [{ name: 'bad', agent: { permission: { webfetch: {} } } }],
       },
       ...[['primary'], ['subagent'], ['all'], [[['primary']]]].map((mode) => ({
         agent: { worker: { model: 'fixture/beta' } },
@@ -134,5 +137,122 @@ test(
     await f.host.stop();
     await f.host.start();
     assert.equal((await f.editor.runtime()).status, 'applied');
+  },
+);
+
+test(
+  'native agent membership order owns profile conflicts and never reaches provider options',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'native-membership-order');
+    await f.write(f.paths.native, {
+      ...f.native,
+      agent: {
+        ...f.native.agent,
+        worker: { ...f.native.agent.worker, groups: ['first', 'last'], options: { retained: false } },
+        helper: { ...f.native.agent.helper, groups: ['first', 'last'] },
+      },
+    });
+    await mkdir(join(f.host.configRoot, 'agents'));
+    const helperBody = '---\ngroups: [last, first]\n---\nHELPER_BODY';
+    const pinnedBody =
+      '---\ngroups: [first, last]\nmodel: fixture/alpha\ntemperature: 0\noptions: { retained: false }\npermission: deny\n---\nPINNED_BODY';
+    await writeFile(join(f.host.configRoot, 'agents/helper.md'), helperBody);
+    await writeFile(join(f.host.configRoot, 'agents/pinned.md'), pinnedBody);
+    const firstPolicy = { bash: { '*': 'ask', 'git *': 'allow' } };
+    const lastPolicy = { bash: { 'git *': 'deny' } };
+    await f.write(f.paths.shared, {
+      groups: [
+        { name: 'last', agent: { temperature: 0.2, permission: lastPolicy } },
+        { name: 'first', agent: { model: 'fixture/alpha', temperature: 0.1, permission: firstPolicy } },
+      ],
+      profiles: {
+        a: { groups: [{ name: 'first', agent: { model: 'fixture/beta', temperature: 0.9 } }] },
+        b: { groups: [{ name: 'first', agent: { temperature: 0.7 } }] },
+      },
+    });
+    const nativeBytes = await readFile(f.paths.native);
+    await f.host.start();
+    for (const choice of ['a', 'b', 'a', null] as const) {
+      await f.editor.applySelection(await f.editor.select(choice));
+      const config = await f.host.api<{ agent: Record<string, Record<string, unknown>> }>('/config');
+      assert.equal(config.agent.worker.temperature, 0.2, 'later shared group wins over an earlier profile patch');
+      assert.equal(config.agent.helper.temperature, choice === 'a' ? 0.9 : choice === 'b' ? 0.7 : 0.1);
+      assert.deepEqual(config.agent.worker.permission, lastPolicy);
+      assert.deepEqual(config.agent.helper.permission, firstPolicy);
+      assert.equal(config.agent.pinned.temperature, 0);
+      assert.equal(config.agent.pinned.model, 'fixture/alpha');
+      assert.deepEqual(config.agent.pinned.permission, { '*': 'deny' });
+      assert.deepEqual(config.agent.worker.options, { retained: false });
+      assert.deepEqual(config.agent.pinned.options, { retained: false });
+      for (const name of ['worker', 'helper', 'pinned']) {
+        assert.equal(config.agent[name].groups, undefined, name);
+        assert.equal((config.agent[name].options as Record<string, unknown>).groups, undefined, name);
+      }
+      const agents = await f.host.api<{ name: string; options: Record<string, unknown> }[]>('/agent');
+      for (const name of ['worker', 'helper', 'pinned']) {
+        assert.equal(agents.find((agent) => agent.name === name)?.options.groups, undefined, name);
+      }
+    }
+    const sent = await f.send('worker');
+    assert.equal(sent.captured.model, 'alpha');
+    assert.equal(await readFile(join(f.host.configRoot, 'agents/helper.md'), 'utf8'), helperBody);
+    assert.equal(await readFile(join(f.host.configRoot, 'agents/pinned.md'), 'utf8'), pinnedBody);
+    assert.deepEqual(await readFile(f.paths.native), nativeBytes);
+  },
+);
+
+test(
+  'native bootstrap failures strip membership metadata without claiming application',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'native-membership-failure');
+    const cases = [
+      { groups: ['known'], document: { groups: [{ name: 'known' }], invalid: true }, diagnostic: /Unknown key/ },
+      { groups: ['missing'], document: { groups: [{ name: 'known' }] }, diagnostic: /unknown group/ },
+      { groups: 'known', document: { groups: [{ name: 'known' }] }, diagnostic: /array/i },
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      if (index > 0) {
+        await f.host.stop();
+      }
+      await f.write(f.paths.native, {
+        ...f.native,
+        agent: {
+          ...f.native.agent,
+          worker: {
+            ...f.native.agent.worker,
+            groups: scenario.groups,
+            model: 'fixture/alpha',
+            temperature: 0,
+            options: { retained: false },
+            permission: { edit: 'deny' },
+          },
+        },
+      });
+      await f.write(f.paths.shared, scenario.document);
+      const nativeBytes = await readFile(f.paths.native);
+      const sharedBytes = await readFile(f.paths.shared);
+      await f.host.start();
+      const config = await f.host.api<{
+        agent: Record<string, Record<string, unknown>>;
+        plugin: [string, { __configComposerRuntime?: { status: string; revision?: unknown; diagnostic: string } }][];
+      }>('/config');
+      assert.equal(config.agent.worker.groups, undefined);
+      assert.deepEqual(config.agent.worker.options, { retained: false });
+      assert.equal(config.agent.worker.model, 'fixture/alpha');
+      assert.equal(config.agent.worker.temperature, 0);
+      assert.deepEqual(config.agent.worker.permission, { edit: 'deny' });
+      const marker = config.plugin.find(([, options]) => options.__configComposerRuntime !== undefined)?.[1]
+        .__configComposerRuntime;
+      assert.ok(marker !== undefined);
+      assert.equal(marker.status, 'error');
+      assert.equal(marker.revision, undefined);
+      assert.match(marker.diagnostic, scenario.diagnostic);
+      const agents = await f.host.api<{ name: string; options: Record<string, unknown> }[]>('/agent');
+      assert.equal(agents.find((agent) => agent.name === 'worker')?.options.groups, undefined);
+      assert.deepEqual(await readFile(f.paths.native), nativeBytes);
+      assert.deepEqual(await readFile(f.paths.shared), sharedBytes);
+    }
   },
 );

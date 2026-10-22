@@ -34,6 +34,7 @@ export async function installPackage(root: string) {
     'skills/config-composer-explain/references/schema.md',
     'skills/config-composer-create/SKILL.md',
     'skills/config-composer-create/examples/review.jsonc',
+    'skills/config-composer-create/examples/opencode.jsonc',
     'src/server.ts',
     'src/tui.ts',
     'tsconfig.json',
@@ -51,7 +52,7 @@ export async function installPackage(root: string) {
   for (const path of files) {
     assert.match(
       path,
-      /^(?:dist\/.*\.(?:js|d\.ts)|src\/.*\.ts|tsconfig(?:\.build)?\.json|package\.json|schema\.json|skills\/config-composer-(?:explain|create)\/(?:SKILL\.md|references\/schema\.md|examples\/review\.jsonc)|README\.md|LICENSE)$/,
+      /^(?:dist\/.*\.(?:js|d\.ts)|src\/.*\.ts|tsconfig(?:\.build)?\.json|package\.json|schema\.json|skills\/config-composer-(?:explain|create)\/(?:SKILL\.md|references\/schema\.md|examples\/(?:review|opencode)\.jsonc)|README\.md|LICENSE)$/,
       `unexpected published file: ${path}`,
     );
   }

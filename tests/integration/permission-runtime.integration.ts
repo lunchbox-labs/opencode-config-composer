@@ -14,7 +14,7 @@ test(
       ...f.native,
       agent: {
         ...f.native.agent,
-        scalar: { mode: 'primary', prompt: 'SCALAR_NATIVE' },
+        scalar: { groups: ['scalar'], mode: 'primary', prompt: 'SCALAR_NATIVE' },
         worker: {
           ...f.native.agent.worker,
           permission: { bash: 'allow', skill: { '*': 'deny', 'included-skill': 'deny' }, edit: 'ask' },
@@ -22,7 +22,7 @@ test(
       },
     });
     await f.write(f.paths.shared, {
-      groups: [{ name: 'scalar', members: { agent: ['scalar'] }, agent: { permission: 'ask' } }],
+      groups: [{ name: 'scalar', agent: { permission: 'ask' } }],
       agent: { worker: { permission: { skill: { 'included-skill': 'ask' }, bash: 'deny' } } },
       profiles: {
         whole: { agent: { worker: { permission: 'allow' } } },

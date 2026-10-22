@@ -12,7 +12,12 @@ import { loadConfigurationContext } from '../src/config-composer/storage.ts';
 import { readSelectionAt, saveSelection } from '../src/config-composer/composition/selection-state.ts';
 
 type Dialog = { title: string; message?: string } & Partial<TuiDialogSelectProps<string> & TuiDialogConfirmProps>;
-async function fixture(t: TestContext, pin = '', common: Record<string, unknown> = { temperature: 0.2 }) {
+async function fixture(
+  t: TestContext,
+  pin = '',
+  common: Record<string, unknown> = { temperature: 0.2 },
+  extraAgents: Record<string, Record<string, unknown>> = {},
+) {
   const root = await mkdtemp(join(tmpdir(), 'composer-direct-tui-'));
   const keys = ['OPENCODE_CONFIG_DIR', 'OPENCODE_TEST_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME'];
   const before = keys.map((k) => process.env[k]);
@@ -29,7 +34,7 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
   });
   const source = join(root, 'config-composer.jsonc');
   const text = JSON.stringify({
-    groups: [{ name: 'workers', members: { agent: ['worker', 'helper'] }, agent: common }],
+    groups: [{ name: 'workers', agent: common }],
     profiles: {
       a: { groups: [{ name: 'workers', agent: { model: 'p/a' } }] },
       b: { agent: { worker: { model: 'p/b' } } },
@@ -45,7 +50,11 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
   const hook = (await descriptor.server({ directory: root, worktree: root } as PluginInput)).config!;
   const config = {
     plugin: [packageName],
-    agent: { worker: { mode: 'primary' as const, model: 'p/native' }, helper: { mode: 'subagent' as const } },
+    agent: {
+      worker: { groups: ['workers'], mode: 'primary' as const, model: 'p/native' },
+      helper: { groups: ['workers'], mode: 'subagent' as const },
+      ...extraAgents,
+    },
     command: { review: { template: 'OPAQUE', agent: 'worker' } },
   };
   await hook(config);
@@ -302,14 +311,31 @@ test('inspection opens untouched builtins and explains native inheritance', asyn
   assert.match(await f.detailText(), /No authored value at this level\. Native inheritance remains host-owned\./);
   assert.equal(f.disposed, 0);
 });
+test('prototype-like agent names inspect absent membership without treating inherited properties as groups', async (t) => {
+  const f = await fixture(t, '', {}, Object.fromEntries(['constructor', 'toString'].map((name) => [name, {}])));
+  for (const name of ['constructor', 'toString']) {
+    await f.open('view-configs', 'Configuration');
+    await f.choose(`agent ${name}`, `agent ${name}`);
+    assert.equal(f.current?.options?.find((option) => option.title === 'groups')?.description, '[]');
+    await f.choose('groups', `agent ${name} · groups`);
+    assert.equal(await f.detailText(), 'No declared groups.');
+  }
+  assert.equal(f.toasts.length, 0);
+  assert.equal(f.disposed, 0);
+});
 test('inspection exposes shared groups and inactive profiles without edit actions', async (t) => {
   const f = await fixture(t);
   const before = await f.read();
   await f.open('view-configs', 'Configuration');
   await f.choose('Shared groups', 'Shared groups');
   await f.choose('workers', 'Shared group workers');
-  assert.match(f.current?.message ?? '', /helper/);
+  assert.doesNotMatch(f.current?.message ?? '', /members/);
   assert.match(f.current?.message ?? '', /temperature/);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent helper', 'agent helper');
+  await f.choose('groups', 'agent helper · groups');
+  assert.match(f.current?.message ?? '', /Application order: \["workers"\]/);
+  assert.match(f.current?.message ?? '', /Native agent configuration/);
   await f.open('view-configs', 'Configuration');
   await f.choose('Profile definitions', 'Profile definitions');
   await f.choose('a', 'Profile a');

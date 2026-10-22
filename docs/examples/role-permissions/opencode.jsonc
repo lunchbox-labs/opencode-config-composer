@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "plan": {
+      "groups": ["review"],
+    },
+    "explore": {
+      "groups": ["review"],
+    },
+    "build": {
+      "groups": ["programming"],
+    },
+    "general": {
+      "groups": ["programming"],
+    },
+  },
+}

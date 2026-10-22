@@ -47,7 +47,7 @@ async function fixture(t: TestContext, sourceAlias = false, sourceDocument?: Rec
     await rm(root, { recursive: true, force: true });
   });
   const document = {
-    groups: [{ name: 'workers', members: { agent: ['worker'] }, agent: { temperature: 0.1 } }],
+    groups: [{ name: 'workers', agent: { temperature: 0.1 } }],
     defaultProfile: 'a',
     profiles: {
       a: {
@@ -66,7 +66,7 @@ async function fixture(t: TestContext, sourceAlias = false, sourceDocument?: Rec
   ).config!;
   const base = () => ({
     plugin: [packageName],
-    agent: { worker: { model: 'p/native', prompt: 'OPAQUE' } },
+    agent: { worker: { groups: sourceDocument === undefined ? ['workers'] : [], model: 'p/native', prompt: 'OPAQUE' } },
     command: { run: { template: 'OPAQUE', subtask: true } },
   });
   let config = base();

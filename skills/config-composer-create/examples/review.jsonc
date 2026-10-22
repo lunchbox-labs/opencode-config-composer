@@ -3,20 +3,14 @@
     {
       "name": "reviewers",
       "description": "Existing native review agents",
-      "members": {
-        "agent": [
-          "plan",
-          "explore"
-        ]
-      },
       "agent": {
         "permission": {
           "bash": {
-            "git *": "ask"
-          }
-        }
-      }
-    }
+            "git *": "ask",
+          },
+        },
+      },
+    },
   ],
   "profiles": {
     "review": {
@@ -24,10 +18,10 @@
         {
           "name": "reviewers",
           "agent": {
-            "temperature": 0
-          }
-        }
-      ]
-    }
-  }
+            "temperature": 0,
+          },
+        },
+      ],
+    },
+  },
 }

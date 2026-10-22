@@ -5,7 +5,7 @@ description: Explain Config Composer groups, profile selection, precedence, and 
 
 Use [the schema reference](references/schema.md) and `/view-configs` for server-attested field decisions. Do not reconstruct authored frontmatter from normalized native config. Explain the configured value, its origin, and any blocked Composer candidate.
 
-Definitions are shared; selection is per canonical source and worktree. Root groups always apply. Follow default and None are distinct. A failed composition publishes “Composer not applied” and has no applied revision. A valid authority permits selecting a valid profile to recover.
+Definitions are shared; selection is per canonical source and worktree. Each agent owns its ordered groups. The catalog defines settings, and profiles patch those settings without owning membership. For each membership entry, apply the shared group and then its selected profile patch; later membership entries win overlaps. Follow default and None are distinct. A failed composition publishes “Composer not applied” and has no applied revision. A valid authority permits selecting a valid profile to recover.
 
 Definitions and their source/state identity remain those loaded for each directory/worktree in the server process. Edits require restarting the OpenCode server process; reconnecting the TUI does not load them. `/view-configs` reads loaded attestation and the current external choice, so file edits do not change inspection. `/profiles` switches among loaded profiles, the loaded default, and Shared only.
 

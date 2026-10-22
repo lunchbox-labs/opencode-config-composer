@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { SettingsError, record } from '../settings.ts';
+import { readAgentGroups } from '../membership.ts';
 import { serverEntry } from '../registration.ts';
 import { configurationDirectory } from '../configuration.ts';
 import type { NativeBaseline, ResolvedCandidate } from './document-types.ts';
@@ -216,6 +217,22 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   for (const entry of Object.values(marker.observation.authority)) {
     if (!record(entry) || !record(entry.fields) || !Array.isArray(entry.sources)) {
       return fail('Invalid authored authority.');
+    }
+    if (Object.hasOwn(entry, 'groups')) {
+      if (
+        !record(entry.groups) ||
+        !record(entry.groups.source) ||
+        typeof entry.groups.source.path !== 'string' ||
+        typeof entry.groups.source.canonicalPath !== 'string' ||
+        !hash(entry.groups.source.fingerprint)
+      ) {
+        return fail('Invalid authored membership.');
+      }
+      try {
+        readAgentGroups(entry.groups.value, entry.groups.source.path);
+      } catch {
+        return fail('Invalid authored membership.');
+      }
     }
     for (const pin of Object.values(entry.fields)) {
       if (

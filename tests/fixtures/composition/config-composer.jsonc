@@ -3,9 +3,6 @@
     {
       "name": "reviewers",
       "description": "Existing native review agents",
-      "members": {
-        "agent": ["plan", "explore"],
-      },
       "agent": {
         "permission": {
           "bash": {
