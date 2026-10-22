@@ -35,6 +35,13 @@ test('CI suites partition every portable integration file exactly once', async (
   assert.equal(new Set(files).size, files.length, 'a portable case belongs to exactly one CI suite');
   assert.deepEqual(files.sort(), expected);
   assert.deepEqual(integrationFiles().sort(), expected);
+  const longRunning = [
+    'tests/config-composer.native.ts',
+    'tests/review-programming.native.ts',
+    'tests/integration/prompt-coexistence.integration.ts',
+  ];
+  const budgets = longRunning.map((file) => suites.find((suite) => integrationFiles(suite).includes(file)));
+  assert.equal(new Set(budgets).size, longRunning.length, 'long-running files need separate suite time budgets');
   assert.throws(() => integrationFiles('missing'), /Unknown integration suite/);
 });
 

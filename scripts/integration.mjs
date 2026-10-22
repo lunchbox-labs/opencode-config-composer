@@ -22,11 +22,9 @@ export function nativePackage(platform = process.platform, arch = process.arch) 
 
 const suites = {
   registration: ['tests/npm-registration.native.ts'],
-  core: [
-    'tests/config-composer.native.ts',
-    'tests/review-programming.native.ts',
-    'tests/integration/prompt-coexistence.integration.ts',
-  ],
+  core: ['tests/config-composer.native.ts'],
+  examples: ['tests/review-programming.native.ts'],
+  coexistence: ['tests/integration/prompt-coexistence.integration.ts'],
   profile: ['tests/composition-profiles.native.ts'],
   permissions: ['tests/integration/permission-runtime.integration.ts'],
   inspector: ['tests/integration/running-inspector.integration.ts'],
@@ -159,7 +157,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|registration|core|profile|permissions|inspector|apply|terminal|cleanup]',
+    'Usage: npm run test:integration -- [--suite all|registration|core|examples|coexistence|profile|permissions|inspector|apply|terminal|cleanup]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);
