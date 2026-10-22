@@ -34,4 +34,4 @@ Definitions are shared across projects using this file; profile choices persist 
 
 See the [schema](schema.json) and examples for [provider profiles](docs/examples/provider-profiles/config-composer.jsonc), [shared permissions](docs/examples/role-permissions/config-composer.jsonc), and [worktree selection](docs/examples/project-selection/config-composer.jsonc). Native OpenCode retains agent prompts and command templates. For prompt composition, see the independent [Prompt Composer](https://github.com/lunchbox-labs/opencode-prompt-composer).
 
-[MIT license](LICENSE).
+This package is licensed under MIT ([license](LICENSE)).
