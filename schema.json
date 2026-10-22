@@ -23,11 +23,19 @@
       "pattern": "^[^\\s/]+/\\S+$"
     },
     "groups": {
-      "type": "array",
-      "items": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S",
+        "not": {
+          "pattern": "\\u0000"
+        }
+      },
+      "additionalProperties": {
         "$ref": "#/$defs/group"
       },
-      "default": []
+      "default": {}
     },
     "agent": {
       "type": "object",
@@ -154,34 +162,22 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "\\S"
-        },
         "agent": {
           "$ref": "#/$defs/agent"
         },
         "description": {
           "type": "string"
         }
-      },
-      "required": ["name"]
+      }
     },
     "groupPatch": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "\\S"
-        },
         "agent": {
           "$ref": "#/$defs/agent"
         }
-      },
-      "required": ["name"]
+      }
     },
     "profile": {
       "type": "object",
@@ -199,8 +195,16 @@
           "pattern": "^[^\\s/]+/\\S+$"
         },
         "groups": {
-          "type": "array",
-          "items": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "not": {
+              "pattern": "\\u0000"
+            }
+          },
+          "additionalProperties": {
             "$ref": "#/$defs/groupPatch"
           }
         },

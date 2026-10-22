@@ -22,7 +22,7 @@ test(
       },
     });
     await f.write(f.paths.shared, {
-      groups: [{ name: 'scalar', agent: { permission: 'ask' } }],
+      groups: { scalar: { agent: { permission: 'ask' } } },
       agent: { worker: { permission: { skill: { 'included-skill': 'ask' }, bash: 'deny' } } },
       profiles: {
         whole: { agent: { worker: { permission: 'allow' } } },

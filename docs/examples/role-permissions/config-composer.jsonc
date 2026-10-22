@@ -1,7 +1,6 @@
 {
-  "groups": [
-    {
-      "name": "review",
+  "groups": {
+    "review": {
       "agent": {
         "permission": {
           "bash": {
@@ -11,8 +10,7 @@
         },
       },
     },
-    {
-      "name": "programming",
+    "programming": {
       "agent": {
         "permission": {
           "bash": {
@@ -22,19 +20,18 @@
         },
       },
     },
-  ],
+  },
   "profiles": {
     "cautious": {
-      "groups": [
-        {
-          "name": "programming",
+      "groups": {
+        "programming": {
           "agent": {
             "permission": {
               "bash": "ask",
             },
           },
         },
-      ],
+      },
     },
   },
 }

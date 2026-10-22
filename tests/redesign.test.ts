@@ -16,9 +16,9 @@ const grouped = (base: typeof native | { agent: Record<string, Record<string, un
 test('strict new document validates inactive references and preserves prototype-like exact names', () => {
   for (const value of [
     { activeProfiles: [] },
-    { groups: {} },
-    { groups: [{ name: 'a', members: { agent: [] } }] },
-    { profiles: { bad: { groups: [{ name: 'absent' }] } } },
+    { groups: [] },
+    { groups: { a: { members: { agent: [] } } } },
+    { profiles: { bad: { groups: { absent: {} } } } },
     { defaultProfile: 'constructor' },
     { agent: { worker: { groups: [] } } },
     { command: { run: { variant: 'high' } } },
@@ -27,20 +27,15 @@ test('strict new document validates inactive references and preserves prototype-
     assert.throws(() => read(value));
   }
   assert.throws(() => parseConfiguration('{"profiles":{"a":{},"a":{}}}'), /duplicate JSON/);
-  const doc = read(JSON.parse('{"profiles":{"constructor":{}},"defaultProfile":"constructor","groups":[]}'));
+  const doc = read(JSON.parse('{"profiles":{"constructor":{}},"defaultProfile":"constructor","groups":{}}'));
   assert.equal(resolveComposition(doc, undefined, native, {}).profile, 'constructor');
 });
 test('owned groups always apply, named exceptions follow groups, none retains groups', () => {
   const doc = read({
-    groups: [
-      {
-        name: 'workers',
-        agent: { model: 'p/group', temperature: 0.2 },
-      },
-    ],
+    groups: { workers: { agent: { model: 'p/group', temperature: 0.2 } } },
     agent: { worker: { model: 'p/root' } },
     profiles: {
-      a: { groups: [{ name: 'workers', agent: { model: 'p/a', variant: 'high' } }] },
+      a: { groups: { workers: { agent: { model: 'p/a', variant: 'high' } } } },
       b: { agent: { worker: { model: 'p/b' } } },
     },
     defaultProfile: 'a',
@@ -82,16 +77,10 @@ test('final raw frontmatter pins block Composer including empty fields and scala
 });
 test('overlapping groups follow the agent array and report the winning source', () => {
   const document = read({
-    groups: [
-      { name: 'first', agent: { temperature: 0.1, model: 'p/group' } },
-      { name: 'last', agent: { temperature: 0.2 } },
-    ],
+    groups: { first: { agent: { temperature: 0.1, model: 'p/group' } }, last: { agent: { temperature: 0.2 } } },
     profiles: {
       reversed: {
-        groups: [
-          { name: 'last', agent: { temperature: 0.3 } },
-          { name: 'first', agent: { temperature: 0.4 } },
-        ],
+        groups: { last: { agent: { temperature: 0.3 } }, first: { agent: { temperature: 0.4 } } },
       },
     },
   });
@@ -103,7 +92,7 @@ test('overlapping groups follow the agent array and report the winning source', 
   assert.equal(selected.agent.worker.temperature, 0.3);
   assert.equal(
     selected.decisions['/agent/worker/temperature'].origin.pointer,
-    '/profiles/reversed/groups/0/agent/temperature',
+    '/profiles/reversed/groups/last/agent/temperature',
   );
 });
 
@@ -130,15 +119,15 @@ test('each Composer contribution reports its blocked values beneath final author
   const fields = Object.fromEntries(
     Object.entries(values).map(([field, value]) => [field, { value, authored: { [field]: value }, source }]),
   );
-  const membership = { name: 'workers' };
+  const membership = { workers: {} };
   for (const [kind, document] of [
-    ['group', { groups: [{ ...membership, agent: patch }] }],
+    ['group', { groups: { workers: { agent: patch } } }],
     ['root', { agent: { worker: patch } }],
     [
       'profile-group',
       {
-        groups: [membership],
-        profiles: { selected: { groups: [{ name: 'workers', agent: patch }] } },
+        groups: membership,
+        profiles: { selected: { groups: { workers: { agent: patch } } } },
         defaultProfile: 'selected',
       },
     ],
@@ -151,7 +140,7 @@ test('each Composer contribution reports its blocked values beneath final author
         agent: {
           worker: {
             prompt: 'OPAQUE_BODY',
-            groups: 'groups' in document ? document.groups.map((group) => group.name) : [],
+            groups: 'groups' in document ? Object.keys(document.groups) : [],
           },
         },
       },
@@ -202,14 +191,14 @@ test('unknown inactive targets, disabled command targets and no visible primary 
   );
   assert.doesNotThrow(() => resolveComposition(read({}), null, { ...native, default_agent: 'worker' }, {}));
 });
-test('duplicate groups/members, invalid values and escaped pointers', () => {
+test('legacy group arrays/members, invalid values and escaped pointers', () => {
   for (const value of [
-    { groups: [{ name: 'a', members: { agent: ['build', 'build'] } }] },
+    { groups: { a: { members: { agent: ['build', 'build'] } } } },
     {
       groups: [{ name: 'a' }, { name: 'a' }],
     },
     { agent: { build: { top_p: 'invalid' } } },
-    { profiles: { a: { groups: [{ name: 'x', members: { agent: ['build'] } }] } } },
+    { profiles: { a: { groups: { x: { members: { agent: ['build'] } } } } } },
   ]) {
     assert.throws(() => read(value));
   }
@@ -224,9 +213,9 @@ test('duplicate groups/members, invalid values and escaped pointers', () => {
 
 test('membership-only groups and unselected profiles do not alter membership; native scalar policy survives empty patches', () => {
   const doc = read({
-    groups: [{ name: 'membership' }],
+    groups: { membership: {} },
     agent: { worker: { permission: {} } },
-    profiles: { a: { groups: [{ name: 'membership', agent: { options: { enabled: false } } }] } },
+    profiles: { a: { groups: { membership: { agent: { options: { enabled: false } } } } } },
   });
   const base = { agent: { worker: { groups: ['membership'], permission: { '*': 'ask' }, options: { native: true } } } };
   assert.deepEqual(resolveComposition(doc, null, base, {}).agent.worker.permission, { '*': 'ask' });
@@ -269,7 +258,7 @@ test('Composer scalar policies normalize before hook output and replace the whol
   );
   assert.deepEqual(mapped.agent.worker.permission, { '*': 'allow', read: 'deny' });
   const group = resolveComposition(
-    read({ groups: [{ name: 'workers', agent: { permission: 'ask' } }] }),
+    read({ groups: { workers: { agent: { permission: 'ask' } } } }),
     null,
     { agent: { worker: { groups: ['workers'], permission: {} } } },
     {},
@@ -283,11 +272,11 @@ test('native action-only permissions reject pattern maps across every authored l
       const patch = { permission: { [tool]: value } };
       for (const document of [
         { agent: { worker: patch } },
-        { groups: [{ name: 'workers', agent: patch }] },
+        { groups: { workers: { agent: patch } } },
         { profiles: { inactive: { agent: { worker: patch } } } },
         {
-          groups: [{ name: 'workers' }],
-          profiles: { inactive: { groups: [{ name: 'workers', agent: patch }] } },
+          groups: { workers: {} },
+          profiles: { inactive: { groups: { workers: { agent: patch } } } },
         },
       ]) {
         assert.throws(() => read(document), /Expected a permission action/);

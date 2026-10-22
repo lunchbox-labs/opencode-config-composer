@@ -47,7 +47,7 @@ async function fixture(t: TestContext, sourceAlias = false, sourceDocument?: Rec
     await rm(root, { recursive: true, force: true });
   });
   const document = {
-    groups: [{ name: 'workers', agent: { temperature: 0.1 } }],
+    groups: { workers: { agent: { temperature: 0.1 } } },
     defaultProfile: 'a',
     profiles: {
       a: {

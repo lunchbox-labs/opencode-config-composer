@@ -63,7 +63,7 @@ test('missing implicit source stays empty; a fresh process observes the new docu
   await writeFile(f.source, '{"model":"p/new"}');
   const after = await f.load();
   assert.deepEqual(after.source, before.source);
-  assert.deepEqual(after.source.document, { groups: [], profiles: {} });
+  assert.deepEqual(after.source.document, { groups: {}, profiles: {} });
   assert.equal(after.definitionId, before.definitionId);
   const module = new URL('../src/config-composer/server.ts', import.meta.url).href;
   const { stdout } = await promisify(execFile)(

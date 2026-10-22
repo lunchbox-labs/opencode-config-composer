@@ -61,7 +61,7 @@ test('published schema uses native action-only permissions and string modes in e
       const patch = { permission: { [tool]: value } };
       for (const document of [
         { agent: { worker: patch } },
-        { groups: [{ name: 'workers', agent: patch }] },
+        { groups: { workers: { agent: patch } } },
         { profiles: { inactive: { agent: { worker: patch } } } },
       ]) {
         assert.equal(validate(document), false, JSON.stringify(document));

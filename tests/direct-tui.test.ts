@@ -34,9 +34,9 @@ async function fixture(
   });
   const source = join(root, 'config-composer.jsonc');
   const text = JSON.stringify({
-    groups: [{ name: 'workers', agent: common }],
+    groups: { workers: { agent: common } },
     profiles: {
-      a: { groups: [{ name: 'workers', agent: { model: 'p/a' } }] },
+      a: { groups: { workers: { agent: { model: 'p/a' } } } },
       b: { agent: { worker: { model: 'p/b' } } },
     },
   });

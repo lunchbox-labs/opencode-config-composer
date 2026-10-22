@@ -17,7 +17,6 @@ export interface CommandPatch extends Record<string, unknown> {
   subtask?: boolean;
 }
 export interface GroupPatch {
-  name: string;
   agent?: AgentPatch;
 }
 export interface Group extends GroupPatch {
@@ -27,7 +26,7 @@ export interface Profile {
   description?: string;
   model?: string;
   small_model?: string;
-  groups?: GroupPatch[];
+  groups?: Record<string, GroupPatch>;
   agent?: Record<string, AgentPatch>;
   command?: Record<string, CommandPatch>;
 }
@@ -36,7 +35,7 @@ export interface CompositionDocument {
   defaultProfile?: string;
   model?: string;
   small_model?: string;
-  groups: Group[];
+  groups: Record<string, Group>;
   agent?: Record<string, AgentPatch>;
   command?: Record<string, CommandPatch>;
   profiles: Record<string, Profile>;

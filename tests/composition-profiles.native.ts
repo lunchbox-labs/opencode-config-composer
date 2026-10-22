@@ -12,7 +12,7 @@ test(
       agent: { ...f.native.agent, worker: { ...f.native.agent.worker, groups: ['workers'] } },
     });
     await f.write(f.paths.shared, {
-      groups: [{ name: 'workers', agent: { temperature: 0.3 } }],
+      groups: { workers: { agent: { temperature: 0.3 } } },
       profiles: {
         a: {
           agent: { worker: { model: 'fixture/beta', variant: 'high', options: { a: false } } },

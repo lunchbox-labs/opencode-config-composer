@@ -18,16 +18,16 @@ Define those groups in `config-composer.jsonc` in OpenCode's configuration direc
 
 ```jsonc
 {
-  "groups": [
-    { "name": "coding", "agent": { "permission": { "edit": "ask" } } },
-    { "name": "cautious", "agent": { "permission": { "edit": "deny" } } }
-  ],
+  "groups": {
+    "coding": { "agent": { "permission": { "edit": "ask" } } },
+    "cautious": { "agent": { "permission": { "edit": "deny" } } },
+  },
   "profiles": {
     "review": {
-      "groups": [{ "name": "coding", "agent": { "temperature": 0 } }]
-    }
+      "groups": { "coding": { "agent": { "temperature": 0 } } },
+    },
   },
-  "defaultProfile": "review"
+  "defaultProfile": "review",
 }
 ```
 

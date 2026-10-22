@@ -1,7 +1,6 @@
 {
-  "groups": [
-    {
-      "name": "reviewers",
+  "groups": {
+    "reviewers": {
       "description": "Existing native review agents",
       "agent": {
         "permission": {
@@ -11,17 +10,16 @@
         },
       },
     },
-  ],
+  },
   "profiles": {
     "review": {
-      "groups": [
-        {
-          "name": "reviewers",
+      "groups": {
+        "reviewers": {
           "agent": {
             "temperature": 0,
           },
         },
-      ],
+      },
     },
   },
 }

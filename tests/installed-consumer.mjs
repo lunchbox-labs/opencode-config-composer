@@ -46,7 +46,7 @@ await mkdir(join(root, 'settings'), { recursive: true });
 await writeFile(
   join(root, 'settings', 'composer.jsonc'),
   JSON.stringify({
-    groups: [{ name: 'workers', agent: { temperature: 0 } }],
+    groups: { workers: { agent: { temperature: 0 } } },
     profiles: { work: { agent: { worker: { model: 'fixture/model' } } } },
     defaultProfile: 'work',
   }),

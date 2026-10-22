@@ -47,9 +47,9 @@ test(
       permission: { read: 'allow' },
     };
     await f.write(f.paths.shared, {
-      groups: [{ name: 'all', agent: patch }],
+      groups: { all: { agent: patch } },
       agent: { worker: patch, empty: patch, legacy: { mode: 'subagent' }, omitted: { mode: 'subagent' } },
-      profiles: { review: { groups: [{ name: 'all', agent: patch }], agent: { worker: patch, empty: patch } } },
+      profiles: { review: { groups: { all: { agent: patch } }, agent: { worker: patch, empty: patch } } },
       defaultProfile: 'review',
     });
     const nativeBytes = await readFile(f.paths.native, 'utf8');
@@ -105,7 +105,7 @@ test(
         })),
       ),
       {
-        groups: [{ name: 'bad', agent: { permission: { webfetch: {} } } }],
+        groups: { bad: { agent: { permission: { webfetch: {} } } } },
       },
       ...[['primary'], ['subagent'], ['all'], [[['primary']]]].map((mode) => ({
         agent: { worker: { model: 'fixture/beta' } },
@@ -162,13 +162,13 @@ test(
     const firstPolicy = { bash: { '*': 'ask', 'git *': 'allow' } };
     const lastPolicy = { bash: { 'git *': 'deny' } };
     await f.write(f.paths.shared, {
-      groups: [
-        { name: 'last', agent: { temperature: 0.2, permission: lastPolicy } },
-        { name: 'first', agent: { model: 'fixture/alpha', temperature: 0.1, permission: firstPolicy } },
-      ],
+      groups: {
+        last: { agent: { temperature: 0.2, permission: lastPolicy } },
+        first: { agent: { model: 'fixture/alpha', temperature: 0.1, permission: firstPolicy } },
+      },
       profiles: {
-        a: { groups: [{ name: 'first', agent: { model: 'fixture/beta', temperature: 0.9 } }] },
-        b: { groups: [{ name: 'first', agent: { temperature: 0.7 } }] },
+        a: { groups: { first: { agent: { model: 'fixture/beta', temperature: 0.9 } } } },
+        b: { groups: { first: { agent: { temperature: 0.7 } } } },
       },
     });
     const nativeBytes = await readFile(f.paths.native);
@@ -208,9 +208,9 @@ test(
   async (t) => {
     const f = await compositionFixture(t, 'native-membership-failure');
     const cases = [
-      { groups: ['known'], document: { groups: [{ name: 'known' }], invalid: true }, diagnostic: /Unknown key/ },
-      { groups: ['missing'], document: { groups: [{ name: 'known' }] }, diagnostic: /unknown group/ },
-      { groups: 'known', document: { groups: [{ name: 'known' }] }, diagnostic: /array/i },
+      { groups: ['known'], document: { groups: { known: {} }, invalid: true }, diagnostic: /Unknown key/ },
+      { groups: ['missing'], document: { groups: { known: {} } }, diagnostic: /unknown group/ },
+      { groups: 'known', document: { groups: { known: {} } }, diagnostic: /array/i },
     ];
     for (const [index, scenario] of cases.entries()) {
       if (index > 0) {

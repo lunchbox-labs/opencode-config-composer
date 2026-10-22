@@ -1,24 +1,20 @@
 {
-  "groups": [
-    {
-      "name": "coding",
-    },
-  ],
+  "groups": {
+    "coding": {},
+  },
   "profiles": {
     "development": {
-      "groups": [
-        {
-          "name": "coding",
+      "groups": {
+        "coding": {
           "agent": {
             "temperature": 0.2,
           },
         },
-      ],
+      },
     },
     "review": {
-      "groups": [
-        {
-          "name": "coding",
+      "groups": {
+        "coding": {
           "agent": {
             "temperature": 0,
             "permission": {
@@ -26,7 +22,7 @@
             },
           },
         },
-      ],
+      },
     },
   },
   "defaultProfile": "development",

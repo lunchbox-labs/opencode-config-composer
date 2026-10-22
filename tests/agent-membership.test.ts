@@ -14,33 +14,30 @@ import { readNativeAgentFrontmatter } from '../src/config-composer/frontmatter.t
 
 const document = () =>
   readCompositionDocument({
-    groups: [
-      {
-        name: 'first',
-        agent: { model: 'p/first', permission: { read: 'ask', bash: { '*': 'deny', 'git *': 'allow' } } },
-      },
-      { name: 'last', agent: { model: 'p/last', permission: { bash: { '*': 'ask' }, edit: 'deny' } } },
-    ],
+    groups: {
+      first: { agent: { model: 'p/first', permission: { read: 'ask', bash: { '*': 'deny', 'git *': 'allow' } } } },
+      last: { agent: { model: 'p/last', permission: { bash: { '*': 'ask' }, edit: 'deny' } } },
+    },
     profiles: {
       a: {
-        groups: [
-          { name: 'last', agent: { variant: 'last' } },
-          { name: 'first', agent: { model: 'p/profile', permission: { bash: 'allow' } } },
-        ],
+        groups: {
+          last: { agent: { variant: 'last' } },
+          first: { agent: { model: 'p/profile', permission: { bash: 'allow' } } },
+        },
       },
-      b: { groups: [{ name: 'first', agent: { model: 'p/b' } }] },
+      b: { groups: { first: { agent: { model: 'p/b' } } } },
     },
   });
 
-test('agent order owns shared and profile precedence independently of catalog or profile array order', () => {
+test('agent order owns shared and profile precedence independently of definition map insertion order', () => {
   const native = { agent: { forward: { groups: ['first', 'last'] }, reverse: { groups: ['last', 'first'] } } };
   const result = resolveComposition(document(), 'a', native, {});
   assert.equal(result.agent.forward.model, 'p/last');
   assert.equal(result.agent.reverse.model, 'p/profile');
   assert.deepEqual(result.agent.forward.permission, { read: 'ask', bash: { '*': 'ask' }, edit: 'deny' });
   assert.deepEqual(Object.keys(result.agent.reverse.permission as object), ['edit', 'read', 'bash']);
-  assert.equal(result.decisions['/agent/forward/model'].origin.pointer, '/groups/1/agent/model');
-  assert.equal(result.decisions['/agent/reverse/model'].origin.pointer, '/profiles/a/groups/1/agent/model');
+  assert.equal(result.decisions['/agent/forward/model'].origin.pointer, '/groups/last/agent/model');
+  assert.equal(result.decisions['/agent/reverse/model'].origin.pointer, '/profiles/a/groups/first/agent/model');
   assert.deepEqual(native.agent.forward.groups, ['first', 'last']);
 });
 
@@ -66,14 +63,8 @@ test('membership arrays reject unknown, duplicate and invalid names, and central
   for (const groups of ['first', ['first', 'first'], ['unknown'], [''], [' '], [false], [0], [null]]) {
     assert.throws(() => resolveComposition(document(), null, { agent: { worker: { groups } } }, {}), /group/i);
   }
-  assert.throws(
-    () => readCompositionDocument({ groups: [{ name: 'first', members: { agent: ['build'] } }] }),
-    /Unknown key/,
-  );
-  assert.throws(
-    () => readCompositionDocument({ groups: [{ name: 'first', command: { model: 'p/model' } }] }),
-    /Unknown key/,
-  );
+  assert.throws(() => readCompositionDocument({ groups: { first: { members: { agent: ['build'] } } } }), /Unknown key/);
+  assert.throws(() => readCompositionDocument({ groups: { first: { command: { model: 'p/model' } } } }), /Unknown key/);
   assert.throws(
     () => readCompositionDocument({ profiles: { inactive: { agent: { build: { options: { groups: [] } } } } } }),
     /groups/,
@@ -95,7 +86,7 @@ test('Markdown membership wins as a whole array and does not become an options p
   );
   assert.equal(authority.worker.fields.options, undefined);
   const definitions = document();
-  definitions.groups[0].agent = { ...definitions.groups[0].agent, options: { group: false, count: 0 } };
+  definitions.groups.first.agent = { ...definitions.groups.first.agent, options: { group: false, count: 0 } };
   const result = resolveComposition(
     definitions,
     'a',
@@ -144,7 +135,7 @@ async function hookFixture(t: TestContext, definition: unknown) {
   return { root, hook, config, location: { root, directory: root } };
 }
 
-for (const definition of [{ groups: [{ name: 'first', members: { agent: ['worker'] } }] }, { groups: [] }]) {
+for (const definition of [{ groups: { first: { members: { agent: ['worker'] } } } }, { groups: {} }]) {
   test('failed bootstrap strips reserved metadata without applying settings or discarding other native fields', async (t) => {
     const f = await hookFixture(t, definition);
     const sharedAgent = f.config.agent.worker;

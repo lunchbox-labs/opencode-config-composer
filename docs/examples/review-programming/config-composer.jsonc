@@ -1,7 +1,6 @@
 {
-  "groups": [
-    {
-      "name": "review",
+  "groups": {
+    "review": {
       "agent": {
         "permission": {
           "bash": {
@@ -11,8 +10,7 @@
         },
       },
     },
-    {
-      "name": "programming",
+    "programming": {
       "agent": {
         "permission": {
           "bash": {
@@ -22,27 +20,25 @@
         },
       },
     },
-  ],
+  },
   "profiles": {
     "review": {
-      "groups": [
-        {
-          "name": "review",
+      "groups": {
+        "review": {
           "agent": {
             "temperature": 0,
           },
         },
-      ],
+      },
     },
     "programming": {
-      "groups": [
-        {
-          "name": "programming",
+      "groups": {
+        "programming": {
           "agent": {
             "temperature": 0.2,
           },
         },
-      ],
+      },
     },
   },
   "defaultProfile": "review",

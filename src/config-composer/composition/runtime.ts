@@ -157,13 +157,7 @@ export function resolveComposition(
       assign(kind, name, patch, { kind: 'native' });
     }
   }
-  const groups = new Map(document.groups.map((group, index) => [group.name, { group, index }]));
-  const profileGroups = new Map(
-    (profile === null ? [] : (document.profiles[profile].groups ?? [])).map((group, index) => [
-      group.name,
-      { group, index },
-    ]),
-  );
+  const profileGroups = profile === null ? {} : (document.profiles[profile].groups ?? {});
   for (const name of targets.agent) {
     const authored = Object.hasOwn(authority, name) ? authority[name].groups : undefined;
     const supplied = Object.hasOwn(native.agent ?? {}, name) ? native.agent?.[name] : undefined;
@@ -189,16 +183,17 @@ export function resolveComposition(
       configurable: true,
     });
     for (const groupName of declaration.groups) {
-      const shared = groups.get(groupName);
-      if (shared === undefined) {
+      if (!Object.hasOwn(document.groups, groupName)) {
         throw new SettingsError(`Agent ${name}: unknown group ${groupName}.`);
       }
-      assign('agent', name, shared.group.agent ?? {}, { kind: 'group', pointer: `/groups/${shared.index}/agent` });
-      const selected = profileGroups.get(groupName);
-      if (selected !== undefined && profile !== null) {
-        assign('agent', name, selected.group.agent ?? {}, {
+      assign('agent', name, document.groups[groupName].agent ?? {}, {
+        kind: 'group',
+        pointer: `/groups/${pointer(groupName)}/agent`,
+      });
+      if (Object.hasOwn(profileGroups, groupName) && profile !== null) {
+        assign('agent', name, profileGroups[groupName].agent ?? {}, {
           kind: 'profile-group',
-          pointer: `/profiles/${pointer(profile)}/groups/${selected.index}/agent`,
+          pointer: `/profiles/${pointer(profile)}/groups/${pointer(groupName)}/agent`,
         });
       }
     }

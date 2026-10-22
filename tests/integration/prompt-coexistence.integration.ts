@@ -69,17 +69,12 @@ for (const order of ['config-first', 'prompt-first']) {
         permission: { edit: 'allow' },
       };
       await f.write(f.paths.shared, {
-        groups: [
-          {
-            name: 'workers',
-            agent: { model: 'fixture/alpha', temperature: 0.4, permission: { read: 'ask' } },
-          },
-        ],
+        groups: { workers: { agent: { model: 'fixture/alpha', temperature: 0.4, permission: { read: 'ask' } } } },
         agent: { worker: patch },
         command: { review: { subtask: false } },
         profiles: {
           a: {
-            groups: [{ name: 'workers', agent: patch }],
+            groups: { workers: { agent: patch } },
             agent: { worker: patch, helper: { model: 'fixture/beta', variant: 'high', options: { from_a: false } } },
             command: { review: { model: 'fixture/beta' } },
           },

@@ -124,16 +124,13 @@ export function openEffective(view: ConfigurationView): void {
           if (option.value === '\0groups') {
             view.nav.menu({
               title: 'Shared groups',
-              options: document.groups.map((group, index) => ({
-                title: group.name,
-                value: String(index),
+              options: Object.entries(document.groups).map(([name, group]) => ({
+                title: name,
+                value: name,
                 description: group.description ?? 'Shared agent settings',
               })),
               onSelect: (item) =>
-                view.details(
-                  `Shared group ${document.groups[Number(item.value)].name}`,
-                  JSON.stringify(document.groups[Number(item.value)], null, 2),
-                ),
+                view.details(`Shared group ${item.value}`, JSON.stringify(document.groups[item.value], null, 2)),
             });
           } else if (option.value === '\0profiles') {
             view.nav.menu({
