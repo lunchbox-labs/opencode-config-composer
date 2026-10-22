@@ -28,7 +28,7 @@ function fixture(samples: (() => Runtime)[]) {
     },
     editor: { runtime: async () => samples[Math.min(reads++, samples.length - 1)]() },
   } as unknown as Fixture;
-  const terminal = { choose: async () => {}, press: async () => {} } as unknown as Terminal;
+  const terminal = { text: () => '', choose: async () => {}, press: async () => {} } as unknown as Terminal;
   return { run: () => reloadFromTerminal(fixture, terminal), reads: () => reads, agentReads: () => agentReads };
 }
 

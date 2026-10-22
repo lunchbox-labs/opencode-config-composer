@@ -63,19 +63,8 @@ async function observation(path: string, bytes = false): Promise<unknown> {
     throw error;
   }
 }
-export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
-  const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
+export function nativeJsonPaths(context: NativeFrontmatterContext): string[] {
   const roots = nativeAgentSourceRoots(context);
-  const discovery = await Promise.all(
-    roots
-      .flatMap((root) => [root, ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name))])
-      .map((path) => observation(path)),
-  );
-  const sources = await Promise.all(
-    Object.values(authority)
-      .flatMap((item) => item.sources)
-      .map(async (source) => [source, await observation(source.path)]),
-  );
   const jsonPaths = new Set(
     roots.flatMap((root) => ['config.json', 'opencode.json', 'opencode.jsonc'].map((name) => join(root, name))),
   );
@@ -90,11 +79,26 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
   if (explicit !== undefined && explicit !== '') {
     jsonPaths.add(explicit);
   }
+  return [...jsonPaths];
+}
+export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
+  const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
+  const roots = nativeAgentSourceRoots(context);
+  const discovery = await Promise.all(
+    roots
+      .flatMap((root) => [root, ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name))])
+      .map((path) => observation(path)),
+  );
+  const sources = await Promise.all(
+    Object.values(authority)
+      .flatMap((item) => item.sources)
+      .map(async (source) => [source, await observation(source.path)]),
+  );
   return {
     context,
     authority,
     metadata: digest([discovery, sources]),
-    json: digest(await Promise.all([...jsonPaths].map((path) => observation(path, true)))),
+    json: digest(await Promise.all(nativeJsonPaths(context).map((path) => observation(path, true)))),
   };
 }
 export function compositionRevision(

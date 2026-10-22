@@ -1,14 +1,19 @@
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
-import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { renameProfile, setSetting } from '../src/config-composer/composition/authoring.ts';
 import descriptor from '../src/config-composer/server.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import {
   loadEditorContext,
   metadataChanged,
+  previewDocument,
   previewSelection,
+  saveDocumentGuarded,
   saveSelectionGuarded,
 } from '../src/config-composer/storage.ts';
 import { readRuntimeContext } from '../src/config-composer/composition/runtime-baseline.ts';
@@ -388,4 +393,275 @@ test('committed reload preserves the reviewed source instead of adopting a chang
   assert.equal(current.choice, 'a');
   assert.equal(current.revision, 1);
   assert.equal(f.config.agent.worker.model, 'p/a');
+});
+
+test('document save preserves comments and mode, reloads reviewed intent, and applies from committed context', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.source, '// policy note\n' + JSON.stringify(f.document));
+  await chmod(f.source, process.platform === 'win32' ? 0o640 : 0o1640);
+  const originalMode = (await stat(f.source)).mode;
+  const context = await loadEditorContext(f.connection);
+  const text = setSetting(context.source.text!, { kind: 'agent', name: 'worker' }, 'temperature', 0);
+  const preview = await previewDocument(context, text);
+  const committed = await saveDocumentGuarded(context, preview);
+  assert.equal(committed.source.text, text);
+  assert.match(await readFile(f.source, 'utf8'), /policy note/);
+  assert.equal((await stat(f.source)).mode, originalMode);
+  assert.deepEqual(committed.selection, context.selection);
+  await applySavedComposition(committed, context.runtime, {
+    assertCurrent: () => {},
+    activity: async () => ({}),
+    dispose: async () => {},
+    refresh: async () => {
+      await f.hook(f.config);
+      return readRuntimeContext(f.config, f.connection.location);
+    },
+  });
+  assert.equal((f.config.agent.worker as Record<string, unknown>).temperature, 0);
+});
+test('profile rename updates only this worktree explicit choice and default with one reviewed source transaction', async (t) => {
+  const f = await fixture(t);
+  let context = await loadEditorContext(f.connection);
+  context = await saveSelectionGuarded(context, await previewSelection(context, 'a'));
+  const text = renameProfile(context.source.text!, 'a', 'mixed');
+  const committed = await saveDocumentGuarded(context, await previewDocument(context, text, undefined, 'mixed'));
+  assert.equal(committed.selection.choice, 'mixed');
+  assert.equal(committed.source.document.defaultProfile, 'mixed');
+  assert.equal(committed.selection.revision, context.selection.revision + 1);
+});
+for (const mutation of ['source', 'state', 'metadata', 'connection'] as const) {
+  test(`document save rejects late ${mutation} changes before a source write`, async (t) => {
+    const f = await fixture(t);
+    const context = await loadEditorContext(f.connection);
+    const preview = await previewDocument(
+      context,
+      setSetting(context.source.text!, { kind: 'agent', name: 'worker' }, 'temperature', 0),
+    );
+    if (mutation === 'source') {
+      await writeFile(f.source, JSON.stringify(f.document) + '\n');
+    }
+    if (mutation === 'state') {
+      await saveSelectionGuarded(context, await previewSelection(context, null));
+    }
+    if (mutation === 'metadata') {
+      await mkdir(join(f.root, 'agents'));
+      await writeFile(join(f.root, 'agents/worker.md'), '---\nmodel: p/a\n---\nopaque');
+    }
+    if (mutation === 'connection') {
+      f.disconnect();
+    }
+    const before = await readFile(f.source, 'utf8');
+    await assert.rejects(saveDocumentGuarded(context, preview), /changed|connection/);
+    assert.equal(await readFile(f.source, 'utf8'), before);
+  });
+}
+test('document preview tampering never reaches persistence', async (t) => {
+  const f = await fixture(t);
+  const context = await loadEditorContext(f.connection);
+  const preview = await previewDocument(
+    context,
+    setSetting(context.source.text!, { kind: 'agent', name: 'worker' }, 'temperature', 0),
+  );
+  preview.candidate.agent.worker.temperature = 1;
+  await assert.rejects(saveDocumentGuarded(context, preview), /Preview/);
+  assert.equal(await readFile(f.source, 'utf8'), context.source.text);
+});
+
+test('document reload refuses externally replaced committed bytes instead of adopting them', async (t) => {
+  const f = await fixture(t);
+  const context = await loadEditorContext(f.connection);
+  const preview = await previewDocument(
+    context,
+    setSetting(context.source.text!, { kind: 'agent', name: 'worker' }, 'temperature', 0),
+  );
+  let replaced = false;
+  const original = f.connection.proveFilesystem;
+  f.connection.proveFilesystem = async () => {
+    await original();
+    if (!replaced) {
+      replaced = true;
+      await writeFile(f.source, JSON.stringify(f.document) + '\n');
+    }
+  };
+  await assert.rejects(saveDocumentGuarded(context, preview), /Saved; not applied/);
+  assert.equal(await readFile(f.source, 'utf8'), JSON.stringify(f.document) + '\n');
+});
+test('document rename keeps its committed choice while a normal selection writer attempts to race reload', async (t) => {
+  const f = await fixture(t);
+  let context = await loadEditorContext(f.connection);
+  context = await saveSelectionGuarded(context, await previewSelection(context, 'a'));
+  const preview = await previewDocument(context, renameProfile(context.source.text!, 'a', 'mixed'), undefined, 'mixed');
+  let attempted = false;
+  f.connection.proveFilesystem = async () => {
+    const other = await readSelection(context.runtime.selectionEnvironment, { root: f.root, baseFile: f.source });
+    assert.equal(other.choice, 'mixed', 'the competing writer observes our committed rename');
+    await assert.rejects(
+      saveSelection(other, 'b', () => Promise.resolve()),
+      /Another selection edit is active/,
+    );
+    attempted = true;
+  };
+  const committed = await saveDocumentGuarded(context, preview);
+  assert.equal(attempted, true, 'the competing writer used the ordinary locked state API during reload');
+  assert.equal(committed.selection.choice, 'mixed');
+  assert.equal(committed.selection.revision, context.selection.revision + 1);
+  assert.equal(committed.source.text, preview.text);
+});
+test('document source guards run again after the last runtime await', async (t) => {
+  const f = await fixture(t);
+  const context = await loadEditorContext(f.connection);
+  const preview = await previewDocument(
+    context,
+    setSetting(context.source.text!, { kind: 'agent', name: 'worker' }, 'temperature', 0),
+  );
+  const original = f.connection.config;
+  let reads = 0;
+  f.connection.config = async () => {
+    const config = await original();
+    if (++reads === 2) {
+      await writeFile(f.source, JSON.stringify(f.document) + '\n');
+    }
+    return config;
+  };
+  await assert.rejects(saveDocumentGuarded(context, preview), /source changed/);
+  assert.equal(await readFile(f.source, 'utf8'), JSON.stringify(f.document) + '\n');
+});
+test('implicit missing source creates a mode-private file and linked sources preserve the link', async (t) => {
+  const f = await fixture(t);
+  await unlink(f.source);
+  let context = await loadEditorContext(f.connection);
+  await saveDocumentGuarded(context, await previewDocument(context, '{"profiles":{}}'));
+  if (process.platform !== 'win32') {
+    assert.equal((await stat(f.source)).mode & 0o777, 0o600);
+  }
+  const target = join(f.root, 'actual.jsonc');
+  await writeFile(target, '{}');
+  await unlink(f.source);
+  await symlink(target, f.source);
+  context = await loadEditorContext(f.connection);
+  const committed = await saveDocumentGuarded(context, await previewDocument(context, '{"model":"p/a"}'));
+  assert.equal(committed.source.canonicalPath, target);
+  assert.equal(await readFile(target, 'utf8'), '{"model":"p/a"}');
+});
+
+for (const external of [false, true]) {
+  test(`failed profile rename selection save ${external ? 'preserves concurrent external bytes' : 'restores its own source bytes'}`, async (t) => {
+    const f = await fixture(t);
+    let context = await loadEditorContext(f.connection);
+    context = await saveSelectionGuarded(context, await previewSelection(context, 'a'));
+    const preview = await previewDocument(
+      context,
+      renameProfile(context.source.text!, 'a', 'mixed'),
+      undefined,
+      'mixed',
+    );
+    const original = fs.promises.rename;
+    const mock = t.mock.method(fs.promises, 'rename', async (...args: Parameters<typeof fs.promises.rename>) => {
+      if (String(args[1]) === context.selection.path) {
+        if (external) {
+          await writeFile(f.source, '// external\n' + JSON.stringify(f.document));
+        }
+        throw new Error('selection rename failed');
+      }
+      return original(...args);
+    });
+    syncBuiltinESMExports();
+    t.after(() => {
+      mock.mock.restore();
+      syncBuiltinESMExports();
+    });
+    await assert.rejects(
+      saveDocumentGuarded(context, preview),
+      external ? /external edits were preserved/ : /selection rename failed/,
+    );
+    assert.equal(
+      await readFile(f.source, 'utf8'),
+      external ? '// external\n' + JSON.stringify(f.document) : context.source.text,
+    );
+    assert.equal((await loadEditorContext(f.connection)).selection.choice, 'a');
+  });
+}
+
+for (const alias of ['direct', 'symlink', 'explicit-native', 'markdown'] as const) {
+  test(`document authoring refuses the native ${alias} source identity without writing`, async (t) => {
+    const f = await fixture(t);
+    const native = join(
+      f.root,
+      alias === 'markdown'
+        ? 'agents/worker.md'
+        : alias === 'explicit-native'
+          ? 'native-custom.jsonc'
+          : 'opencode.jsonc',
+    );
+    if (alias === 'markdown') {
+      await mkdir(join(f.root, 'agents'));
+    }
+    await writeFile(native, '{"model":"p/a"}');
+    if (alias === 'explicit-native') {
+      const previous = process.env.OPENCODE_CONFIG;
+      process.env.OPENCODE_CONFIG = native;
+      t.after(() => {
+        if (previous === undefined) {
+          Reflect.deleteProperty(process.env, 'OPENCODE_CONFIG');
+        } else {
+          process.env.OPENCODE_CONFIG = previous;
+        }
+      });
+    }
+    if (alias !== 'direct') {
+      await unlink(f.source);
+      await symlink(native, f.source);
+    }
+    const hook =
+      alias === 'direct'
+        ? (await descriptor.server({ directory: f.root, worktree: f.root } as PluginInput, { configFile: native }))
+            .config!
+        : f.hook;
+    f.config = f.base();
+    await hook(f.config);
+    const context = await loadEditorContext(f.connection);
+    const before = await readFile(native, 'utf8');
+    let rejection: unknown;
+    try {
+      await saveDocumentGuarded(context, await previewDocument(context, '{"model":"p/b"}'));
+    } catch (error) {
+      rejection = error;
+    }
+    assert.equal(await readFile(native, 'utf8'), before, 'native source bytes never change');
+    assert.ok(rejection instanceof Error);
+    assert.match(rejection.message, /Native.*read-only/);
+  });
+}
+
+for (const retarget of ['source', 'native'] as const) {
+  test(`a ${retarget} alias introduced after document preview cannot change native bytes`, async (t) => {
+    const f = await fixture(t);
+    const context = await loadEditorContext(f.connection);
+    const preview = await previewDocument(
+      context,
+      setSetting(context.source.text!, { kind: 'agent', name: 'worker' }, 'temperature', 0),
+    );
+    const native = join(f.root, 'opencode.jsonc');
+    if (retarget === 'source') {
+      await writeFile(native, '{"model":"p/a"}');
+      await unlink(f.source);
+      await symlink(native, f.source);
+    } else {
+      await symlink(f.source, native);
+    }
+    const before = await readFile(native, 'utf8');
+    await assert.rejects(saveDocumentGuarded(context, preview), /source changed|Native.*read-only/);
+    assert.equal(await readFile(native, 'utf8'), before, 'late alias rejection leaves native bytes unchanged');
+  });
+}
+
+test('an oversized proposed document is rejected before saving a source the loader cannot reopen', async (t) => {
+  const f = await fixture(t);
+  const context = await loadEditorContext(f.connection);
+  const before = await readFile(f.source, 'utf8');
+  await assert.rejects(
+    previewDocument(context, JSON.stringify({ profiles: { large: { description: 'x'.repeat(1024 * 1024) } } })),
+    /1 MiB/,
+  );
+  assert.equal(await readFile(f.source, 'utf8'), before);
 });
