@@ -8,7 +8,10 @@ export async function reloadFromTerminal(
 ) {
   await fixture.host.prepareConfigurationDependencies();
   const previous = await fixture.editor.runtime();
-  await terminal.choose('Apply now', 'Composer revision applied');
+  if (terminal.text().includes('Review page')) {
+    await terminal.choose('Apply', 'Apply reviewed changes?');
+  }
+  await terminal.press('\r', 'Composer revision applied');
   let pending: Error | undefined;
   for (let attempt = 0; attempt < 200; attempt++) {
     const current = await fixture.editor.runtime().catch((error: unknown) => {
@@ -26,4 +29,22 @@ export async function reloadFromTerminal(
     await timers.setTimeout(50);
   }
   throw new Error('The terminal reload did not publish a new native registration', { cause: pending });
+}
+
+export async function readPreview(
+  terminal: Awaited<ReturnType<typeof nativeTerminal>>,
+  title: string,
+): Promise<string> {
+  const match = /Review page \d+ of (\d+)/.exec(terminal.text());
+  if (match === null) {
+    return terminal.text();
+  }
+  const pages = Number(match[1]);
+  let text = '';
+  for (let page = 1; page <= pages; page++) {
+    await terminal.choose(`Review page ${page} of ${pages}`, `Preview · ${page}/${pages}`);
+    text += terminal.text();
+    await terminal.press('\x1b', title);
+  }
+  return text;
 }

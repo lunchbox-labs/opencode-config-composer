@@ -219,36 +219,43 @@ export async function withSelectionLock<T>(snapshot: SelectionSnapshot, operatio
   }
 }
 
-/** Only selection state is writable in this editor. */
+/** Caller must hold withSelectionLock; used by a document rename of its selected profile. */
+export async function writeSelectionLocked(
+  snapshot: SelectionSnapshot,
+  choice: Selection,
+  validate: () => Promise<void>,
+): Promise<SelectionSnapshot> {
+  await validate();
+  const temporary = join(dirname(snapshot.path), `.selection-${randomUUID()}.tmp`);
+  try {
+    const file = await open(temporary, 'wx', 0o600);
+    try {
+      await file.writeFile(
+        JSON.stringify({
+          version: 2,
+          revision: snapshot.revision + 1,
+          selection: choice === undefined ? {} : { choice },
+        }) + '\n',
+      );
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    const committed = await observe(temporary);
+    await validate();
+    await verifySelection(snapshot);
+    await rename(temporary, snapshot.path);
+    return { ...committed, path: snapshot.path };
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
+}
+
+/** Persist a selection under its scoped lock. */
 export async function saveSelection(
   snapshot: SelectionSnapshot,
   choice: Selection,
   validate: () => Promise<void>,
 ): Promise<SelectionSnapshot> {
-  return withSelectionLock(snapshot, async () => {
-    await validate();
-    const temporary = join(dirname(snapshot.path), `.selection-${randomUUID()}.tmp`);
-    try {
-      const file = await open(temporary, 'wx', 0o600);
-      try {
-        await file.writeFile(
-          JSON.stringify({
-            version: 2,
-            revision: snapshot.revision + 1,
-            selection: choice === undefined ? {} : { choice },
-          }) + '\n',
-        );
-        await file.sync();
-      } finally {
-        await file.close();
-      }
-      const committed = await observe(temporary);
-      await validate();
-      await verifySelection(snapshot);
-      await rename(temporary, snapshot.path);
-      return { ...committed, path: snapshot.path };
-    } finally {
-      await unlink(temporary).catch(() => undefined);
-    }
-  });
+  return withSelectionLock(snapshot, () => writeSelectionLocked(snapshot, choice, validate));
 }

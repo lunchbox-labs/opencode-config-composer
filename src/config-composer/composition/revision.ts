@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { type NativeFrontmatterContext, nativeAgentSourceRoots, readNativeAgentFrontmatter } from '../frontmatter.ts';
@@ -63,19 +63,8 @@ async function observation(path: string, bytes = false): Promise<unknown> {
     throw error;
   }
 }
-export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
-  const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
+export function nativeJsonPaths(context: NativeFrontmatterContext): string[] {
   const roots = nativeAgentSourceRoots(context);
-  const discovery = await Promise.all(
-    roots
-      .flatMap((root) => [root, ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name))])
-      .map((path) => observation(path)),
-  );
-  const sources = await Promise.all(
-    Object.values(authority)
-      .flatMap((item) => item.sources)
-      .map(async (source) => [source, await observation(source.path)]),
-  );
   const jsonPaths = new Set(
     roots.flatMap((root) => ['config.json', 'opencode.json', 'opencode.jsonc'].map((name) => join(root, name))),
   );
@@ -90,11 +79,58 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
   if (explicit !== undefined && explicit !== '') {
     jsonPaths.add(explicit);
   }
+  return [...jsonPaths];
+}
+/** Native command bodies are opaque; only discover their file identities for the write refusal. */
+export async function nativeCommandPaths(context: NativeFrontmatterContext): Promise<string[]> {
+  const paths: string[] = [];
+  const visited = new Set<string>();
+  const scan = async (directory: string): Promise<void> => {
+    const identity = await realpath(directory).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        return undefined;
+      }
+      throw error;
+    });
+    if (identity === undefined || visited.has(identity)) {
+      return;
+    }
+    visited.add(identity);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const info = entry.isSymbolicLink() ? await stat(path) : entry;
+      if (info.isDirectory()) {
+        await scan(path);
+      } else if (info.isFile() && entry.name.endsWith('.md')) {
+        paths.push(path);
+      }
+    }
+  };
+  for (const root of nativeAgentSourceRoots(context)) {
+    for (const name of ['command', 'commands']) {
+      await scan(join(root, name));
+    }
+  }
+  return paths;
+}
+export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
+  const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
+  const roots = nativeAgentSourceRoots(context);
+  const discovery = await Promise.all(
+    roots
+      .flatMap((root) => [root, ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name))])
+      .map((path) => observation(path)),
+  );
+  const sources = await Promise.all(
+    Object.values(authority)
+      .flatMap((item) => item.sources)
+      .map(async (source) => [source, await observation(source.path)]),
+  );
   return {
     context,
     authority,
     metadata: digest([discovery, sources]),
-    json: digest(await Promise.all([...jsonPaths].map((path) => observation(path, true)))),
+    json: digest(await Promise.all(nativeJsonPaths(context).map((path) => observation(path, true)))),
   };
 }
 export function compositionRevision(
