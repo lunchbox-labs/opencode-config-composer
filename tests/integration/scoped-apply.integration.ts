@@ -86,3 +86,43 @@ test(
     assert.match((await f.editor.runtime()).diagnostic!, /disabled/);
   },
 );
+
+for (const boundary of ['save', 'dispose'] as const) {
+  test(`installed ${boundary} rejects a source change during the last runtime read`, { timeout: 240000 }, async (t) => {
+    const f = await compositionFixture(t, `runtime-read-${boundary}`);
+    await f.write(f.paths.shared, { profiles: { a: { agent: { worker: { model: 'fixture/beta' } } } } });
+    await f.host.start();
+    const context = await f.editor.context();
+    const preview = await f.editor.storage.previewSelection(context, 'a');
+    const committed =
+      boundary === 'dispose' ? await f.editor.storage.saveSelectionGuarded(context, preview) : undefined;
+    const connection = (committed ?? context).connection;
+    const readRuntime = connection.config.bind(connection);
+    let calls = 0;
+    connection.config = async () => {
+      const response = await readRuntime();
+      if (++calls === 2) {
+        await f.write(f.paths.shared, { profiles: { b: {} } });
+      }
+      return response;
+    };
+    if (committed === undefined) {
+      await assert.rejects(f.editor.storage.saveSelectionGuarded(context, preview), /Composition source changed/);
+      await assert.rejects(readFile(context.selection.path), /ENOENT/);
+    } else {
+      let disposed = false;
+      await assert.rejects(
+        f.editor.reload(committed, {
+          dispose: () => {
+            disposed = true;
+            return Promise.resolve();
+          },
+        }),
+        /Composition source changed/,
+      );
+      assert.equal(disposed, false);
+      assert.equal(await readFile(committed.selection.path, 'utf8'), committed.selection.text);
+    }
+    assert.equal(calls, 2);
+  });
+}

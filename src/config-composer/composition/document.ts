@@ -38,6 +38,9 @@ function permission(value: unknown, path: string): void {
     if (action(entry)) {
       continue;
     }
+    if (['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'].includes(key)) {
+      fail(`${path}/${pointer(key)}`, 'Expected a permission action.');
+    }
     if (!record(entry) || !Object.values(entry).every(action)) {
       fail(`${path}/${pointer(key)}`, 'Expected an action or pattern block.');
     }
@@ -60,7 +63,7 @@ function patch(value: unknown, kind: 'agent' | 'command', path: string) {
         fail(at, 'Expected a boolean.');
       }
     } else if (key === 'mode') {
-      if (!['primary', 'subagent', 'all'].includes(String(v))) {
+      if (typeof v !== 'string' || !['primary', 'subagent', 'all'].includes(v)) {
         fail(at, 'Expected primary, subagent or all.');
       }
     } else if (key === 'temperature' || key === 'top_p') {

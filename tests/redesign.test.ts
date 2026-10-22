@@ -218,3 +218,37 @@ test('Composer scalar policies normalize before hook output and replace the whol
   );
   assert.deepEqual(group.agent.worker.permission, { '*': 'ask' });
 });
+
+test('native action-only permissions reject pattern maps across every authored layer', () => {
+  for (const tool of ['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop']) {
+    for (const value of [{}, { '*': 'deny' }]) {
+      const patch = { permission: { [tool]: value } };
+      for (const document of [
+        { agent: { worker: patch } },
+        { groups: [{ name: 'workers', members: { agent: ['worker'] }, agent: patch }] },
+        { profiles: { inactive: { agent: { worker: patch } } } },
+        {
+          groups: [{ name: 'workers', members: { agent: ['worker'] } }],
+          profiles: { inactive: { groups: [{ name: 'workers', agent: patch }] } },
+        },
+      ]) {
+        assert.throws(() => read(document), /Expected a permission action/);
+      }
+    }
+    assert.doesNotThrow(() => read({ agent: { worker: { permission: { [tool]: 'ask' } } } }));
+  }
+  for (const permission of [{}, { bash: {}, read: { '*.md': 'ask' }, custom_tool: { '*': 'deny' } }]) {
+    assert.doesNotThrow(() => read({ agent: { worker: { permission } } }));
+  }
+});
+
+test('mode rejects singleton and nested arrays, including inactive profile settings', () => {
+  for (const mode of [['primary'], ['subagent'], ['all'], [[['primary']]]]) {
+    for (const document of [
+      { agent: { worker: { mode } } },
+      { profiles: { inactive: { agent: { worker: { mode } } } } },
+    ]) {
+      assert.throws(() => read(document), /Expected primary, subagent or all/);
+    }
+  }
+});

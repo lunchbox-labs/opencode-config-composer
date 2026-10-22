@@ -94,6 +94,13 @@
             },
             {
               "type": "object",
+              "properties": {
+                "todowrite": { "enum": ["allow", "ask", "deny"] },
+                "question": { "enum": ["allow", "ask", "deny"] },
+                "webfetch": { "enum": ["allow", "ask", "deny"] },
+                "websearch": { "enum": ["allow", "ask", "deny"] },
+                "doom_loop": { "enum": ["allow", "ask", "deny"] }
+              },
               "additionalProperties": {
                 "anyOf": [
                   {

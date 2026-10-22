@@ -224,8 +224,8 @@ export async function saveSelection(
   snapshot: SelectionSnapshot,
   choice: Selection,
   validate: () => Promise<void>,
-): Promise<void> {
-  await withSelectionLock(snapshot, async () => {
+): Promise<SelectionSnapshot> {
+  return withSelectionLock(snapshot, async () => {
     await validate();
     const temporary = join(dirname(snapshot.path), `.selection-${randomUUID()}.tmp`);
     try {
@@ -242,9 +242,11 @@ export async function saveSelection(
       } finally {
         await file.close();
       }
+      const committed = await observe(temporary);
       await validate();
       await verifySelection(snapshot);
       await rename(temporary, snapshot.path);
+      return { ...committed, path: snapshot.path };
     } finally {
       await unlink(temporary).catch(() => undefined);
     }

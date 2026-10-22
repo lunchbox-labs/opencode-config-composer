@@ -24,3 +24,31 @@ test('shipped examples validate against strict schema and target native builtins
     }
   }
 });
+
+test('published schema uses native action-only permissions and string modes in every agent patch', async () => {
+  const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as object;
+  const validate = new Ajv({ strict: false }).compile(schema);
+  for (const tool of ['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop']) {
+    for (const value of [{}, { '*': 'deny' }]) {
+      const patch = { permission: { [tool]: value } };
+      for (const document of [
+        { agent: { worker: patch } },
+        { groups: [{ name: 'workers', members: { agent: ['worker'] }, agent: patch }] },
+        { profiles: { inactive: { agent: { worker: patch } } } },
+      ]) {
+        assert.equal(validate(document), false, JSON.stringify(document));
+      }
+    }
+    assert.equal(validate({ agent: { worker: { permission: { [tool]: 'ask' } } } }), true);
+  }
+  for (const mode of [['primary'], ['subagent'], ['all'], [[['primary']]]]) {
+    assert.equal(validate({ profiles: { inactive: { agent: { worker: { mode } } } } }), false);
+  }
+  assert.equal(
+    validate({
+      agent: { worker: { permission: { bash: {}, read: { '*.md': 'ask' }, custom_tool: { '*': 'deny' } } } },
+    }),
+    true,
+  );
+  assert.equal(validate({ agent: { worker: { permission: {} } } }), true);
+});

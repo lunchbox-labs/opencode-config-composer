@@ -1,4 +1,5 @@
 import { dirname } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { type CatalogModel, SettingsError, validateChoice } from './settings.ts';
 import { type Source, loadSource } from './composition/sources.ts';
 import {
@@ -46,7 +47,7 @@ export async function loadEditorContext(connection: EditorConnection): Promise<E
   connection.assertCurrent();
   return { connection, runtime, source, selection };
 }
-export async function verifyContext(context: EditorContext, checkRuntime = true): Promise<void> {
+async function verifyInputs(context: EditorContext): Promise<void> {
   const { connection, runtime, source, selection } = context;
   connection.assertCurrent();
   await verifySelectionProof(runtime.selectionEnvironment);
@@ -72,6 +73,11 @@ export async function verifyContext(context: EditorContext, checkRuntime = true)
   if (observed.json !== runtime.observation.json) {
     throw new SettingsError(jsonChanged);
   }
+  connection.assertCurrent();
+}
+export async function verifyContext(context: EditorContext, checkRuntime = true): Promise<void> {
+  const { connection, runtime } = context;
+  await verifyInputs(context);
   if (checkRuntime) {
     const currentRuntime = readRuntimeContext(await connection.config(), connection.location);
     if (
@@ -81,6 +87,9 @@ export async function verifyContext(context: EditorContext, checkRuntime = true)
     ) {
       throw new SettingsError('The running instance changed. Reopen the editor.');
     }
+    // A runtime read can yield while local inputs change. Verify the reviewed
+    // observations again before a caller may persist state or dispose the instance.
+    await verifyInputs(context);
   }
   connection.assertCurrent();
 }
@@ -130,10 +139,17 @@ export async function saveSelectionGuarded(context: EditorContext, preview: Prev
   ) {
     throw new SettingsError('Preview does not match the attested context. Review again.');
   }
-  await saveSelection(context.selection, preview.choice, () => verifyContext(context));
+  const persisted = await saveSelection(context.selection, preview.choice, () => verifyContext(context));
   try {
     const committed = await loadEditorContext(context.connection);
-    await verifyContext(committed);
+    if (
+      !isDeepStrictEqual(committed.selection, persisted) ||
+      !isDeepStrictEqual(committed.source, context.source) ||
+      !isDeepStrictEqual(committed.runtime, context.runtime)
+    ) {
+      throw new SettingsError('Saved selection or reviewed inputs changed. Review again.');
+    }
+    await verifyContext({ ...context, selection: persisted });
     return committed;
   } catch (error) {
     throw new SettingsError(

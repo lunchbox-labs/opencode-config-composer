@@ -13,7 +13,7 @@ import {
 } from '../src/config-composer/storage.ts';
 import { readRuntimeContext } from '../src/config-composer/composition/runtime-baseline.ts';
 import { applySavedComposition } from '../src/config-composer/composition/apply.ts';
-import { readSelection } from '../src/config-composer/composition/selection-state.ts';
+import { readSelection, saveSelection } from '../src/config-composer/composition/selection-state.ts';
 import type { PluginInput } from '@opencode-ai/plugin';
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'composer-redesign-'));
@@ -293,4 +293,99 @@ test('runtime replacement during idle check rejects before disposal and preview 
     /running instance changed/,
   );
   assert.equal(disposed, false);
+});
+
+for (const boundary of ['save', 'dispose'] as const) {
+  for (const mutation of ['source', 'metadata', 'json'] as const) {
+    test(`${boundary} rejects ${mutation} changes during the final runtime-config await`, async (t) => {
+      const f = await fixture(t);
+      const context = await loadEditorContext(f.connection);
+      const preview = await previewSelection(context, 'a');
+      const committed = boundary === 'dispose' ? await saveSelectionGuarded(context, preview) : undefined;
+      let calls = 0;
+      f.connection.config = async () => {
+        if (++calls === 2) {
+          if (mutation === 'source') {
+            await writeFile(f.source, JSON.stringify({ profiles: { b: f.document.profiles.b } }));
+          } else if (mutation === 'metadata') {
+            await mkdir(join(f.root, 'agents'));
+            await writeFile(join(f.root, 'agents/worker.md'), '---\n---\nnew native body');
+          } else {
+            await writeFile(join(f.root, 'opencode.json'), '{}');
+          }
+        }
+        return f.config;
+      };
+      const diagnostic =
+        mutation === 'source'
+          ? /Composition source changed/
+          : mutation === 'metadata'
+            ? /Native agent metadata changed/
+            : /Native JSON configuration changed/;
+      if (committed === undefined) {
+        await assert.rejects(saveSelectionGuarded(context, preview), diagnostic);
+        await assert.rejects(readFile(context.selection.path), /ENOENT/);
+      } else {
+        let disposed = false;
+        await assert.rejects(
+          applySavedComposition(committed, committed.runtime, {
+            assertCurrent: () => {},
+            activity: () => Promise.resolve({}),
+            dispose: () => {
+              disposed = true;
+              return Promise.resolve();
+            },
+            refresh: () => Promise.reject(new Error('unreachable refresh after stale inputs')),
+          }),
+          diagnostic,
+        );
+        assert.equal(disposed, false);
+        assert.equal(await readFile(committed.selection.path, 'utf8'), committed.selection.text);
+      }
+      assert.equal(calls, 2, 'the mutation was injected in the last runtime verification');
+    });
+  }
+}
+
+test("committed reload never adopts another normal writer's selection", async (t) => {
+  const f = await fixture(t);
+  const context = await loadEditorContext(f.connection);
+  const preview = await previewSelection(context, 'a');
+  let calls = 0;
+  let otherSaved = false;
+  f.connection.config = async () => {
+    if (++calls === 3) {
+      const other = await readSelection(context.runtime.selectionEnvironment, {
+        root: f.root,
+        baseFile: f.source,
+      });
+      await saveSelection(other, 'b', () => Promise.resolve());
+      otherSaved = true;
+    }
+    return f.config;
+  };
+  await assert.rejects(saveSelectionGuarded(context, preview), /Selection saved and pending.*changed/);
+  assert.equal(otherSaved, true, 'the second writer used the ordinary locked state API');
+  const current = await readSelection(context.runtime.selectionEnvironment, { root: f.root, baseFile: f.source });
+  assert.equal(current.choice, 'b');
+  assert.equal(current.revision, 2);
+  assert.equal(f.config.agent.worker.model, 'p/a', 'the other selection was never applied by this editor');
+});
+
+test('committed reload preserves the reviewed source instead of adopting a changed definition', async (t) => {
+  const f = await fixture(t);
+  const context = await loadEditorContext(f.connection);
+  const preview = await previewSelection(context, 'a');
+  let calls = 0;
+  f.connection.config = async () => {
+    if (++calls === 3) {
+      await writeFile(f.source, JSON.stringify({ profiles: { a: { agent: { worker: { model: 'p/unreviewed' } } } } }));
+    }
+    return f.config;
+  };
+  await assert.rejects(saveSelectionGuarded(context, preview), /Selection saved and pending.*changed/);
+  const current = await readSelection(context.runtime.selectionEnvironment, { root: f.root, baseFile: f.source });
+  assert.equal(current.choice, 'a');
+  assert.equal(current.revision, 1);
+  assert.equal(f.config.agent.worker.model, 'p/a');
 });

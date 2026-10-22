@@ -88,3 +88,50 @@ test(
     assert.equal(await readFile(join(f.host.project, 'opencode.jsonc'), 'utf8'), projectBytes);
   },
 );
+
+test(
+  'invalid Composer permission and mode values leave native endpoints readable and publish errors',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'invalid-native-values');
+    const documents = [
+      ...['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'].flatMap((tool) =>
+        [{}, { '*': 'deny' }].map((value) => ({
+          model: 'fixture/beta',
+          agent: { worker: { temperature: 0.9, permission: { [tool]: value } } },
+        })),
+      ),
+      {
+        groups: [{ name: 'bad', members: { agent: ['worker'] }, agent: { permission: { webfetch: {} } } }],
+      },
+      ...[['primary'], ['subagent'], ['all'], [[['primary']]]].map((mode) => ({
+        agent: { worker: { model: 'fixture/beta' } },
+        profiles: { inactive: { agent: { worker: { mode } } } },
+      })),
+    ];
+    const nativeBytes = await readFile(f.paths.native, 'utf8');
+    for (const [index, document] of documents.entries()) {
+      await f.write(f.paths.shared, document);
+      if (index === 0) {
+        await f.host.start();
+      } else {
+        await f.host.api('/instance/dispose', {});
+      }
+      const config = await f.host.api<{ model: string; agent: Record<string, Record<string, unknown>> }>('/config');
+      assert.equal(config.model, f.native.model);
+      assert.equal(config.agent.worker.model, undefined);
+      assert.equal(config.agent.worker.temperature, undefined);
+      assert.equal(config.agent.worker.mode, 'primary');
+      const runtime = await f.editor.runtime();
+      assert.equal(runtime.status, 'error');
+      assert.equal(runtime.revision, undefined);
+      assert.match(runtime.diagnostic!, /Composer not applied.*Expected/);
+      const agents = await f.host.api<{ name: string; mode: string }[]>('/agent');
+      assert.equal(agents.find((agent) => agent.name === 'worker')?.mode, 'primary');
+    }
+    assert.equal(await readFile(f.paths.native, 'utf8'), nativeBytes);
+    await f.write(f.paths.shared, {});
+    await f.host.api('/instance/dispose', {});
+    assert.equal((await f.editor.runtime()).status, 'applied');
+  },
+);
