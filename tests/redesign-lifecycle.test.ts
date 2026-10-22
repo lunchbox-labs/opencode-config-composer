@@ -19,6 +19,7 @@ import {
 import { readRuntimeContext } from '../src/config-composer/composition/runtime-baseline.ts';
 import { applySavedComposition } from '../src/config-composer/composition/apply.ts';
 import { readSelection, saveSelection } from '../src/config-composer/composition/selection-state.ts';
+import { observeNative } from '../src/config-composer/composition/revision.ts';
 import type { PluginInput } from '@opencode-ai/plugin';
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'composer-redesign-'));
@@ -127,6 +128,62 @@ test('selection A B A none default restores native fields for fresh and reused o
   await f.hook(f.config);
   assert.equal(f.config.agent.worker.model, 'p/native');
   assert.equal((f.config.agent.worker as Record<string, unknown>).variant, undefined);
+});
+test('native enumeration order permits guarded recomposition without changing source or permission precedence', async (t) => {
+  const f = await fixture(t);
+  const projectAgent = join(f.root, '.opencode/agents/worker.md');
+  const customAgent = join(f.root, 'agents/worker.md');
+  await mkdir(join(f.root, '.opencode/agents'), { recursive: true });
+  await mkdir(join(f.root, 'agents'));
+  await writeFile(projectAgent, '---\nmodel: p/project\n---\nproject body');
+  await writeFile(
+    customAgent,
+    '---\nmodel: p/pinned\npermission:\n  edit:\n    "*.md": deny\n    "*": allow\n  read: ask\n---\ncustom body',
+  );
+  await writeFile(join(f.root, '.opencode/agents/helper.md'), '---\n---\nhelper body');
+  const original = fs.promises.readdir;
+  let reverse = false;
+  const mock = t.mock.method(fs.promises, 'readdir', async (...args: Parameters<typeof fs.promises.readdir>) => {
+    const entries = await original(...args);
+    return reverse ? entries.reverse() : entries;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  });
+  f.config = f.base();
+  Object.assign(f.config.agent, { helper: { prompt: 'helper body' } });
+  await f.hook(f.config);
+  const before = readRuntimeContext(f.config, f.connection.location);
+  reverse = true;
+  const observed = await observeNative(before.observation.context);
+  assert.deepEqual(Object.keys(observed.authority), Object.keys(before.observation.authority).reverse());
+  assert.deepEqual(observed.authority, before.observation.authority);
+  assert.equal(observed.metadata, before.observation.metadata);
+  assert.deepEqual(
+    observed.authority.worker.sources.map((source) => source.path),
+    [projectAgent, customAgent],
+  );
+  for (const choice of ['b', null, 'a'] as const) {
+    const context = await loadEditorContext(f.connection);
+    const committed = await saveSelectionGuarded(context, await previewSelection(context, choice));
+    await applySavedComposition(committed, committed.runtime, {
+      assertCurrent: f.connection.assertCurrent,
+      activity: () => Promise.resolve({}),
+      dispose: () => Promise.resolve(),
+      refresh: async () => {
+        await f.hook(f.config);
+        return readRuntimeContext(f.config, f.connection.location);
+      },
+    });
+    assert.equal(f.config.agent.worker.model, 'p/pinned');
+    const permission = (f.config.agent.worker as Record<string, unknown>).permission as Record<string, unknown>;
+    assert.deepEqual(Object.keys(permission), ['edit', 'read']);
+    assert.deepEqual(Object.keys(permission.edit as object), ['*.md', '*']);
+    assert.deepEqual(permission, { edit: { '*.md': 'deny', '*': 'allow' }, read: 'ask' });
+    reverse = !reverse;
+  }
 });
 test('deleted saved profile publishes recoverable failure without successful revision or partial mutation', async (t) => {
   const f = await fixture(t);

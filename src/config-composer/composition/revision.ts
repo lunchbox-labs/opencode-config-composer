@@ -122,8 +122,11 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
       .map((path) => observation(path)),
   );
   const sources = await Promise.all(
-    Object.values(authority)
-      .flatMap((item) => item.sources)
+    // Independent agents may be enumerated differently by the native host and editor.
+    // Keep each agent's source chain in native precedence order.
+    Object.keys(authority)
+      .sort()
+      .flatMap((name) => authority[name].sources)
       .map(async (source) => [source, await observation(source.path)]),
   );
   return {
