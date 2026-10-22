@@ -18,6 +18,7 @@ import {
   type CompositionRevision,
   compositionRevision,
   digest,
+  nativeCommandPaths,
   nativeJsonPaths,
   observeNative,
 } from './composition/revision.ts';
@@ -171,7 +172,11 @@ export async function saveSelectionGuarded(context: EditorContext, preview: Prev
   }
 }
 async function verifyDocumentContext(context: EditorContext): Promise<void> {
-  const native = await Promise.all(nativeJsonPaths(context.runtime.observation.context).map((path) => canonical(path)));
+  await verifyContext(context);
+  const discovery = context.runtime.observation.context;
+  const native = await Promise.all(
+    [...nativeJsonPaths(discovery), ...(await nativeCommandPaths(discovery))].map((path) => canonical(path)),
+  );
   const markdown = Object.values(context.runtime.observation.authority).flatMap((agent) =>
     agent.sources.map((source) => source.canonicalPath),
   );
@@ -180,7 +185,7 @@ async function verifyDocumentContext(context: EditorContext): Promise<void> {
       'Native JSON and Markdown sources are read-only. Choose a separate Config Composer definition file before editing.',
     );
   }
-  await verifyContext(context);
+  context.connection.assertCurrent();
 }
 export interface DocumentPreview extends Preview {
   text: string;

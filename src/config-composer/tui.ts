@@ -213,15 +213,26 @@ export function registerSettings(api: TuiPluginApi): void {
     const context = await loadEditorContext(connection());
     const confirm = (view: EditorView, preview: Preview | DocumentPreview, title: string, destination: string) => {
       api.ui.dialog.setSize('xlarge');
-      const changes = Object.entries(preview.candidate.decisions).filter(
-        ([path, decision]) =>
-          !isDeepStrictEqual(decision, context.runtime.candidate?.decisions[path]) ||
-          decision.blockedComposer !== undefined,
-      );
+      const previous = context.runtime.candidate?.decisions ?? {};
+      const proposed = preview.candidate.decisions;
+      const changes = [...new Set([...Object.keys(previous), ...Object.keys(proposed)])]
+        .map((path) => [path, Object.hasOwn(proposed, path) ? proposed[path] : undefined] as const)
+        .filter(
+          ([path, decision]) => !isDeepStrictEqual(decision, previous[path]) || decision?.blockedComposer !== undefined,
+        );
       const describe = (entries: typeof changes) =>
-        entries.map(([path, decision]) => `${path}\n${fieldDetail(view, path, decision)}`).join('\n\n');
-      const effective = describe(changes.filter(([, decision]) => decision.origin.kind !== 'frontmatter'));
-      const pinned = describe(changes.filter(([, decision]) => decision.origin.kind === 'frontmatter'));
+        entries
+          .map(
+            ([path, decision]) =>
+              `${path}\n${
+                decision === undefined
+                  ? `Removed contribution: inherit/native fallback.\nNative inheritance remains host-owned.\nPreviously configured:\n${fieldDetail(view, path, previous[path])}`
+                  : fieldDetail(view, path, decision)
+              }`,
+          )
+          .join('\n\n');
+      const effective = describe(changes.filter(([, decision]) => decision?.origin.kind !== 'frontmatter'));
+      const pinned = describe(changes.filter(([, decision]) => decision?.origin.kind === 'frontmatter'));
       const effects = [
         effective === '' ? '' : `Effective changes:\n${effective}`,
         pinned === '' ? '' : `Pinned members retain frontmatter:\n${pinned}`,

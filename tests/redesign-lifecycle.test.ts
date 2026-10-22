@@ -582,19 +582,31 @@ for (const external of [false, true]) {
   });
 }
 
-for (const alias of ['direct', 'symlink', 'explicit-native', 'markdown'] as const) {
+for (const alias of [
+  'direct',
+  'symlink',
+  'explicit-native',
+  'markdown',
+  'command-direct',
+  'command-symlink',
+] as const) {
   test(`document authoring refuses the native ${alias} source identity without writing`, async (t) => {
     const f = await fixture(t);
     const native = join(
       f.root,
       alias === 'markdown'
         ? 'agents/worker.md'
-        : alias === 'explicit-native'
-          ? 'native-custom.jsonc'
-          : 'opencode.jsonc',
+        : alias.startsWith('command-')
+          ? 'commands/run.md'
+          : alias === 'explicit-native'
+            ? 'native-custom.jsonc'
+            : 'opencode.jsonc',
     );
     if (alias === 'markdown') {
       await mkdir(join(f.root, 'agents'));
+    }
+    if (alias.startsWith('command-')) {
+      await mkdir(join(f.root, 'commands'));
     }
     await writeFile(native, '{"model":"p/a"}');
     if (alias === 'explicit-native') {
@@ -608,12 +620,12 @@ for (const alias of ['direct', 'symlink', 'explicit-native', 'markdown'] as cons
         }
       });
     }
-    if (alias !== 'direct') {
+    if (alias !== 'direct' && alias !== 'command-direct') {
       await unlink(f.source);
       await symlink(native, f.source);
     }
     const hook =
-      alias === 'direct'
+      alias === 'direct' || alias === 'command-direct'
         ? (await descriptor.server({ directory: f.root, worktree: f.root } as PluginInput, { configFile: native }))
             .config!
         : f.hook;
@@ -630,6 +642,37 @@ for (const alias of ['direct', 'symlink', 'explicit-native', 'markdown'] as cons
     assert.equal(await readFile(native, 'utf8'), before, 'native source bytes never change');
     assert.ok(rejection instanceof Error);
     assert.match(rejection.message, /Native.*read-only/);
+  });
+}
+
+for (const boundary of ['previewed', 'last-runtime-read'] as const) {
+  test(`command alias created after ${boundary} cannot rewrite a native command body`, async (t) => {
+    const f = await fixture(t);
+    const command = join(f.root, 'command/nested/run.md');
+    await mkdir(join(f.root, 'command/nested'), { recursive: true });
+    const context = await loadEditorContext(f.connection);
+    const preview = await previewDocument(
+      context,
+      setSetting(context.source.text!, { kind: 'agent', name: 'worker' }, 'temperature', 0),
+    );
+    const introduce = () => symlink(f.source, command);
+    if (boundary === 'previewed') {
+      await introduce();
+    } else {
+      const original = f.connection.config;
+      let calls = 0;
+      f.connection.config = async () => {
+        const result = await original();
+        if (++calls === 3) {
+          await introduce();
+        }
+        return result;
+      };
+    }
+    const before = await readFile(f.source, 'utf8');
+    await assert.rejects(saveDocumentGuarded(context, preview), /Native.*read-only/);
+    assert.equal(await readFile(command, 'utf8'), before);
+    assert.equal(await readFile(f.source, 'utf8'), before);
   });
 }
 
@@ -650,7 +693,10 @@ for (const retarget of ['source', 'native'] as const) {
       await symlink(f.source, native);
     }
     const before = await readFile(native, 'utf8');
-    await assert.rejects(saveDocumentGuarded(context, preview), /source changed|Native.*read-only/);
+    await assert.rejects(
+      saveDocumentGuarded(context, preview),
+      /source changed|Native.*(?:read-only|configuration changed)/,
+    );
     assert.equal(await readFile(native, 'utf8'), before, 'late alias rejection leaves native bytes unchanged');
   });
 }

@@ -6,6 +6,38 @@ import { compositionFixture } from './composition-fixture.ts';
 import { nativeTerminal } from './terminal.ts';
 import { readPreview, reloadFromTerminal } from './terminal-editor.ts';
 test(
+  'terminal no-profile preview discloses a removed field before its single Apply',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'terminal-removal');
+    await f.write(f.paths.shared, {
+      defaultProfile: 'a',
+      profiles: { a: { agent: { helper: { top_p: 0.7 } } } },
+    });
+    const source = await readFile(f.paths.shared, 'utf8');
+    const native = await readFile(f.paths.native, 'utf8');
+    await f.host.start();
+    assert.equal((await f.editor.runtime()).candidate?.agent.helper.top_p, 0.7);
+    const session = await f.host.api<{ id: string }>('/session', { title: 'Removal journey' });
+    const terminal = await nativeTerminal(f.host, session.id, 'terminal-removal');
+    await terminal.wait(['ctrl+p', 'commands']);
+    await terminal.command('/compose-configs', 'Compose configs');
+    await terminal.choose('Profile', 'Use configured default');
+    await terminal.choose('No profile — keep shared settings', 'Apply profile selection?');
+    const preview = await readPreview(terminal, 'Apply profile selection?');
+    assert.match(preview, /\/agent\/helper\/top_p/);
+    assert.match(preview, /Removed contribution: inherit\/native fallback/);
+    assert.match(preview, /Previously configured/);
+    assert.match(preview, /0\.7/);
+    await reloadFromTerminal(f, terminal);
+    assert.equal((await f.editor.runtime()).candidate?.agent.helper.top_p, undefined);
+    assert.equal((await f.editor.context()).selection.choice, null);
+    assert.equal(await readFile(f.paths.shared, 'utf8'), source);
+    assert.equal(await readFile(f.paths.native, 'utf8'), native);
+    assert.equal(f.host.requests.length, 0);
+  },
+);
+test(
   'terminal profile selection previews pins, cancels, applies once and inspects raw final authority',
   { timeout: 240000 },
   async (t) => {

@@ -13,6 +13,7 @@ import type {
 import descriptor from '../src/config-composer/server.ts';
 import { registerSettings } from '../src/config-composer/tui.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
+import { setSetting } from '../src/config-composer/composition/authoring.ts';
 
 type Dialog = { title: string; message?: string } & Partial<
   TuiDialogSelectProps<string> & TuiDialogPromptProps & TuiDialogConfirmProps
@@ -163,6 +164,17 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     api.ui.dialog.clear();
     await wait(next);
   };
+  const preview = async () => {
+    const title = current!.title;
+    let text = current?.message ?? '';
+    const pages = current?.options?.filter((option) => option.title.startsWith('Review page')) ?? [];
+    for (const page of pages) {
+      await choose(page.title, `Preview · ${Number(page.value) + 1}/${pages.length}`);
+      text += current?.message ?? '';
+      await escape(title);
+    }
+    return text;
+  };
   command();
   await wait('Compose configs');
   return {
@@ -174,6 +186,7 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     escape,
     confirm,
     input,
+    preview,
     wait,
     reopen: async () => {
       api.ui.dialog.clear();
@@ -324,6 +337,10 @@ test('a profile edit remains in that profile even while no profile is selected',
   await f.choose('temperature', 'Profile a · workers · temperature');
   await f.choose('Edit value', 'Profile a · workers · temperature');
   await f.input('0', 'Apply document changes?');
+  const text = await f.preview();
+  assert.match(text, /Profile a · workers/);
+  assert.match(text, /Authored changes:[\s\S]*\/profiles\/a\/groups\/0\/agent\/temperature: 0/);
+  assert.match(text, /No effective managed fields change for the current choice/);
   await f.confirm('Composer revision applied');
   const document = JSON.parse(await f.read()) as {
     groups: { agent: { temperature: number } }[];
@@ -450,3 +467,52 @@ test('profile preview separates pinned members from effective changes', async (t
   assert.match(text, /Blocked Composer value/);
   assert.equal(f.disposed, 0);
 });
+
+for (const choice of ['No profile — keep shared settings', '○ b']) {
+  test(`selection ${choice} previews a disappearing managed field before applying`, async (t) => {
+    const f = await fixture(t);
+    await writeFile(
+      f.source,
+      setSetting(await f.read(), { profile: 'a', kind: 'agent', name: 'helper' }, 'top_p', 0.7),
+    );
+    await f.reopen();
+    await f.choose('Profile', 'Profile');
+    await f.choose('○ a', 'Apply profile selection?');
+    await f.confirm('Composer revision applied');
+    assert.equal((f.config.agent.helper as Record<string, unknown>).top_p, 0.7);
+    await f.reopen();
+    await f.choose('Profile', 'Profile');
+    await f.choose(choice, 'Apply profile selection?');
+    const text = await f.preview();
+    assert.match(text, /Effective changes:[\s\S]*\/agent\/helper\/top_p/);
+    assert.match(text, /Removed contribution: inherit\/native fallback/);
+    assert.match(text, /Previously configured:[\s\S]*top_p: 0\.7/);
+    assert.match(text, /\/profiles\/a\/agent\/helper\/top_p/);
+    await f.confirm('Composer revision applied');
+    assert.equal((f.config.agent.helper as Record<string, unknown>).top_p, undefined);
+    assert.equal(f.disposed, 2, 'each choice applied after one confirmation');
+  });
+}
+for (const edit of ['field', 'member'] as const) {
+  test(`document ${edit} removal previews disappearing effective contributions`, async (t) => {
+    const f = await fixture(t, '', { top_p: 0.7 });
+    await f.choose('Groups', 'Groups · shared');
+    await f.choose('workers', 'Shared · workers');
+    if (edit === 'field') {
+      await f.choose('Agent settings for members', 'Shared · workers · agent settings');
+      await f.choose('top_p', 'Shared · workers · top_p');
+      await f.choose('Inherit/remove this authored setting', 'Apply document changes?');
+    } else {
+      await f.choose('Members', 'Members · workers');
+      await f.choose('✓ agent helper', 'Members · workers');
+      await f.choose('Review changes', 'Apply document changes?');
+    }
+    const text = await f.preview();
+    assert.match(text, /Authored changes:/);
+    assert.match(text, /Effective changes:[\s\S]*\/agent\/helper\/top_p/);
+    assert.match(text, /Removed contribution: inherit\/native fallback/);
+    await f.confirm('Composer revision applied');
+    assert.equal((f.config.agent.helper as Record<string, unknown>).top_p, undefined);
+    assert.equal((f.config.agent.worker as Record<string, unknown>).top_p, edit === 'member' ? 0.7 : undefined);
+  });
+}

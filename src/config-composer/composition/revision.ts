@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { type NativeFrontmatterContext, nativeAgentSourceRoots, readNativeAgentFrontmatter } from '../frontmatter.ts';
@@ -80,6 +80,38 @@ export function nativeJsonPaths(context: NativeFrontmatterContext): string[] {
     jsonPaths.add(explicit);
   }
   return [...jsonPaths];
+}
+/** Native command bodies are opaque; only discover their file identities for the write refusal. */
+export async function nativeCommandPaths(context: NativeFrontmatterContext): Promise<string[]> {
+  const paths: string[] = [];
+  const visited = new Set<string>();
+  const scan = async (directory: string): Promise<void> => {
+    const identity = await realpath(directory).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        return undefined;
+      }
+      throw error;
+    });
+    if (identity === undefined || visited.has(identity)) {
+      return;
+    }
+    visited.add(identity);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const info = entry.isSymbolicLink() ? await stat(path) : entry;
+      if (info.isDirectory()) {
+        await scan(path);
+      } else if (info.isFile() && entry.name.endsWith('.md')) {
+        paths.push(path);
+      }
+    }
+  };
+  for (const root of nativeAgentSourceRoots(context)) {
+    for (const name of ['command', 'commands']) {
+      await scan(join(root, name));
+    }
+  }
+  return paths;
 }
 export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
   const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));

@@ -1,8 +1,31 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { compositionFixture } from './composition-fixture.ts';
+test('installed source alias cannot rewrite a loaded native command Markdown body', { timeout: 240000 }, async (t) => {
+  const f = await compositionFixture(t, 'native-command-alias');
+  await mkdir(join(f.host.configRoot, 'commands'));
+  const native = join(f.host.configRoot, 'commands/alias-proof.md');
+  const before = '{"model":"fixture/alpha"}';
+  await writeFile(native, before);
+  await unlink(f.paths.shared);
+  await symlink(native, f.paths.shared);
+  await f.host.start();
+  const commands = await f.host.api<{ name: string; template: string }[]>('/command');
+  assert.equal(commands.find((command) => command.name === 'alias-proof')?.template, before);
+  const context = await f.editor.context();
+  await assert.rejects(
+    async () =>
+      f.editor.storage.saveDocumentGuarded(
+        context,
+        await f.editor.storage.previewDocument(context, '{"model":"fixture/beta"}'),
+      ),
+    /Native.*read-only/,
+  );
+  assert.equal(await readFile(native, 'utf8'), before);
+  assert.equal(f.host.requests.length, 0);
+});
 test(
   'installed guarded save rejects changed native inventories and JSON, and busy or failed apply retains pending state',
   { timeout: 240000 },
