@@ -11,7 +11,6 @@ import {
   loadConfigurationContext,
   previewSelection,
   saveSelectionGuarded,
-  verifyContext,
 } from './storage.ts';
 import { readRuntimeContext } from './composition/runtime-baseline.ts';
 import { type ApplyPort, applySavedComposition } from './composition/apply.ts';
@@ -271,9 +270,7 @@ export function registerConfiguration(api: TuiPluginApi): void {
       details,
       catalog: async () => {
         const checkpoint = nav.checkpoint();
-        await verifyContext(context);
         const response = await api.client.config.providers({ directory: context.connection.location.directory });
-        await verifyContext(context);
         if (!checkpoint()) {
           throw new SettingsError('The configuration view changed. Reopen Config Composer.');
         }

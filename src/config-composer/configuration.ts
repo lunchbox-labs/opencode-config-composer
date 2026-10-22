@@ -6,9 +6,7 @@ import { type Node as JsonNode, type ParseError, getNodeValue, parseTree, printP
 import { SettingsError, record } from './settings.ts';
 
 export interface ConfigurationFile {
-  path: string;
   text: string;
-  mode: number;
 }
 export const MAX_CONFIGURATION_BYTES = 1024 * 1024;
 
@@ -95,7 +93,7 @@ export async function configurationFile(path: string): Promise<ConfigurationFile
         throw new SettingsError('The Config Composer configuration must be no larger than 1 MiB.');
       }
       const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      return { path, text, mode: current.mode };
+      return { text };
     } finally {
       await file.close();
     }

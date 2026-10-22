@@ -8,7 +8,6 @@ import type { NativeBaseline, ResolvedCandidate } from './document-types.ts';
 import type { CompositionRevision, NativeObservation } from './revision.ts';
 import type { LoadedSource } from './sources.ts';
 import { readCompositionDocument } from './document.ts';
-import { builtins } from './runtime.ts';
 import type { SelectionEnvironment, SelectionLocator } from './selection-state.ts';
 export interface RuntimeLocation {
   root: string;
@@ -18,10 +17,7 @@ export interface RuntimeMarker {
   version: 2;
   id: string;
   location: RuntimeLocation;
-  configurationDirectory: string;
-  options: { configFile?: string };
   status: 'applied' | 'error';
-  builtins: typeof builtins;
   definitionId: string;
   source?: LoadedSource;
   selectionLocator?: SelectionLocator;
@@ -69,13 +65,12 @@ export function configFields(config: Record<string, unknown>): NativeBaseline {
 export function publishRuntime(
   config: Record<string, unknown>,
   options: Record<string, unknown>,
-  value: Omit<RuntimeMarker, 'version' | 'id' | 'applied' | 'builtins'>,
+  value: Omit<RuntimeMarker, 'version' | 'id' | 'applied'>,
 ): RuntimeMarker {
   const valueWithMetadata: RuntimeMarker = {
     ...value,
     version: 2,
     id: randomUUID(),
-    builtins,
     applied: metadata(configFields(config)),
   };
   // Native validates plugin options as JSON before serializing /config. Omit optional
@@ -183,16 +178,12 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
     typeof marker.source.canonicalPath !== 'string' ||
     !isAbsolute(marker.source.canonicalPath) ||
     !hash(marker.source.fingerprint) ||
-    typeof marker.source.explicit !== 'boolean' ||
     !record(marker.selectionLocator) ||
     typeof marker.selectionLocator.root !== 'string' ||
     !isAbsolute(marker.selectionLocator.root) ||
     typeof marker.selectionLocator.path !== 'string' ||
     !isAbsolute(marker.selectionLocator.path) ||
     marker.selectionLocator.baseFile !== marker.source.canonicalPath ||
-    typeof marker.configurationDirectory !== 'string' ||
-    !record(marker.options) ||
-    (Object.hasOwn(marker.options, 'configFile') && typeof marker.options.configFile !== 'string') ||
     !['applied', 'error'].includes(String(marker.status)) ||
     typeof marker.selectionEnvironment.stateDirectory !== 'string' ||
     typeof marker.selectionEnvironment.lifetime !== 'string' ||

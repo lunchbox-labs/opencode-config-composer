@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import descriptor from '../src/config-composer/server.ts';
+import { catalogModels } from '../src/config-composer/settings.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import {
   loadConfigurationContext,
@@ -15,10 +16,15 @@ import {
 } from '../src/config-composer/storage.ts';
 import { readRuntimeContext } from '../src/config-composer/composition/runtime-baseline.ts';
 import { applySavedComposition } from '../src/config-composer/composition/apply.ts';
-import { readSelection, saveSelection } from '../src/config-composer/composition/selection-state.ts';
+import {
+  canonical,
+  readSelectionAt,
+  saveSelection,
+  selectionLocator,
+} from '../src/config-composer/composition/selection-state.ts';
 import { observeNative } from '../src/config-composer/composition/revision.ts';
 import type { PluginInput } from '@opencode-ai/plugin';
-async function fixture(t: TestContext, sourceAlias = false) {
+async function fixture(t: TestContext, sourceAlias = false, sourceDocument?: Record<string, unknown>) {
   const root = await mkdtemp(join(tmpdir(), 'composer-redesign-'));
   const sourceDirectory = sourceAlias ? join(root, 'definition-alias') : root;
   if (sourceAlias) {
@@ -51,7 +57,7 @@ async function fixture(t: TestContext, sourceAlias = false) {
       b: { agent: { worker: { model: 'p/b' } } },
     },
   };
-  await writeFile(source, JSON.stringify(document));
+  await writeFile(source, JSON.stringify(sourceDocument ?? document));
   const hook = (
     await descriptor.server(
       { directory: root, worktree: root } as PluginInput,
@@ -134,7 +140,7 @@ for (const mutation of ['edit', 'invalid', 'delete', 'retarget'] as const) {
       assert.equal(f.config.agent.worker.model, choice === 'b' ? 'p/b' : choice === null ? 'p/native' : 'p/a');
       const current = await loadConfigurationContext(f.connection);
       assert.deepEqual(current.source, initial.source);
-      assert.deepEqual(current.runtime.options, initial.runtime.options);
+      assert.equal(current.runtime.definitionId, initial.runtime.definitionId);
       assert.equal(current.selection.path, initial.selection.path);
       assert.notEqual(current.runtime.id, initial.runtime.id);
     }
@@ -300,7 +306,7 @@ for (const mutation of ['state', 'metadata', 'json', 'connection'] as const) {
         if (mutation === 'connection') {
           f.disconnect();
         }
-        return [{ id: 'p/b', name: 'B', provider: 'p', variants: {} }];
+        return [{ id: 'p/b', variants: {} }];
       }),
       mutation === 'metadata' ? new RegExp(metadataChanged.replaceAll('.', '\\.')) : /changed|connection/i,
     );
@@ -367,11 +373,17 @@ test('fresh namespace separates canonical sources and worktrees and ignores old 
   const context = await loadConfigurationContext(f.connection);
   await saveSelectionGuarded(context, await previewSelection(context, null));
   const env = context.runtime.selectionEnvironment;
-  const same = await readSelection(env, { root: f.root, baseFile: f.source });
+  const same = await readSelectionAt(env, context.runtime.selectionLocator);
   assert.equal(same.choice, null);
-  const other = await readSelection(env, { root: join(f.root, 'other'), baseFile: f.source });
+  const other = await readSelectionAt(
+    env,
+    await selectionLocator(env, { root: join(f.root, 'other'), baseFile: await canonical(f.source) }),
+  );
   assert.equal(other.choice, undefined);
-  const source = await readSelection(env, { root: f.root, baseFile: join(f.root, 'other.jsonc') });
+  const source = await readSelectionAt(
+    env,
+    await selectionLocator(env, { root: f.root, baseFile: await canonical(join(f.root, 'other.jsonc')) }),
+  );
   assert.equal(source.choice, undefined);
   assert.match(same.path, /v2/);
 });
@@ -466,10 +478,7 @@ test("committed reread never adopts another normal writer's selection", async (t
   let otherSaved = false;
   f.connection.config = async () => {
     if (++calls === 3) {
-      const other = await readSelection(context.runtime.selectionEnvironment, {
-        root: f.root,
-        baseFile: f.source,
-      });
+      const other = await readSelectionAt(context.runtime.selectionEnvironment, context.runtime.selectionLocator);
       await saveSelection(other, 'b', () => Promise.resolve());
       otherSaved = true;
     }
@@ -477,7 +486,7 @@ test("committed reread never adopts another normal writer's selection", async (t
   };
   await assert.rejects(saveSelectionGuarded(context, preview), /Selection saved and pending.*changed/);
   assert.equal(otherSaved, true, 'the second writer used the ordinary locked state API');
-  const current = await readSelection(context.runtime.selectionEnvironment, { root: f.root, baseFile: f.source });
+  const current = await readSelectionAt(context.runtime.selectionEnvironment, context.runtime.selectionLocator);
   assert.equal(current.choice, 'b');
   assert.equal(current.revision, 2);
   assert.equal(f.config.agent.worker.model, 'p/a', 'the other selection was never applied by this editor');
@@ -496,7 +505,7 @@ test('committed reread preserves the reviewed source instead of adopting a chang
   };
   const committed = await saveSelectionGuarded(context, preview);
   assert.deepEqual(committed.source, context.source);
-  const current = await readSelection(context.runtime.selectionEnvironment, { root: f.root, baseFile: f.source });
+  const current = await readSelectionAt(context.runtime.selectionEnvironment, context.runtime.selectionLocator);
   assert.equal(current.choice, 'a');
   assert.equal(current.revision, 1);
   assert.equal(f.config.agent.worker.model, 'p/a');
@@ -730,8 +739,76 @@ for (const field of ['definitionId', 'selectionLocator', 'selection'] as const) 
       /did not confirm/,
     );
     assert.equal(
-      (await readSelection(saved.runtime.selectionEnvironment, { root: f.root, baseFile: f.source })).choice,
+      (await readSelectionAt(saved.runtime.selectionEnvironment, saved.runtime.selectionLocator)).choice,
       'b',
     );
+  });
+}
+
+for (const scenario of [
+  'fallback',
+  'empty-model',
+  'empty-variant',
+  'missing-variant',
+  'disabled-variant',
+  'unavailable-model',
+  'deprecated-model',
+  'command-model',
+] as const) {
+  test(`profile preview preserves catalog validation for ${scenario}`, async (t) => {
+    const f = await fixture(t, false, {
+      model: scenario === 'fallback' ? 'p/a' : undefined,
+      profiles: {
+        review: {
+          agent: {
+            worker: {
+              model: scenario === 'fallback' || scenario === 'empty-model' ? undefined : 'p/a',
+              variant: scenario === 'empty-variant' ? '' : 'high',
+            },
+          },
+          command: scenario === 'command-model' ? { run: { model: 'p/missing' } } : undefined,
+        },
+      },
+    });
+    f.config = f.base();
+    if (scenario === 'fallback' || scenario === 'empty-model') {
+      f.config.agent.worker.model = '';
+    }
+    await f.hook(f.config);
+    const context = await loadConfigurationContext(f.connection);
+    const catalog = () =>
+      Promise.resolve(
+        catalogModels([
+          null,
+          { id: 'broken', models: [] },
+          {
+            id: 'p',
+            models: {
+              malformed: null,
+              native: { variants: {} },
+              ...(scenario === 'unavailable-model'
+                ? {}
+                : {
+                    a: {
+                      status: scenario === 'deprecated-model' ? 'deprecated' : 'active',
+                      variants:
+                        scenario === 'missing-variant'
+                          ? { broken: null }
+                          : { high: { disabled: scenario === 'disabled-variant' } },
+                    },
+                  }),
+            },
+          },
+        ]),
+      );
+    const preview = previewSelection(context, 'review', catalog);
+    if (['missing-variant', 'disabled-variant'].includes(scenario)) {
+      await assert.rejects(preview, /variant is not available/);
+    } else if (['unavailable-model', 'deprecated-model', 'command-model'].includes(scenario)) {
+      await assert.rejects(preview, /model is no longer available/);
+    } else {
+      assert.equal((await preview).choice, 'review');
+    }
+    await assert.rejects(readFile(context.selection.path), /ENOENT/);
   });
 }

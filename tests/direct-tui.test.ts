@@ -4,20 +4,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
-import type {
-  TuiDialogConfirmProps,
-  TuiDialogPromptProps,
-  TuiDialogSelectProps,
-  TuiPluginApi,
-  TuiToast,
-} from '@opencode-ai/plugin/tui';
+import type { TuiDialogConfirmProps, TuiDialogSelectProps, TuiPluginApi, TuiToast } from '@opencode-ai/plugin/tui';
 import descriptor from '../src/config-composer/server.ts';
 import { registerConfiguration } from '../src/config-composer/tui.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
+import { loadConfigurationContext } from '../src/config-composer/storage.ts';
+import { readSelectionAt, saveSelection } from '../src/config-composer/composition/selection-state.ts';
 
-type Dialog = { title: string; message?: string } & Partial<
-  TuiDialogSelectProps<string> & TuiDialogPromptProps & TuiDialogConfirmProps
->;
+type Dialog = { title: string; message?: string } & Partial<TuiDialogSelectProps<string> & TuiDialogConfirmProps>;
 async function fixture(t: TestContext, pin = '', common: Record<string, unknown> = { temperature: 0.2 }) {
   const root = await mkdtemp(join(tmpdir(), 'composer-direct-tui-'));
   const keys = ['OPENCODE_CONFIG_DIR', 'OPENCODE_TEST_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME'];
@@ -46,6 +40,8 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     await mkdir(join(root, 'agents'));
     await writeFile(join(root, 'agents/worker.md'), `---\n${pin}\n---\nOPAQUE`);
   }
+  await mkdir(join(root, 'commands'));
+  await writeFile(join(root, 'commands/review.md'), '---\n---\nOPAQUE');
   const hook = (await descriptor.server({ directory: root, worktree: root } as PluginInput)).config!;
   const config = {
     plugin: [packageName],
@@ -58,11 +54,16 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
   const commands: { slashName: string; run: () => void }[] = [];
   let command = () => {};
   let disposed = 0;
+  let configReads = 0;
+  let afterConfigRead = () => Promise.resolve();
+  let catalogWait = () => Promise.resolve();
+  const rendered: string[] = [];
   let busy = false;
   const lifecycle = new AbortController();
   const toasts: TuiToast[] = [];
   const render = (props: Dialog) => {
     current = props;
+    rendered.push(props.title);
   };
   const api = {
     state: { path: { directory: root, worktree: root } },
@@ -77,19 +78,26 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     },
     client: {
       config: {
-        get: async () => ({ data: config }),
-        providers: async () => ({
-          data: {
-            providers: [
-              {
-                id: 'p',
-                models: Object.fromEntries(
-                  ['native', 'a', 'b'].map((id) => [id, { name: id, variants: { high: {} } }]),
-                ),
-              },
-            ],
-          },
-        }),
+        get: async () => {
+          configReads++;
+          await afterConfigRead();
+          return { data: config };
+        },
+        providers: async () => {
+          await catalogWait();
+          return {
+            data: {
+              providers: [
+                {
+                  id: 'p',
+                  models: Object.fromEntries(
+                    ['native', 'a', 'b'].map((id) => [id, { name: id, variants: { high: {} } }]),
+                  ),
+                },
+              ],
+            },
+          };
+        },
       },
       file: {
         read: async ({ path }: { path: string }) => ({
@@ -113,7 +121,6 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     ui: {
       toast: (toast: TuiToast) => toasts.push(toast),
       DialogSelect: render,
-      DialogPrompt: render,
       DialogConfirm: render,
       DialogAlert: render,
       dialog: {
@@ -163,11 +170,6 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     api.ui.dialog.clear();
     await wait(next);
   };
-  const input = async (value: string, next: string) => {
-    (current as TuiDialogPromptProps).onConfirm?.(value);
-    api.ui.dialog.clear();
-    await wait(next);
-  };
   const detailText = async () => {
     const title = current!.title;
     let text = current?.message ?? '';
@@ -205,10 +207,48 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     source,
     root,
     config,
+    rendered,
+    get configReads() {
+      return configReads;
+    },
+    onConfigRead: (operation: () => Promise<void>) => {
+      afterConfigRead = operation;
+    },
+    holdCatalog: () => {
+      const entered = Promise.withResolvers<undefined>();
+      const pending = Promise.withResolvers<undefined>();
+      catalogWait = () => {
+        entered.resolve(undefined);
+        return pending.promise;
+      };
+      return { entered: entered.promise, release: () => pending.resolve(undefined) };
+    },
+    startChoice: (title: string) => {
+      const option = current?.options?.find((item) => item.title === title);
+      assert.ok(option !== undefined);
+      current?.onSelect?.(option);
+    },
+    context: () =>
+      loadConfigurationContext({
+        location: { root, directory: root },
+        assertCurrent: () => {},
+        config: async () => config,
+        proveFilesystem: async () => {},
+      }),
+    reopenAfterPending: async () => {
+      api.ui.dialog.clear();
+      for (let i = 0; i < 1000; i++) {
+        command();
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        if (current?.title === 'Profiles') {
+          return;
+        }
+      }
+      assert.fail('The pending profile action did not finish');
+    },
     choose,
     escape,
     confirm,
-    input,
     preview,
     detailText,
     wait,
@@ -337,9 +377,8 @@ test('busy selection remains saved and pending without disposal', async (t) => {
 test('deleted saved profile can be recovered through Shared only', async (t) => {
   const f = await fixture(t);
   const { readRuntimeContext } = await import('../src/config-composer/composition/runtime-baseline.ts');
-  const { readSelection, saveSelection } = await import('../src/config-composer/composition/selection-state.ts');
   const runtime = readRuntimeContext(f.config, { root: f.root, directory: f.root });
-  const selection = await readSelection(runtime.selectionEnvironment, { root: f.root, baseFile: f.source });
+  const selection = await readSelectionAt(runtime.selectionEnvironment, runtime.selectionLocator);
   await saveSelection(selection, 'deleted', async () => {});
   await f.reopen();
   await f.choose('Shared only', 'Apply profile selection?');
@@ -454,3 +493,115 @@ test('profile apply only reports applied after the new registration is attested'
   assert.equal(f.disposed, 1);
   assert.equal(f.toasts.length, 0);
 });
+
+test('profile catalog preview uses only the outer before/after runtime checks', async (t) => {
+  const f = await fixture(t);
+  const before = f.configReads;
+  await f.choose('○ a', 'Apply profile selection?');
+  assert.equal(f.configReads - before, 2);
+  assert.equal(f.disposed, 0);
+});
+
+for (const mutation of ['selection', 'frontmatter', 'native-json', 'command-body'] as const) {
+  test(`TUI preview rejects ${mutation} changes while the provider catalog is pending`, async (t) => {
+    const f = await fixture(t, 'model: p/native');
+    const context = await f.context();
+    const gate = f.holdCatalog();
+    f.startChoice('○ a');
+    await gate.entered;
+    if (mutation === 'selection') {
+      await saveSelection(context.selection, null, async () => {});
+    } else if (mutation === 'frontmatter') {
+      await writeFile(join(f.root, 'agents/worker.md'), '---\nmodel: p/b\n---\nOPAQUE');
+    } else if (mutation === 'native-json') {
+      await writeFile(join(f.root, 'opencode.json'), '{}');
+    } else {
+      await writeFile(join(f.root, 'commands/review.md'), '---\n---\nCHANGED BODY');
+    }
+    gate.release();
+    await f.wait('Config Composer');
+    assert.match(f.current?.message ?? '', /changed|selection/i);
+    assert.equal(f.rendered.includes('Apply profile selection?'), false);
+    const selection = await readSelectionAt(context.runtime.selectionEnvironment, context.runtime.selectionLocator);
+    assert.equal(selection.choice, mutation === 'selection' ? null : undefined);
+    assert.equal(f.disposed, 0);
+  });
+}
+
+for (const mutation of ['client', 'route', 'dismiss', 'abort'] as const) {
+  test(`TUI preview cannot restore a confirmation after ${mutation} during the provider await`, async (t) => {
+    const f = await fixture(t);
+    const context = await f.context();
+    const gate = f.holdCatalog();
+    f.startChoice('○ a');
+    await gate.entered;
+    if (mutation === 'client') {
+      Object.assign(f.api, { client: new Proxy(f.api.client, {}) });
+    } else if (mutation === 'route') {
+      Object.assign(f.api.route, { current: { name: 'home' } });
+    } else if (mutation === 'abort') {
+      f.lifecycle.abort();
+    }
+    f.api.ui.dialog.clear();
+    gate.release();
+    if (mutation === 'abort') {
+      // Abort prevents future commands; wait for the in-flight provider action's
+      // post-await connection assertion to finish by draining its I/O first.
+      await f.context();
+    } else {
+      await f.reopenAfterPending();
+    }
+    assert.equal(f.rendered.includes('Apply profile selection?'), false);
+    assert.equal(f.rendered.includes('Config Composer'), false);
+    await assert.rejects(readFile(context.selection.path), /ENOENT/);
+    assert.equal(f.disposed, 0);
+  });
+}
+
+for (const mutation of ['frontmatter', 'native-json', 'command-body'] as const) {
+  test(`TUI preview rechecks ${mutation} after the post-provider runtime read yields`, async (t) => {
+    const f = await fixture(t);
+    const context = await f.context();
+    const gate = f.holdCatalog();
+    f.startChoice('○ a');
+    await gate.entered;
+    f.onConfigRead(async () => {
+      if (mutation === 'frontmatter') {
+        await mkdir(join(f.root, 'agents'));
+        await writeFile(join(f.root, 'agents/worker.md'), '---\nmodel: p/b\n---\nOPAQUE');
+      } else if (mutation === 'native-json') {
+        await writeFile(join(f.root, 'opencode.json'), '{}');
+      } else {
+        await writeFile(join(f.root, 'commands/review.md'), '---\n---\nCHANGED BODY');
+      }
+    });
+    gate.release();
+    await f.wait('Config Composer');
+    assert.match(f.current?.message ?? '', /changed/i);
+    assert.equal(f.rendered.includes('Apply profile selection?'), false);
+    await assert.rejects(readFile(context.selection.path), /ENOENT/);
+    assert.equal(f.disposed, 0);
+  });
+}
+
+for (const boundary of ['provider', 'runtime'] as const) {
+  test(`TUI preview uses loaded definitions when source changes during the ${boundary} await`, async (t) => {
+    const f = await fixture(t);
+    const context = await f.context();
+    const gate = f.holdCatalog();
+    f.startChoice('○ a');
+    await gate.entered;
+    const replaceSource = () => writeFile(f.source, '{ invalid replacement');
+    if (boundary === 'provider') {
+      await replaceSource();
+    } else {
+      f.onConfigRead(replaceSource);
+    }
+    gate.release();
+    await f.wait('Apply profile selection?');
+    assert.match(await f.preview(), /p\/a/);
+    assert.deepEqual((await f.context()).source, context.source);
+    await assert.rejects(readFile(context.selection.path), /ENOENT/);
+    assert.equal(f.disposed, 0);
+  });
+}
