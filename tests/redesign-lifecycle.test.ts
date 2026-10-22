@@ -638,3 +638,28 @@ test('native host normalization after reload remains unconfirmed and preserves c
   );
   assert.equal(await readFile(path, 'utf8'), normalized);
 });
+test('global cache change during idle check remains restart-required with zero disposal', async (t) => {
+  const f = await fixture(t);
+  const { reloadSavedConfiguration } = await import('../src/config-composer/composition/apply.ts');
+  const { RestartRequiredError } = await import('../src/config-composer/settings.ts');
+  const context = await loadConfigurationContext(f.connection);
+  let disposed = 0;
+  await assert.rejects(
+    reloadSavedConfiguration(context, {
+      assertCurrent: f.connection.assertCurrent,
+      activity: async () => {
+        await writeFile(join(f.root, 'opencode/opencode.json'), '{}');
+        return {};
+      },
+      dispose: async () => {
+        disposed++;
+      },
+      refresh: async () => context.runtime,
+    }),
+    (error: unknown) =>
+      typeof RestartRequiredError === 'function' &&
+      error instanceof RestartRequiredError &&
+      error.message.includes('Restart the OpenCode server'),
+  );
+  assert.equal(disposed, 0);
+});

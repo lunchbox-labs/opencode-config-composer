@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
 import { dialogNavigation } from '../tui/navigation.ts';
 import { verifySharedFilesystem } from './connection.ts';
-import { SettingsError, catalogModels } from './settings.ts';
+import { RestartRequiredError, SettingsError, catalogModels } from './settings.ts';
 import {
   type ConfigurationConnection,
   type ConfigurationContext,
@@ -44,6 +44,13 @@ export function registerConfiguration(api: TuiPluginApi): void {
           client === api.client &&
           route === JSON.stringify(api.route.current)
         ) {
+          if (error instanceof RestartRequiredError) {
+            api.ui.toast({
+              variant: 'warning',
+              title: 'Config Composer',
+              message: 'Restart OpenCode to apply these changes.',
+            });
+          }
           nav.alert({ title: 'Config Composer', message: configurationErrorText(error) });
         }
       })

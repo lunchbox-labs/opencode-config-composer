@@ -9,6 +9,7 @@ import type {
   TuiDialogPromptProps,
   TuiDialogSelectProps,
   TuiPluginApi,
+  TuiToast,
 } from '@opencode-ai/plugin/tui';
 import descriptor from '../src/config-composer/server.ts';
 import { registerConfiguration } from '../src/config-composer/tui.ts';
@@ -59,6 +60,7 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
   let disposed = 0;
   let busy = false;
   const lifecycle = new AbortController();
+  const toasts: TuiToast[] = [];
   const render = (props: Dialog) => {
     current = props;
   };
@@ -109,6 +111,7 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
       command: { list: async () => ({ data: [] }) },
     },
     ui: {
+      toast: (toast: TuiToast) => toasts.push(toast),
       DialogSelect: render,
       DialogPrompt: render,
       DialogConfirm: render,
@@ -192,6 +195,8 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
   return {
     api,
     commands,
+    toasts,
+    lifecycle,
     open: async (name: string, title: string) => {
       api.ui.dialog.clear();
       commands.find((item) => item.slashName === name)!.run();
@@ -360,4 +365,123 @@ test('inspection reload menu applies external source without changing its bytes'
   await f.choose('Reload configurations', 'Configuration reloaded');
   assert.equal(f.disposed, 1);
   assert.equal(await f.read(), text);
+});
+for (const entry of ['command', 'inspection'] as const) {
+  test(`restart-required global JSON edit warns from ${entry} without disposal or success`, async (t) => {
+    const f = await fixture(t);
+    await writeFile(join(f.root, 'opencode/opencode.json'), '{}');
+    if (entry === 'command') {
+      await f.open('reload-configs', 'Config Composer');
+    } else {
+      await f.open('view-configs', 'Configuration');
+      await f.choose('Reload configurations', 'Config Composer');
+    }
+    assert.deepEqual(f.toasts, [
+      { variant: 'warning', title: 'Config Composer', message: 'Restart OpenCode to apply these changes.' },
+    ]);
+    assert.match(f.current?.message ?? '', /Native global JSON.*Restart the OpenCode server process/);
+    assert.equal(f.disposed, 0);
+    assert.notEqual(f.current?.title, 'Configuration reloaded');
+  });
+}
+test('missing global cache baseline warns without disposal', async (t) => {
+  const f = await fixture(t);
+  const { readRuntimeContext, publishRuntime } = await import('../src/config-composer/composition/runtime-baseline.ts');
+  const runtime = readRuntimeContext(f.config, { root: f.root, directory: f.root });
+  delete runtime.globalJsonBaseline;
+  publishRuntime(f.config, {}, runtime);
+  await f.open('reload-configs', 'Config Composer');
+  assert.equal(f.toasts[0]?.variant, 'warning');
+  assert.match(f.toasts[0]?.message ?? '', /Restart OpenCode/);
+  assert.match(f.current?.message ?? '', /baseline is unavailable/);
+  assert.equal(f.disposed, 0);
+});
+for (const failure of ['busy', 'invalid', 'not-confirmed'] as const) {
+  test(`${failure} reload keeps its detailed classification without a restart toast or success`, async (t) => {
+    const f = await fixture(t);
+    if (failure === 'busy') {
+      f.setBusy();
+    }
+    if (failure === 'invalid') {
+      await writeFile(f.source, '{"invalid":true}');
+    }
+    if (failure === 'not-confirmed') {
+      const original = f.api.client.instance.dispose.bind(f.api.client.instance);
+      t.mock.method(f.api.client.instance, 'dispose', async (...args: Parameters<typeof original>) => {
+        const result = await original(...args);
+        const { readRuntimeContext, publishRuntime } =
+          await import('../src/config-composer/composition/runtime-baseline.ts');
+        const runtime = readRuntimeContext(f.config, { root: f.root, directory: f.root });
+        publishRuntime(
+          f.config,
+          {},
+          { ...runtime, revision: { sources: runtime.revision!.sources, effective: '0'.repeat(64) } },
+        );
+        return result;
+      });
+    }
+    await f.open('reload-configs', 'Config Composer');
+    assert.equal(f.toasts.length, 0);
+    assert.notEqual(f.current?.title, 'Configuration reloaded');
+    assert.match(
+      f.current?.message ?? '',
+      failure === 'busy' ? /still running/ : failure === 'invalid' ? /Unknown key/ : /Reload is not confirmed/,
+    );
+    assert.equal(f.disposed, failure === 'not-confirmed' ? 1 : 0);
+  });
+}
+for (const replacement of ['route', 'client', 'lifecycle'] as const) {
+  test(`restart warning cannot appear after ${replacement} replacement`, async (t) => {
+    const f = await fixture(t);
+    const { readRuntimeContext, publishRuntime } =
+      await import('../src/config-composer/composition/runtime-baseline.ts');
+    const runtime = readRuntimeContext(f.config, { root: f.root, directory: f.root });
+    delete runtime.globalJsonBaseline;
+    publishRuntime(f.config, {}, runtime);
+    const gate = Promise.withResolvers<undefined>();
+    const started = Promise.withResolvers<undefined>();
+    const original = f.api.client.config.get.bind(f.api.client.config);
+    t.mock.method(f.api.client.config, 'get', async (...args: Parameters<typeof original>) => {
+      started.resolve(undefined);
+      await gate.promise;
+      return original(...args);
+    });
+    f.api.ui.dialog.clear();
+    f.commands.find((command) => command.slashName === 'reload-configs')!.run();
+    await started.promise;
+    if (replacement === 'route') {
+      Object.assign(f.api.route, { current: { name: 'home' } });
+    }
+    if (replacement === 'client') {
+      Object.assign(f.api, { client: new Proxy(f.api.client, {}) });
+    }
+    if (replacement === 'lifecycle') {
+      f.lifecycle.abort();
+    }
+    gate.resolve(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(f.toasts.length, 0);
+    assert.equal(f.current, undefined);
+    assert.equal(f.disposed, 0);
+  });
+}
+test('successful explicit reload only reports applied after the new registration is attested', async (t) => {
+  const f = await fixture(t);
+  const original = f.api.client.instance.dispose.bind(f.api.client.instance);
+  const gate = Promise.withResolvers<undefined>();
+  const started = Promise.withResolvers<undefined>();
+  t.mock.method(f.api.client.instance, 'dispose', async (...args: Parameters<typeof original>) => {
+    started.resolve(undefined);
+    await gate.promise;
+    return original(...args);
+  });
+  f.api.ui.dialog.clear();
+  f.commands.find((command) => command.slashName === 'reload-configs')!.run();
+  await started.promise;
+  assert.equal(f.current, undefined);
+  assert.equal(f.toasts.length, 0);
+  gate.resolve(undefined);
+  await f.wait('Configuration reloaded');
+  assert.equal(f.disposed, 1);
+  assert.equal(f.toasts.length, 0);
 });

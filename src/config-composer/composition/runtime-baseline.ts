@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { SettingsError, record } from '../settings.ts';
+import { RestartRequiredError, SettingsError, record } from '../settings.ts';
 import { serverEntry } from '../registration.ts';
 import { configurationDirectory } from '../configuration.ts';
 import type { NativeBaseline, ResolvedCandidate } from './document-types.ts';
@@ -176,7 +176,6 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
     !hash(marker.observation.json) ||
     !hash(marker.observation.globalJson) ||
     !hash(marker.observation.commands) ||
-    !hash(marker.globalJsonBaseline) ||
     !record(marker.observation.authority) ||
     !record(marker.observation.context) ||
     typeof marker.observation.context.directory !== 'string' ||
@@ -218,6 +217,14 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   }
   if (marker.status === 'error' && Object.hasOwn(marker, 'revision')) {
     return fail('Error marker claims an applied revision.');
+  }
+  if (marker.globalJsonBaseline === undefined) {
+    throw new RestartRequiredError(
+      'Native global cache baseline is unavailable. Restart the OpenCode server process, then review again.',
+    );
+  }
+  if (!hash(marker.globalJsonBaseline)) {
+    return fail('Invalid server attestation.');
   }
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Runtime, target, field and authority shape checks above establish this internal transport boundary.
   return structuredClone(marker) as unknown as AttestedRuntime;

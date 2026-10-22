@@ -1,5 +1,8 @@
 export class SettingsError extends Error {}
 
+/** A known native cache limitation that scoped instance reload cannot resolve. */
+export class RestartRequiredError extends SettingsError {}
+
 export function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { SettingsError } from '../settings.ts';
+import { RestartRequiredError, SettingsError } from '../settings.ts';
 import { type ConfigurationContext, expectedRevision, verifySavedInputs, withSavedContext } from '../storage.ts';
 import { type RuntimeMarker, readRuntimeContext } from './runtime-baseline.ts';
 import { type CompositionRevision, compositionRevision, digest, observeNative } from './revision.ts';
@@ -83,13 +83,13 @@ export async function reloadSavedConfiguration(
     port.assertCurrent();
     await verifySavedInputs(context);
     const disk = await observeNative(context.disk.context);
-    if (!isDeepStrictEqual(disk, context.disk)) {
-      throw new SettingsError('Native inputs changed during reload. Review /view-configs and retry.');
-    }
     if (context.runtime.globalJsonBaseline === undefined || disk.globalJson !== context.runtime.globalJsonBaseline) {
-      throw new SettingsError(
+      throw new RestartRequiredError(
         'Native global JSON changed or its cache baseline is unavailable. Restart the OpenCode server process, then review again.',
       );
+    }
+    if (!isDeepStrictEqual(disk, context.disk)) {
+      throw new SettingsError('Native inputs changed during reload. Review /view-configs and retry.');
     }
     if (checkRuntime) {
       const current = readRuntimeContext(await context.connection.config(), context.connection.location);

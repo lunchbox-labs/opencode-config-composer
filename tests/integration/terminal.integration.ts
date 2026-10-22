@@ -112,3 +112,26 @@ test(
     assert.equal(f.host.requests.length, 0);
   },
 );
+test(
+  'terminal global JSON reload renders a restart warning without success or disposal',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'terminal-restart-warning');
+    await f.host.start();
+    const previous = await f.editor.runtime();
+    const session = await f.host.api<{ id: string }>('/session', { title: 'Restart warning journey' });
+    const terminal = await nativeTerminal(f.host, session.id, 'terminal-restart-warning');
+    await terminal.wait(['ctrl+p', 'commands']);
+    await f.write(f.paths.native, { ...f.native, username: 'external-global-edit' });
+    const saved = await readFile(f.paths.native, 'utf8');
+    await terminal.command(
+      '/reload-configs',
+      'Restart OpenCode to apply these changes.',
+      'Restart the OpenCode server process',
+    );
+    assert.doesNotMatch(terminal.text(), /Configuration reloaded|Composer revision applied/);
+    assert.equal((await f.editor.runtime()).id, previous.id);
+    assert.equal(await readFile(f.paths.native, 'utf8'), saved);
+    assert.equal(f.host.requests.length, 0);
+  },
+);
