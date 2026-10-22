@@ -5,6 +5,28 @@ import Ajv from 'ajv/dist/2020.js';
 import { parseConfiguration } from '../src/config-composer/configuration.ts';
 import { readCompositionDocument } from '../src/config-composer/composition/document.ts';
 import { resolveComposition } from '../src/config-composer/composition/runtime.ts';
+
+test('provider examples allocate one provider or an explicit mixed profile to existing agents', async () => {
+  const document = readCompositionDocument(
+    parseConfiguration(
+      await readFile(new URL('../docs/examples/provider-profiles/config-composer.jsonc', import.meta.url), 'utf8'),
+    ),
+  );
+  for (const [profile, expected] of Object.entries({
+    anthropic: ['anthropic/claude-sonnet-4-5', 'anthropic/claude-sonnet-4-5', 'anthropic/claude-sonnet-4-5'],
+    openai: ['openai/gpt-5', 'openai/gpt-5', 'openai/gpt-5'],
+    mixed: ['openai/gpt-5', 'anthropic/claude-sonnet-4-5', 'anthropic/claude-sonnet-4-5'],
+  })) {
+    const result = resolveComposition(document, profile, {}, {});
+    assert.deepEqual(
+      ['build', 'plan', 'explore'].map((name) => result.agent[name].model),
+      expected,
+    );
+  }
+  const shared = resolveComposition(document, null, {}, {});
+  assert.ok(['build', 'plan', 'explore'].every((name) => shared.agent[name].model === undefined));
+});
+
 test('shipped examples validate against strict schema and target native builtins', async () => {
   const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as object;
   const validate = new Ajv({ strict: false }).compile(schema);

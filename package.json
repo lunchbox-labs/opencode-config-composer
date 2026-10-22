@@ -1,6 +1,6 @@
 {
   "name": "@lunchbox-labs/opencode-config-composer",
-  "version": "0.0.8",
+  "version": "0.1.0",
   "description": "Compose native OpenCode settings with always-active groups and one worktree profile",
   "license": "MIT",
   "type": "module",
@@ -51,7 +51,6 @@
     "check:static": "concurrently --names typecheck,lint,format --kill-others-on-fail \"npm run typecheck\" \"npm run lint\" \"npm run format:check\""
   },
   "dependencies": {
-    "ajv": "8.20.0",
     "gray-matter": "4.0.3",
     "js-yaml": "3.14.2",
     "jsonc-parser": "3.3.1",
@@ -68,6 +67,7 @@
     "@types/js-yaml": "3.12.10",
     "@types/node": "24.19.1",
     "@xterm/headless": "6.0.0",
+    "ajv": "8.20.0",
     "concurrently": "10.0.6",
     "eslint": "10.11.0",
     "eslint-config-prettier": "10.1.8",

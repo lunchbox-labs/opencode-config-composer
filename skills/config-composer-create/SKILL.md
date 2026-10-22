@@ -9,4 +9,4 @@ Author one JSONC file with optional `groups`, `agent`, `command`, `model`, `smal
 
 Authored native agent frontmatter always overrides Composer settings, including literal empty values. Model and variant are independent. Options replace the entire field. Permission objects replace exact tool blocks; frontmatter permission replaces the whole policy. Never invent a command variant.
 
-Use `/compose-configs` to choose a profile, preview, confirm selection, and apply while idle. This release's UI changes selection only; author definitions directly in the shared JSONC file. Existing session model/variant choices can remain retained. Native metadata changes require restarting OpenCode before review.
+Use `/compose-configs` → Profile to choose or edit a profile, Groups to edit shared settings and membership, and Effective for named exceptions with an explicit Shared or Profile destination. Preview and Apply while idle; a failed apply leaves changes saved and pending. Existing session model/variant choices can remain retained. Native metadata changes require restarting OpenCode before review.

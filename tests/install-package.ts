@@ -55,7 +55,16 @@ export async function installPackage(root: string) {
       `unexpected published file: ${path}`,
     );
   }
-  const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8')) as { name: string };
+  const manifest = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8')) as {
+    name: string;
+    version: string;
+  };
+  const lock = JSON.parse(await readFile(join(repository, 'package-lock.json'), 'utf8')) as {
+    version: string;
+    packages: Record<string, { version: string }>;
+  };
+  assert.equal(lock.version, manifest.version);
+  assert.equal(lock.packages[''].version, manifest.version);
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   await exec(
     process.execPath,
@@ -75,6 +84,7 @@ export async function installPackage(root: string) {
   const directory = await realpath(join(root, 'node_modules', manifest.name));
   const metadata = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as Record<string, unknown>;
   assert.equal(metadata.name, '@lunchbox-labs/opencode-config-composer');
+  assert.equal(metadata.version, manifest.version);
   assert.deepEqual(metadata.engines, { node: '>=22.18.0' }, 'the packed plugin must not gate OpenCode versions');
   assert.equal(metadata.license, 'MIT');
   const license = await readFile(join(directory, 'LICENSE'), 'utf8');

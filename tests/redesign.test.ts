@@ -104,6 +104,58 @@ test('overlapping root and profile groups follow their own array order and repor
     '/profiles/reversed/groups/1/agent/temperature',
   );
 });
+
+test('each Composer contribution reports its blocked values beneath final authored fields', () => {
+  const patch = {
+    model: 'p/composer',
+    variant: 'high',
+    temperature: 1,
+    top_p: 1,
+    options: { flag: true },
+    mode: 'subagent',
+    permission: 'allow',
+  };
+  const values = {
+    model: 'p/pinned',
+    variant: '',
+    temperature: 0,
+    top_p: 0,
+    options: { flag: false },
+    mode: 'primary',
+    permission: {},
+  };
+  const source = { path: '/native/worker.md', canonicalPath: '/native/worker.md', fingerprint: 'x' };
+  const fields = Object.fromEntries(
+    Object.entries(values).map(([field, value]) => [field, { value, authored: { [field]: value }, source }]),
+  );
+  const membership = { name: 'workers', members: { agent: ['worker'] } };
+  for (const [kind, document] of [
+    ['group', { groups: [{ ...membership, agent: patch }] }],
+    ['root', { agent: { worker: patch } }],
+    [
+      'profile-group',
+      {
+        groups: [membership],
+        profiles: { selected: { groups: [{ name: 'workers', agent: patch }] } },
+        defaultProfile: 'selected',
+      },
+    ],
+    ['profile', { profiles: { selected: { agent: { worker: patch } } }, defaultProfile: 'selected' }],
+  ] as const) {
+    const result = resolveComposition(
+      read(document),
+      undefined,
+      { agent: { worker: { prompt: 'OPAQUE_BODY' } } },
+      { worker: { fields, sources: [source] } },
+    );
+    for (const [field, value] of Object.entries(values)) {
+      assert.deepEqual(result.agent.worker[field], value, `${kind}: ${field}`);
+      assert.equal(result.decisions[`/agent/worker/${field}`].origin.kind, 'frontmatter');
+      assert.equal(result.decisions[`/agent/worker/${field}`].blockedComposer?.origin.kind, kind);
+    }
+    assert.equal(result.agent.worker.prompt, 'OPAQUE_BODY');
+  }
+});
 test('permission exact blocks replace and move to incoming order; options are atomic', () => {
   const doc = read({
     agent: { worker: { options: { new: false }, permission: { read: { '*.md': 'ask' }, bash: 'deny' } } },
