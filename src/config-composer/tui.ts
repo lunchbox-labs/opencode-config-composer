@@ -5,43 +5,23 @@ import { dialogNavigation } from '../tui/navigation.ts';
 import { verifySharedFilesystem } from './connection.ts';
 import { SettingsError, catalogModels } from './settings.ts';
 import {
-  type DocumentPreview,
-  type EditorConnection,
-  type EditorContext,
+  type ConfigurationConnection,
+  type ConfigurationContext,
   type Preview,
-  loadEditorContext,
-  previewDocument,
+  loadConfigurationContext,
   previewSelection,
-  saveDocumentGuarded,
   saveSelectionGuarded,
   verifyContext,
 } from './storage.ts';
-import { readRuntimeRevision } from './composition/runtime-baseline.ts';
-import { applySavedComposition } from './composition/apply.ts';
+import { readRuntimeContext } from './composition/runtime-baseline.ts';
+import { type ApplyPort, applySavedComposition, reloadSavedConfiguration } from './composition/apply.ts';
 import { sessionNotice } from './tui/running.ts';
-import { diagnosticPages, diagnosticText, editorErrorText } from './tui/editor-error.ts';
-import { openProfiles } from './tui/profile.ts';
-import { openGroups } from './tui/groups.ts';
+import { configurationErrorText, diagnosticPages, inspectionText } from './tui/configuration-error.ts';
+import { openProfiles, selectionLabel } from './tui/profile.ts';
 import { openEffective } from './tui/effective.ts';
-import { type EditorView, fieldDetail } from './tui/view.ts';
+import { type ConfigurationView, fieldDetail } from './tui/view.ts';
 import type { Selection } from './composition/document-types.ts';
-import { pointer, readCompositionDocument } from './composition/document.ts';
-import { parseConfiguration } from './configuration.ts';
-const readDocument = (text: string) => readCompositionDocument(parseConfiguration(text));
-function authoredChanges(before: unknown, after: unknown, path = ''): string[] {
-  if (isDeepStrictEqual(before, after)) {
-    return [];
-  }
-  if (before !== null && after !== null && typeof before === 'object' && typeof after === 'object') {
-    const old = Object.fromEntries(Object.entries(before));
-    const next = Object.fromEntries(Object.entries(after));
-    return [...new Set([...Object.keys(old), ...Object.keys(next)])].flatMap((key) =>
-      authoredChanges(old[key], next[key], `${path}/${pointer(key)}`),
-    );
-  }
-  return [`${path}: ${after === undefined ? 'Inherit/remove' : JSON.stringify(after)}`];
-}
-export function registerSettings(api: TuiPluginApi): void {
+export function registerConfiguration(api: TuiPluginApi): void {
   const nav = dialogNavigation(api);
   let busy = false;
   const run = (action: () => void | Promise<void>) => {
@@ -64,7 +44,7 @@ export function registerSettings(api: TuiPluginApi): void {
           client === api.client &&
           route === JSON.stringify(api.route.current)
         ) {
-          nav.alert({ title: 'Config Composer', message: editorErrorText(error) });
+          nav.alert({ title: 'Config Composer', message: configurationErrorText(error) });
         }
       })
       .finally(() => {
@@ -72,7 +52,7 @@ export function registerSettings(api: TuiPluginApi): void {
       });
   };
   const defer = (action: () => void | Promise<void>) => queueMicrotask(() => run(action));
-  const connection = (): EditorConnection => {
+  const connection = (): ConfigurationConnection => {
     const client = api.client;
     const directory = resolve(api.state.path.directory);
     const worktree = api.state.path.worktree;
@@ -107,7 +87,7 @@ export function registerSettings(api: TuiPluginApi): void {
   };
   const details = (title: string, text: string) => {
     api.ui.dialog.setSize('xlarge');
-    const pages = diagnosticPages(diagnosticText(text), 95, 22);
+    const pages = diagnosticPages(inspectionText(text), 95, 22);
     if (pages.length <= 1) {
       nav.alert({ title, message: pages[0] ?? '' });
       return;
@@ -126,10 +106,10 @@ export function registerSettings(api: TuiPluginApi): void {
         }),
     });
   };
-  const apply = async (context: EditorContext) => {
+  const port = (context: ConfigurationContext): ApplyPort => {
     const client = api.client;
     const directory = context.connection.location.directory;
-    await applySavedComposition(context, context.runtime, {
+    return {
       assertCurrent: () => context.connection.assertCurrent(),
       activity: async () => {
         const result = await client.session.status({ directory });
@@ -154,12 +134,12 @@ export function registerSettings(api: TuiPluginApi): void {
         if (views.some((view) => view.error !== undefined)) {
           throw new SettingsError('Could not refresh server views.');
         }
-        return readRuntimeRevision(config, context.connection.location);
+        return readRuntimeContext(config, context.connection.location);
       },
-    });
+    };
   };
-  const reloadSaved = async (context: EditorContext) => {
-    const current = await loadEditorContext(context.connection);
+  const reloadSaved = async (context: ConfigurationContext) => {
+    const current = await loadConfigurationContext(context.connection);
     if (
       !isDeepStrictEqual(current.source, context.source) ||
       !isDeepStrictEqual(current.selection, context.selection) ||
@@ -170,9 +150,9 @@ export function registerSettings(api: TuiPluginApi): void {
     }
     return current;
   };
-  const finish = async (context: EditorContext, current = nav.checkpoint()) => {
+  const finish = async (context: ConfigurationContext, current = nav.checkpoint()) => {
     try {
-      await apply(context);
+      await applySavedComposition(context, context.runtime, port(context));
       if (!current()) {
         return;
       }
@@ -186,17 +166,17 @@ export function registerSettings(api: TuiPluginApi): void {
       nav.menu({
         title: 'Saved; not applied',
         options: [
-          { title: 'Reason', value: 'reason', description: editorErrorText(error) },
+          { title: 'Reason', value: 'reason', description: configurationErrorText(error) },
           {
             title: 'Retry apply',
             value: 'retry',
-            description: 'Uses the saved source and choice; stale native inputs require restart',
+            description: 'Uses the saved source and choice; review external edits with /view-configs',
           },
           { title: 'Close', value: 'close' },
         ],
         onSelect: (option) => {
           if (option.value === 'reason') {
-            details('Saved; not applied', editorErrorText(error));
+            details('Saved; not applied', configurationErrorText(error));
           } else if (option.value === 'retry') {
             run(async () => {
               const current = nav.checkpoint();
@@ -209,9 +189,9 @@ export function registerSettings(api: TuiPluginApi): void {
       });
     }
   };
-  const open = async () => {
-    const context = await loadEditorContext(connection());
-    const confirm = (view: EditorView, preview: Preview | DocumentPreview, title: string, destination: string) => {
+  const open = async (mode: 'profiles' | 'inspect' | 'reload') => {
+    const context = await loadConfigurationContext(connection());
+    const confirm = (view: ConfigurationView, preview: Preview, title: string, destination: string) => {
       api.ui.dialog.setSize('xlarge');
       const previous = context.runtime.candidate?.decisions ?? {};
       const proposed = preview.candidate.decisions;
@@ -239,18 +219,13 @@ export function registerSettings(api: TuiPluginApi): void {
       ]
         .filter(Boolean)
         .join('\n\n');
-      const authored = 'text' in preview ? authoredChanges(context.source.document, readDocument(preview.text)) : [];
-      // Show authored document changes separately from the currently selected profile's effects.
-      const message = diagnosticText(
-        `${destination}\nSource: ${context.source.path}\nWorktree choice: ${preview.choice === undefined ? 'Use configured default' : (preview.choice ?? 'No profile')} · effective ${preview.candidate.profile ?? 'none'}\nShared groups remain active. Frontmatter pins remain unchanged.\n\n${authored.length === 0 ? '' : `Authored changes:\n${authored.join('\n')}\n\n`}${effects === '' ? 'No effective managed fields change for the current choice.' : effects}\n\nApply saves then refreshes this idle instance. Existing session model/variant choices remain native.`,
+      const message = inspectionText(
+        `${destination}\nSource: ${context.source.path}\nWorktree choice: ${selectionLabel(preview.choice)} · effective ${preview.candidate.profile ?? 'none'}\nShared groups remain active. Frontmatter pins remain unchanged.\n\n${effects === '' ? 'No effective managed fields change for the current choice.' : effects}\n\nApply saves then refreshes this idle instance. Existing session model/variant choices remain native.`,
       );
       const commit = () =>
         defer(async () => {
           const current = nav.checkpoint();
-          const saved =
-            'text' in preview
-              ? await saveDocumentGuarded(context, preview)
-              : await saveSelectionGuarded(context, preview);
+          const saved = await saveSelectionGuarded(context, preview);
           await finish(saved, current);
         });
       const pages = diagnosticPages(message, 95, 22);
@@ -284,12 +259,11 @@ export function registerSettings(api: TuiPluginApi): void {
         },
       });
     };
-    const view: EditorView = {
+    const view: ConfigurationView = {
       api,
       nav,
       context,
       run,
-      defer,
       details,
       catalog: async () => {
         const checkpoint = nav.checkpoint();
@@ -297,7 +271,7 @@ export function registerSettings(api: TuiPluginApi): void {
         const response = await api.client.config.providers({ directory: context.connection.location.directory });
         await verifyContext(context);
         if (!checkpoint()) {
-          throw new SettingsError('The editor view changed. Reopen Config Composer.');
+          throw new SettingsError('The configuration view changed. Reopen Config Composer.');
         }
         if (response.error !== undefined) {
           throw new SettingsError('Provider catalog unavailable. Review again.');
@@ -311,57 +285,48 @@ export function registerSettings(api: TuiPluginApi): void {
           confirm(view, preview, 'Apply profile selection?', 'Profile selection');
         }
       },
-      review: async (text: string, destination: string, choice: Selection = context.selection.choice) => {
+      reload: async () => {
         const checkpoint = nav.checkpoint();
-        const preview = await previewDocument(context, text, () => view.catalog(), choice);
+        await reloadSavedConfiguration(context, port(context));
         if (checkpoint()) {
-          confirm(view, preview, 'Apply document changes?', destination);
+          nav.reset();
+          nav.alert({ title: 'Configuration reloaded', message: sessionNotice });
         }
       },
-      retry: async () => {
-        const current = nav.checkpoint();
-        await finish(await reloadSaved(context), current);
-      },
     };
-    nav.menu(
-      {
-        title: 'Compose configs',
-        options: [
-          {
-            title: 'Profile',
-            value: 'profile',
-            description: `Stored mode: ${context.selection.choice === undefined ? 'Use configured default' : (context.selection.choice ?? 'No profile')} · ${context.runtime.diagnostic ?? 'this worktree'}`,
-          },
-          { title: 'Groups', value: 'groups', description: 'Always active · shared definition file' },
-          {
-            title: 'Effective',
-            value: 'effective',
-            description: 'Configured fields, verified applied values and raw frontmatter pins',
-          },
-        ],
-        onSelect: (option) =>
-          run(() => {
-            if (option.value === 'profile') {
-              openProfiles(view);
-            } else if (option.value === 'groups') {
-              openGroups(view);
-            } else {
-              openEffective(view);
-            }
-          }),
-      },
-      true,
-    );
+    if (mode === 'profiles') {
+      openProfiles(view);
+    } else if (mode === 'inspect') {
+      openEffective(view);
+    } else {
+      await view.reload();
+    }
   };
   const unregister = api.keymap.registerLayer({
     commands: [
       {
-        name: 'config-composer.compose',
-        title: 'Compose configuration',
+        name: 'config-composer.profiles',
+        title: 'Choose configuration profile',
         category: 'Config',
         namespace: 'palette',
-        slashName: 'compose-configs',
-        run: () => run(open),
+        slashName: 'profiles',
+        run: () => run(() => open('profiles')),
+      },
+      {
+        name: 'config-composer.view',
+        title: 'View configuration',
+        category: 'Config',
+        namespace: 'palette',
+        slashName: 'view-configs',
+        run: () => run(() => open('inspect')),
+      },
+      {
+        name: 'config-composer.reload',
+        title: 'Reload configuration',
+        category: 'Config',
+        namespace: 'palette',
+        slashName: 'reload-configs',
+        run: () => run(() => open('reload')),
       },
     ],
   });
@@ -370,7 +335,7 @@ export function registerSettings(api: TuiPluginApi): void {
 export default {
   id: 'config-composer',
   tui: async (api) => {
-    registerSettings(api);
+    registerConfiguration(api);
     await Promise.resolve();
   },
 } satisfies TuiPluginModule;

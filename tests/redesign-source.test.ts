@@ -42,30 +42,3 @@ test('implicit absence is empty but an explicit missing source is rejected; no p
   assert.deepEqual((await loadSource({}, root)).document, { groups: [], profiles: {} });
   await assert.rejects(loadSource({ configFile: 'missing.jsonc' }, root), /Explicit.*does not exist/);
 });
-
-test('one canonical source lock excludes a second worktree writer', async (t) => {
-  const { withSourceLock } = await import('../src/config-composer/composition/sources.ts');
-  const root = await mkdtemp(join(tmpdir(), 'composer-source-lock-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await writeFile(join(root, 'config-composer.jsonc'), '{}');
-  const source = await loadSource({}, root);
-  await withSourceLock(source, async () => {
-    await assert.rejects(
-      withSourceLock({ ...source }, async () => {}),
-      /source edit is active/,
-    );
-  });
-  await withSourceLock(source, async () => {});
-});
-
-test('atomic replacement through a symlinked parent attests the new regular-file inode', async (t) => {
-  const { replaceSource, withSourceLock } = await import('../src/config-composer/composition/sources.ts');
-  const root = await mkdtemp(join(tmpdir(), 'composer-parent-link-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await mkdir(join(root, 'real'));
-  await writeFile(join(root, 'real/config-composer.jsonc'), '{}');
-  await symlink(join(root, 'real'), join(root, 'alias'), 'dir');
-  const source = await loadSource({ configFile: 'alias/config-composer.jsonc' }, root);
-  const saved = await withSourceLock(source, () => replaceSource(source, '{"profiles":{}}', async () => {}));
-  assert.deepEqual(await loadSource({ configFile: 'alias/config-composer.jsonc' }, root), saved);
-});

@@ -16,7 +16,7 @@ import { AgentGroupsPlugin } from '@lunchbox-labs/opencode-config-composer/serve
 // @ts-expect-error Host types must come from the host package.
 import type { Plugin } from '@lunchbox-labs/opencode-config-composer/server';
 // @ts-expect-error TUI registration helpers are not public.
-import { registerSettings } from '@lunchbox-labs/opencode-config-composer/tui';
+import { registerConfiguration } from '@lunchbox-labs/opencode-config-composer/tui';
 import schema from '@lunchbox-labs/opencode-config-composer/schema.json' with { type: 'json' };
 const schemaType: string = schema.type;
 void schemaType;
@@ -26,6 +26,6 @@ import manifest from '@lunchbox-labs/opencode-config-composer/package.json';
 import storage from '@lunchbox-labs/opencode-config-composer/dist/config-composer/storage.js';
 // @ts-expect-error Source modules are not public.
 import settings from '@lunchbox-labs/opencode-config-composer/src/config-composer/settings.ts';
-void [ConfigComposerPlugin, AgentGroupsPlugin, registerSettings, schema, manifest, storage, settings];
+void [ConfigComposerPlugin, AgentGroupsPlugin, registerConfiguration, schema, manifest, storage, settings];
 type RejectedHostType = Plugin;
 export type { RejectedHostType };

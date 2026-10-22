@@ -15,7 +15,7 @@ export async function reloadFromTerminal(
   let pending: Error | undefined;
   for (let attempt = 0; attempt < 200; attempt++) {
     const current = await fixture.editor.runtime().catch((error: unknown) => {
-      if (!(error instanceof Error) || !error.message.startsWith('Unreadable runtime marker.')) {
+      if (!(error instanceof Error) || !error.message.startsWith('No runtime marker.')) {
         throw error;
       }
       pending = error;

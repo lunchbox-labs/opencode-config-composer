@@ -11,9 +11,8 @@ import type {
   TuiPluginApi,
 } from '@opencode-ai/plugin/tui';
 import descriptor from '../src/config-composer/server.ts';
-import { registerSettings } from '../src/config-composer/tui.ts';
+import { registerConfiguration } from '../src/config-composer/tui.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
-import { setSetting } from '../src/config-composer/composition/authoring.ts';
 
 type Dialog = { title: string; message?: string } & Partial<
   TuiDialogSelectProps<string> & TuiDialogPromptProps & TuiDialogConfirmProps
@@ -55,6 +54,7 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
   await hook(config);
   let current: Dialog | undefined;
   let closed: (() => void) | undefined;
+  const commands: { slashName: string; run: () => void }[] = [];
   let command = () => {};
   let disposed = 0;
   let busy = false;
@@ -67,8 +67,9 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     route: { current: { name: 'session', params: { sessionID: 'one' } } },
     lifecycle: { signal: lifecycle.signal, onDispose: () => {} },
     keymap: {
-      registerLayer: (layer: { commands: { run: () => void }[] }) => {
-        command = layer.commands[0].run;
+      registerLayer: (layer: { commands: { slashName: string; run: () => void }[] }) => {
+        commands.push(...layer.commands);
+        command = (layer.commands.find((item) => item.slashName === 'profiles') ?? layer.commands[0]).run;
         return () => {};
       },
     },
@@ -130,7 +131,7 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
       },
     },
   } as unknown as TuiPluginApi;
-  registerSettings(api);
+  registerConfiguration(api);
   const wait = async (title: string) => {
     for (let i = 0; i < 1000; i++) {
       if (current?.title === title) {
@@ -164,6 +165,17 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     api.ui.dialog.clear();
     await wait(next);
   };
+  const detailText = async () => {
+    const title = current!.title;
+    let text = current?.message ?? '';
+    const pages = current?.options?.filter((option) => option.title.startsWith('Page ')) ?? [];
+    for (const page of pages) {
+      await choose(page.title, `${title} · ${Number(page.value) + 1}/${pages.length}`);
+      text += current?.message ?? '';
+      await escape(title);
+    }
+    return text;
+  };
   const preview = async () => {
     const title = current!.title;
     let text = current?.message ?? '';
@@ -176,9 +188,15 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     return text;
   };
   command();
-  await wait('Compose configs');
+  await wait('Profiles');
   return {
     api,
+    commands,
+    open: async (name: string, title: string) => {
+      api.ui.dialog.clear();
+      commands.find((item) => item.slashName === name)!.run();
+      await wait(title);
+    },
     source,
     root,
     config,
@@ -187,11 +205,12 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     confirm,
     input,
     preview,
+    detailText,
     wait,
     reopen: async () => {
       api.ui.dialog.clear();
       command();
-      await wait('Compose configs');
+      await wait('Profiles');
     },
     get current() {
       return current;
@@ -205,50 +224,56 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     read: () => readFile(source, 'utf8'),
   };
 }
-test('profile choose has one preview and Apply confirmation, cancellation writes nothing', async (t) => {
+test('only profiles, view-configs and reload-configs commands register; profiles open directly', async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(
+    f.commands.map((item) => item.slashName),
+    ['profiles', 'view-configs', 'reload-configs'],
+  );
+  assert.deepEqual(
+    f.current?.options?.map((item) => item.title),
+    ['Follow configured default', 'Shared only', '○ a', '○ b'],
+  );
+});
+test('profile preview confirms selection and writes no definition bytes', async (t) => {
   const f = await fixture(t);
   const before = await f.read();
-  await f.choose('Profile', 'Profile');
   await f.choose('○ a', 'Apply profile selection?');
-  assert.match(f.current?.message ?? '', /p\/a/);
-  await f.escape('Profile');
+  assert.match(await f.preview(), /p\/a/);
+  await f.escape('Profiles');
   assert.equal(f.disposed, 0);
-  assert.equal(await f.read(), before);
   await f.choose('○ a', 'Apply profile selection?');
   await f.confirm('Composer revision applied');
   assert.equal(f.disposed, 1);
   assert.equal(f.config.agent.worker.model, 'p/a');
   assert.equal(await f.read(), before);
 });
-test('group member toggles stage only and Back returns to direct shared settings', async (t) => {
+test('inspection exposes shared groups and inactive profiles without edit actions', async (t) => {
   const f = await fixture(t);
   const before = await f.read();
-  await f.choose('Groups', 'Groups · shared');
-  await f.choose('workers', 'Shared · workers');
-  await f.choose('Members', 'Members · workers');
-  await f.choose('✓ agent helper', 'Members · workers');
+  await f.open('view-configs', 'Configuration');
+  await f.choose('Shared groups', 'Shared groups');
+  await f.choose('workers', 'Shared group workers');
+  assert.match(f.current?.message ?? '', /helper/);
+  assert.match(f.current?.message ?? '', /temperature/);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('Profile definitions', 'Profile definitions');
+  await f.choose('a', 'Profile a');
+  assert.match(f.current?.message ?? '', /workers/);
   assert.equal(await f.read(), before);
-  await f.escape('Shared · workers');
-  await f.choose('Agent settings for members', 'Shared · workers · agent settings');
-  await f.choose('temperature', 'Shared · workers · temperature');
-  await f.escape('Shared · workers · agent settings');
-  assert.equal(await f.read(), before);
+  assert.equal(f.disposed, 0);
 });
-test('shared versus profile direct settings write explicit destinations and preserve zero', async (t) => {
-  const f = await fixture(t);
-  await f.choose('Groups', 'Groups · shared');
-  await f.choose('workers', 'Shared · workers');
-  await f.choose('Agent settings for members', 'Shared · workers · agent settings');
-  await f.choose('temperature', 'Shared · workers · temperature');
-  await f.choose('Edit value', 'Shared · workers · temperature');
-  await f.input('0', 'Apply document changes?');
-  await f.confirm('Composer revision applied');
-  const parsed = JSON.parse(await f.read()) as {
-    groups: { agent: { temperature: number } }[];
-    profiles: { a: { groups: { agent: { temperature?: number } }[] } };
-  };
-  assert.equal(parsed.groups[0].agent.temperature, 0);
-  assert.equal(parsed.profiles.a.groups[0].agent.temperature, undefined);
+test('stale native pins are shown as on-disk pending without predicting effective values', async (t) => {
+  const f = await fixture(t, 'model: p/native');
+  await writeFile(join(f.root, 'agents/worker.md'), '---\nmodel: p/b\n---\nNEW BODY');
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  await f.choose('model', 'agent worker · model');
+  const details = await f.detailText();
+  assert.match(details, /awaiting reload/);
+  assert.match(details, /p\/b/);
+  assert.match(details, /Verified applied instance: "p\/native"/);
+  assert.doesNotMatch(f.current?.message ?? '', /Configured\nmodel:/);
 });
 for (const pin of [
   'model: p/native',
@@ -270,102 +295,32 @@ for (const pin of [
     const f = await fixture(t, pin, { [field]: proposals[field] });
     const before = await f.read();
     const native = await readFile(join(f.root, 'agents/worker.md'), 'utf8');
-    await f.choose('Effective', 'Effective configuration');
+    await f.open('view-configs', 'Configuration');
     await f.choose('agent worker', 'agent worker');
     await f.choose(field, `agent worker · ${field}`);
-    assert.match(f.current?.message ?? '', /Pinned by frontmatter/);
-    assert.match(f.current?.message ?? '', /worker\.md/);
-    assert.match(f.current?.message ?? '', /Raw authored fields:/);
-    assert.match(f.current?.message ?? '', /Blocked Composer value:/);
+    const details = await f.detailText();
+    assert.match(details, /Pinned by frontmatter/);
+    assert.match(details, /worker\.md/);
+    assert.match(details, /Raw authored fields:/);
+    assert.match(details, /Blocked Composer value:/);
     if (field === 'permission') {
-      assert.match(f.current?.message ?? '', /inheritance remains host-owned/);
+      assert.match(details, /inheritance remains host-owned/);
     }
     assert.equal(await f.read(), before);
     assert.equal(await readFile(join(f.root, 'agents/worker.md'), 'utf8'), native);
     assert.equal(f.disposed, 0);
   });
 }
-test('busy application reports saved; not applied without disposal', async (t) => {
+test('busy selection remains saved and pending without disposal', async (t) => {
   const f = await fixture(t);
+  const before = await f.read();
   f.setBusy();
-  await f.choose('Profile', 'Profile');
   await f.choose('○ b', 'Apply profile selection?');
   await f.confirm('Saved; not applied');
   assert.equal(f.disposed, 0);
+  assert.equal(await f.read(), before);
 });
-
-test('a catalog result cannot reopen a picker after Escape', async (t) => {
-  const f = await fixture(t);
-  await f.choose('Profile', 'Profile');
-  const gate = Promise.withResolvers<undefined>();
-  const started = Promise.withResolvers<undefined>();
-  const original = f.api.client.config.providers.bind(f.api.client.config);
-  t.mock.method(f.api.client.config, 'providers', async (...args: Parameters<typeof original>) => {
-    started.resolve(undefined);
-    await gate.promise;
-    return original(...args);
-  });
-  const option = f.current!.options!.find((option) => option.value === 'choose:a')!;
-  f.current!.onSelect!(option);
-  await started.promise;
-  await f.escape('Compose configs');
-  gate.resolve(undefined);
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(f.current?.title, 'Compose configs');
-  assert.equal(f.disposed, 0);
-});
-test('pending apply retry never adopts an external source edit', async (t) => {
-  const f = await fixture(t);
-  f.setBusy();
-  await f.choose('Profile', 'Profile');
-  await f.choose('○ b', 'Apply profile selection?');
-  await f.confirm('Saved; not applied');
-  const document = JSON.parse(await f.read()) as { profiles: Record<string, unknown> };
-  document.profiles.b = { agent: { worker: { model: 'p/a' } } };
-  await writeFile(f.source, JSON.stringify(document));
-  await f.choose('Retry apply', 'Config Composer');
-  assert.match(f.current?.message ?? '', /changed.*review again/i);
-  assert.equal(f.disposed, 0);
-});
-test('a profile edit remains in that profile even while no profile is selected', async (t) => {
-  const f = await fixture(t);
-  await f.choose('Profile', 'Profile');
-  await f.choose('Edit a', 'Profile a');
-  await f.choose('Group settings', 'Profile a · groups');
-  await f.choose('workers', 'Profile a · workers');
-  await f.choose('Agent settings for members', 'Profile a · workers · agent settings');
-  await f.choose('temperature', 'Profile a · workers · temperature');
-  await f.choose('Edit value', 'Profile a · workers · temperature');
-  await f.input('0', 'Apply document changes?');
-  const text = await f.preview();
-  assert.match(text, /Profile a · workers/);
-  assert.match(text, /Authored changes:[\s\S]*\/profiles\/a\/groups\/0\/agent\/temperature: 0/);
-  assert.match(text, /No effective managed fields change for the current choice/);
-  await f.confirm('Composer revision applied');
-  const document = JSON.parse(await f.read()) as {
-    groups: { agent: { temperature: number } }[];
-    profiles: { a: { groups: { agent: { temperature: number } }[] } };
-  };
-  assert.equal(document.groups[0].agent.temperature, 0.2);
-  assert.equal(document.profiles.a.groups[0].agent.temperature, 0);
-});
-
-test('adding an exact tool block preserves an existing scalar permission policy', async (t) => {
-  const f = await fixture(t, '', { permission: 'deny' });
-  await f.choose('Groups', 'Groups · shared');
-  await f.choose('workers', 'Shared · workers');
-  await f.choose('Agent settings for members', 'Shared · workers · agent settings');
-  await f.choose('permission', 'Shared · workers · permission');
-  await f.choose('Edit value', 'Shared · workers · permission');
-  await f.choose('Add tool block', 'Native permission tool key');
-  await f.input('bash', 'Shared · workers · permission · bash');
-  await f.choose('Edit tool block', 'Shared · workers · permission · bash');
-  await f.input('{"git *":"allow"}', 'Apply document changes?');
-  await f.confirm('Composer revision applied');
-  const document = JSON.parse(await f.read()) as { groups: { agent: { permission: unknown } }[] };
-  assert.deepEqual(document.groups[0].agent.permission, { '*': 'deny', bash: { 'git *': 'allow' } });
-});
-test('invalid saved-name rescue offers default and none without needing current resolution', async (t) => {
+test('deleted saved profile can be recovered through Shared only', async (t) => {
   const f = await fixture(t);
   const { readRuntimeContext } = await import('../src/config-composer/composition/runtime-baseline.ts');
   const { readSelection, saveSelection } = await import('../src/config-composer/composition/selection-state.ts');
@@ -373,146 +328,36 @@ test('invalid saved-name rescue offers default and none without needing current 
   const selection = await readSelection(runtime.selectionEnvironment, { root: f.root, baseFile: f.source });
   await saveSelection(selection, 'deleted', async () => {});
   await f.reopen();
-  await f.choose('Profile', 'Profile');
-  assert.equal(
-    f.current?.options?.some((option) => option.title === 'Use configured default'),
-    true,
-  );
-  await f.choose('No profile — keep shared settings', 'Apply profile selection?');
+  await f.choose('Shared only', 'Apply profile selection?');
   await f.confirm('Composer revision applied');
   assert.equal(readRuntimeContext(f.config, { root: f.root, directory: f.root }).selection?.choice, null);
 });
-test('native metadata changes require restart and review without a refresh action', async (t) => {
-  const f = await fixture(t, 'model: p/native');
-  await writeFile(join(f.root, 'agents/worker.md'), '---\nmodel: p/a\n---\nOPAQUE');
-  await f.choose('Profile', 'Profile');
-  await f.choose('○ b', 'Config Composer');
-  assert.match(f.current?.message ?? '', /Restart OpenCode, then review again/);
-  assert.equal(f.disposed, 0);
-  assert.equal(f.current?.options, undefined);
-});
-
-test('group creation stages an empty membership and cannot persist until a member is chosen', async (t) => {
+test('malformed source reports its error and corrected external source reopens inspection', async (t) => {
   const f = await fixture(t);
   const before = await f.read();
-  await f.choose('Groups', 'Groups · shared');
-  await f.choose('Create group', 'New group name');
-  await f.input('new-team', 'Members · new-team');
-  assert.equal(await f.read(), before);
-  await f.choose('Review changes', 'Config Composer');
-  assert.match(f.current?.message ?? '', /At least one/);
-  assert.equal(await f.read(), before);
-  await f.escape('Members · new-team');
-  await f.choose('○ agent worker', 'Members · new-team');
-  await f.choose('Review changes', 'Apply document changes?');
-  await f.confirm('Composer revision applied');
-  const document = JSON.parse(await f.read()) as { groups: { name: string; members: object }[] };
-  assert.deepEqual(document.groups.at(-1), { name: 'new-team', members: { agent: ['worker'], command: [] } });
-});
-test('native JSON editing rejects duplicate tool keys before review or writing', async (t) => {
-  const f = await fixture(t);
-  const before = await f.read();
-  await f.choose('Groups', 'Groups · shared');
-  await f.choose('workers', 'Shared · workers');
-  await f.choose('Agent settings for members', 'Shared · workers · agent settings');
-  await f.choose('permission', 'Shared · workers · permission');
-  await f.choose('Edit value', 'Shared · workers · permission');
-  await f.choose('Edit complete permission', 'Shared · workers · permission JSON');
-  await f.input('{"edit":"deny","edit":"allow"}', 'Config Composer');
-  assert.match(f.current?.message ?? '', /duplicate JSON keys/);
-  assert.equal(await f.read(), before);
-});
-
-test('saved apply cannot display recovery on a replacement route', async (t) => {
-  const f = await fixture(t);
-  const moved = Promise.withResolvers<undefined>();
-  t.mock.method(f.api.client.session, 'status', async () => {
-    Object.assign(f.api.route, { current: { name: 'home' } });
-    f.api.ui.dialog.clear();
-    moved.resolve(undefined);
-    return { data: {} };
-  });
-  await f.choose('Profile', 'Profile');
-  await f.choose('○ a', 'Apply profile selection?');
-  (f.current as TuiDialogConfirmProps).onConfirm!();
-  f.api.ui.dialog.clear();
-  await moved.promise;
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(f.current, undefined);
+  await writeFile(f.source, '{"profiles":');
+  await f.open('view-configs', 'Config Composer');
+  assert.match(f.current?.message ?? '', /config-composer.jsonc|configuration|JSON/);
+  assert.equal(f.disposed, 0);
+  await writeFile(f.source, before);
+  await f.open('view-configs', 'Configuration');
   assert.equal(f.disposed, 0);
 });
-
-test('root has three areas and saved apply recovery stays in Effective', async (t) => {
+test('inspection marks source-only changes pending even when effective values are equal', async (t) => {
   const f = await fixture(t);
-  assert.deepEqual(
-    f.current?.options?.map((option) => option.title),
-    ['Profile', 'Groups', 'Effective'],
-  );
-  await f.choose('Effective', 'Effective configuration');
-  assert.ok(f.current.options.some((option) => option.title === 'Apply saved changes'));
+  await writeFile(f.source, (await f.read()) + '\n');
+  await f.open('view-configs', 'Configuration');
+  await f.choose('Runtime status and sources', 'Runtime status and sources');
+  assert.match(await f.detailText(), /Saved configuration pending/);
 });
-
-test('profile preview separates pinned members from effective changes', async (t) => {
-  const f = await fixture(t, 'model: p/native');
-  await f.choose('Profile', 'Profile');
-  await f.choose('○ b', 'Apply profile selection?');
-  let text = f.current?.message ?? '';
-  const pages = f.current?.options?.filter((option) => option.title.startsWith('Review page')) ?? [];
-  for (const page of pages) {
-    await f.choose(page.title, `Preview · ${Number(page.value) + 1}/${pages.length}`);
-    text += f.current?.message ?? '';
-    await f.escape('Apply profile selection?');
-  }
-  assert.match(text, /Pinned members retain frontmatter/);
-  assert.match(text, /Blocked Composer value/);
-  assert.equal(f.disposed, 0);
+test('inspection reload menu applies external source without changing its bytes', async (t) => {
+  const f = await fixture(t);
+  const document = JSON.parse(await f.read()) as { agent?: object };
+  document.agent = { helper: { top_p: 0.75 } };
+  const text = JSON.stringify(document);
+  await writeFile(f.source, text);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('Reload configurations', 'Configuration reloaded');
+  assert.equal(f.disposed, 1);
+  assert.equal(await f.read(), text);
 });
-
-for (const choice of ['No profile — keep shared settings', '○ b']) {
-  test(`selection ${choice} previews a disappearing managed field before applying`, async (t) => {
-    const f = await fixture(t);
-    await writeFile(
-      f.source,
-      setSetting(await f.read(), { profile: 'a', kind: 'agent', name: 'helper' }, 'top_p', 0.7),
-    );
-    await f.reopen();
-    await f.choose('Profile', 'Profile');
-    await f.choose('○ a', 'Apply profile selection?');
-    await f.confirm('Composer revision applied');
-    assert.equal((f.config.agent.helper as Record<string, unknown>).top_p, 0.7);
-    await f.reopen();
-    await f.choose('Profile', 'Profile');
-    await f.choose(choice, 'Apply profile selection?');
-    const text = await f.preview();
-    assert.match(text, /Effective changes:[\s\S]*\/agent\/helper\/top_p/);
-    assert.match(text, /Removed contribution: inherit\/native fallback/);
-    assert.match(text, /Previously configured:[\s\S]*top_p: 0\.7/);
-    assert.match(text, /\/profiles\/a\/agent\/helper\/top_p/);
-    await f.confirm('Composer revision applied');
-    assert.equal((f.config.agent.helper as Record<string, unknown>).top_p, undefined);
-    assert.equal(f.disposed, 2, 'each choice applied after one confirmation');
-  });
-}
-for (const edit of ['field', 'member'] as const) {
-  test(`document ${edit} removal previews disappearing effective contributions`, async (t) => {
-    const f = await fixture(t, '', { top_p: 0.7 });
-    await f.choose('Groups', 'Groups · shared');
-    await f.choose('workers', 'Shared · workers');
-    if (edit === 'field') {
-      await f.choose('Agent settings for members', 'Shared · workers · agent settings');
-      await f.choose('top_p', 'Shared · workers · top_p');
-      await f.choose('Inherit/remove this authored setting', 'Apply document changes?');
-    } else {
-      await f.choose('Members', 'Members · workers');
-      await f.choose('✓ agent helper', 'Members · workers');
-      await f.choose('Review changes', 'Apply document changes?');
-    }
-    const text = await f.preview();
-    assert.match(text, /Authored changes:/);
-    assert.match(text, /Effective changes:[\s\S]*\/agent\/helper\/top_p/);
-    assert.match(text, /Removed contribution: inherit\/native fallback/);
-    await f.confirm('Composer revision applied');
-    assert.equal((f.config.agent.helper as Record<string, unknown>).top_p, undefined);
-    assert.equal((f.config.agent.worker as Record<string, unknown>).top_p, edit === 'member' ? 0.7 : undefined);
-  });
-}

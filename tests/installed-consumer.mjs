@@ -81,7 +81,7 @@ await tui.tui({
 });
 assert.deepEqual(
   commands.map((command) => command.slashName),
-  ['compose-configs'],
+  ['profiles', 'view-configs', 'reload-configs'],
 );
 assert.ok(commands.every((command) => !command.slashAliases?.includes('compose')));
 assert.equal(typeof dispose, 'function');

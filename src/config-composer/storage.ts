@@ -1,50 +1,47 @@
-import { unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { type CatalogModel, SettingsError, validateChoice } from './settings.ts';
-import { type Source, loadSource, parseSourceDocument, replaceSource, withSourceLock } from './composition/sources.ts';
+import { type Source, loadSource } from './composition/sources.ts';
 import {
   type SelectionSnapshot,
-  canonical,
   readSelection,
   saveSelection,
   verifySelection,
   verifySelectionProof,
   withSelectionLock,
-  writeSelectionLocked,
 } from './composition/selection-state.ts';
 import { type AttestedRuntime, type RuntimeLocation, readRuntimeContext } from './composition/runtime-baseline.ts';
 import {
   type CompositionRevision,
+  type NativeObservation,
   compositionRevision,
   digest,
-  nativeCommandPaths,
-  nativeJsonPaths,
   observeNative,
 } from './composition/revision.ts';
 import { resolveComposition } from './composition/runtime.ts';
 import type { ResolvedCandidate, Selection } from './composition/document-types.ts';
-export interface EditorConnection {
+export interface ConfigurationConnection {
   location: RuntimeLocation;
   assertCurrent(): void;
   config(): Promise<unknown>;
   proveFilesystem(): Promise<void>;
 }
-export interface EditorContext {
-  connection: EditorConnection;
+export interface ConfigurationContext {
+  connection: ConfigurationConnection;
   runtime: AttestedRuntime;
   source: Source;
   selection: SelectionSnapshot;
+  disk: NativeObservation;
 }
 export interface Preview {
   choice: Selection;
   candidate: ResolvedCandidate;
-  context: EditorContext;
+  context: ConfigurationContext;
 }
-export const metadataChanged = 'Native agent metadata changed. Restart OpenCode, then review again.';
+export const metadataChanged = 'Native agent metadata changed. Use /reload-configs, then review again.';
 export const jsonChanged =
-  'Native JSON configuration changed. Restart OpenCode to refresh its global cache; instance apply cannot reload it. Saved changes are retained.';
-export async function loadEditorContext(connection: EditorConnection): Promise<EditorContext> {
+  'Native JSON configuration changed. Use /reload-configs, then review again. Global native JSON changes require a server restart.';
+export async function loadConfigurationContext(connection: ConfigurationConnection): Promise<ConfigurationContext> {
   connection.assertCurrent();
   await connection.proveFilesystem();
   const runtime = readRuntimeContext(await connection.config(), connection.location);
@@ -54,10 +51,11 @@ export async function loadEditorContext(connection: EditorConnection): Promise<E
     root: runtime.location.root,
     baseFile: source.canonicalPath,
   });
+  const disk = await observeNative(runtime.observation.context);
   connection.assertCurrent();
-  return { connection, runtime, source, selection };
+  return { connection, runtime, source, selection, disk };
 }
-async function verifyInputs(context: EditorContext): Promise<void> {
+export async function verifySavedInputs(context: ConfigurationContext): Promise<void> {
   const { connection, runtime, source, selection } = context;
   connection.assertCurrent();
   await verifySelectionProof(runtime.selectionEnvironment);
@@ -68,14 +66,22 @@ async function verifyInputs(context: EditorContext): Promise<void> {
     current.text !== source.text ||
     digest(current.document) !== digest(source.document)
   ) {
-    throw new SettingsError('Composition source changed. Reopen the editor.');
+    throw new SettingsError('Composition source changed. Reopen Config Composer.');
   }
   await verifySelection(selection);
+  connection.assertCurrent();
+}
+async function verifyInputs(context: ConfigurationContext): Promise<void> {
+  await verifySavedInputs(context);
+  const { connection, runtime } = context;
   let observed;
   try {
     observed = await observeNative(runtime.observation.context);
   } catch {
     throw new SettingsError(metadataChanged);
+  }
+  if (observed.globalJson !== runtime.globalJsonBaseline) {
+    throw new SettingsError('Native global JSON changed. Restart the OpenCode server process, then review again.');
   }
   if (observed.metadata !== runtime.observation.metadata) {
     throw new SettingsError(metadataChanged);
@@ -83,9 +89,12 @@ async function verifyInputs(context: EditorContext): Promise<void> {
   if (observed.json !== runtime.observation.json) {
     throw new SettingsError(jsonChanged);
   }
+  if (observed.commands !== runtime.observation.commands) {
+    throw new SettingsError('Native command Markdown changed. Use /reload-configs, then review again.');
+  }
   connection.assertCurrent();
 }
-export async function verifyContext(context: EditorContext, checkRuntime = true): Promise<void> {
+export async function verifyContext(context: ConfigurationContext, checkRuntime = true): Promise<void> {
   const { connection, runtime } = context;
   await verifyInputs(context);
   if (checkRuntime) {
@@ -95,7 +104,7 @@ export async function verifyContext(context: EditorContext, checkRuntime = true)
       digest(currentRuntime.native) !== digest(runtime.native) ||
       digest(currentRuntime.observation) !== digest(runtime.observation)
     ) {
-      throw new SettingsError('The running instance changed. Reopen the editor.');
+      throw new SettingsError('The running instance changed. Reopen Config Composer.');
     }
     // A runtime read can yield while local inputs change. Verify the reviewed
     // observations again before a caller may persist state or dispose the instance.
@@ -121,7 +130,7 @@ function validateCandidate(candidate: ResolvedCandidate, models: CatalogModel[])
 }
 
 export async function previewSelection(
-  context: EditorContext,
+  context: ConfigurationContext,
   choice: Selection,
   catalog?: () => Promise<CatalogModel[]>,
 ): Promise<Preview> {
@@ -138,7 +147,10 @@ export async function previewSelection(
   await verifyContext(context);
   return { choice, candidate, context };
 }
-export async function saveSelectionGuarded(context: EditorContext, preview: Preview): Promise<EditorContext> {
+export async function saveSelectionGuarded(
+  context: ConfigurationContext,
+  preview: Preview,
+): Promise<ConfigurationContext> {
   if (
     preview.context !== context ||
     digest(
@@ -154,7 +166,7 @@ export async function saveSelectionGuarded(context: EditorContext, preview: Prev
   }
   const persisted = await saveSelection(context.selection, preview.choice, () => verifyContext(context));
   try {
-    const committed = await loadEditorContext(context.connection);
+    const committed = await loadConfigurationContext(context.connection);
     if (
       !isDeepStrictEqual(committed.selection, persisted) ||
       !isDeepStrictEqual(committed.source, context.source) ||
@@ -171,114 +183,7 @@ export async function saveSelectionGuarded(context: EditorContext, preview: Prev
     );
   }
 }
-async function verifyDocumentContext(context: EditorContext): Promise<void> {
-  await verifyContext(context);
-  const discovery = context.runtime.observation.context;
-  const native = await Promise.all(
-    [...nativeJsonPaths(discovery), ...(await nativeCommandPaths(discovery))].map((path) => canonical(path)),
-  );
-  const markdown = Object.values(context.runtime.observation.authority).flatMap((agent) =>
-    agent.sources.map((source) => source.canonicalPath),
-  );
-  if ([...native, ...markdown].includes(context.source.canonicalPath)) {
-    throw new SettingsError(
-      'Native JSON and Markdown sources are read-only. Choose a separate Config Composer definition file before editing.',
-    );
-  }
-  context.connection.assertCurrent();
-}
-export interface DocumentPreview extends Preview {
-  text: string;
-}
-export async function previewDocument(
-  context: EditorContext,
-  text: string,
-  catalog?: () => Promise<CatalogModel[]>,
-  choice: Selection = context.selection.choice,
-): Promise<DocumentPreview> {
-  await verifyDocumentContext(context);
-  const document = parseSourceDocument(text, context.source.path);
-  const candidate = resolveComposition(document, choice, context.runtime.native, context.runtime.observation.authority);
-  if (catalog !== undefined) {
-    validateCandidate(candidate, await catalog());
-  }
-  await verifyDocumentContext(context);
-  return { context, text, choice, candidate };
-}
-export async function saveDocumentGuarded(context: EditorContext, preview: DocumentPreview): Promise<EditorContext> {
-  const candidate = resolveComposition(
-    parseSourceDocument(preview.text, context.source.path),
-    preview.choice,
-    context.runtime.native,
-    context.runtime.observation.authority,
-  );
-  if (preview.context !== context || !isDeepStrictEqual(candidate, preview.candidate)) {
-    throw new SettingsError('Preview does not match the attested context. Review again.');
-  }
-  await verifyDocumentContext(context);
-  return withSourceLock(context.source, () =>
-    withSelectionLock(context.selection, async () => {
-      await verifyDocumentContext(context);
-      const source = await replaceSource(context.source, preview.text, () => verifyDocumentContext(context));
-      let selection = context.selection;
-      if (preview.choice !== context.selection.choice) {
-        try {
-          selection = await writeSelectionLocked(context.selection, preview.choice, () =>
-            verifyContext({ ...context, source }),
-          );
-        } catch (error) {
-          // Restore only our exact source inode/bytes. External changes are never overwritten.
-          try {
-            await verifyContext({ ...context, source });
-            if (context.source.text === undefined) {
-              await unlink(source.canonicalPath);
-            } else {
-              await replaceSource(source, context.source.text, () => verifyContext({ ...context, source }));
-            }
-          } catch {
-            throw new SettingsError(
-              'Source saved; profile selection could not be saved or safely restored. Reopen Profile and choose a valid profile; external edits were preserved.',
-              { cause: error },
-            );
-          }
-          throw error;
-        }
-      }
-      const expected = { ...context, source, selection };
-      try {
-        const committed = await loadEditorContext(context.connection);
-        if (
-          !isDeepStrictEqual(committed.source, source) ||
-          !isDeepStrictEqual(committed.selection, selection) ||
-          !isDeepStrictEqual(committed.runtime, context.runtime)
-        ) {
-          throw new SettingsError('Saved document or reviewed inputs changed. Review again.');
-        }
-        await verifyContext(expected);
-        if (
-          !isDeepStrictEqual(
-            resolveComposition(
-              committed.source.document,
-              committed.selection.choice,
-              committed.runtime.native,
-              committed.runtime.observation.authority,
-            ),
-            preview.candidate,
-          )
-        ) {
-          throw new SettingsError('Committed document differs from the reviewed candidate. Review again.');
-        }
-        return committed;
-      } catch (error) {
-        throw new SettingsError(
-          `Saved; not applied. Could not attest committed document: ${error instanceof Error ? error.message : 'Reopen Config Composer.'}`,
-          { cause: error },
-        );
-      }
-    }),
-  );
-}
-export function expectedRevision(context: EditorContext): CompositionRevision {
+export function expectedRevision(context: ConfigurationContext): CompositionRevision {
   return compositionRevision(
     context.source,
     context.selection,
@@ -291,13 +196,11 @@ export function expectedRevision(context: EditorContext): CompositionRevision {
   );
 }
 export async function withSavedContext<T>(
-  context: EditorContext,
+  context: ConfigurationContext,
   operation: (verify: (checkRuntime?: boolean) => Promise<void>) => Promise<T>,
 ): Promise<T> {
-  return withSourceLock(context.source, () =>
-    withSelectionLock(context.selection, async () => {
-      await verifyContext(context);
-      return operation((checkRuntime = true) => verifyContext(context, checkRuntime));
-    }),
-  );
+  return withSelectionLock(context.selection, async () => {
+    await verifyContext(context);
+    return operation((checkRuntime = true) => verifyContext(context, checkRuntime));
+  });
 }

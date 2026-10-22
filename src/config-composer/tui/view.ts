@@ -1,36 +1,31 @@
 import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
 import type { dialogNavigation } from '../../tui/navigation.ts';
-import type { EditorContext } from '../storage.ts';
+import type { ConfigurationContext } from '../storage.ts';
 import type { CatalogModel } from '../settings.ts';
 import type { FieldDecision, Selection } from '../composition/document-types.ts';
 import { builtins } from '../composition/runtime.ts';
-import type { SettingsTarget } from '../composition/authoring.ts';
-export interface EditorView {
+export interface ConfigurationView {
   api: TuiPluginApi;
   nav: ReturnType<typeof dialogNavigation>;
-  context: EditorContext;
+  context: ConfigurationContext;
   run(action: () => void | Promise<void>): void;
-  defer(action: () => void | Promise<void>): void;
   catalog(): Promise<CatalogModel[]>;
-  review(text: string, destination: string, choice?: Selection): Promise<void>;
   choose(choice: Selection): Promise<void>;
   details(title: string, text: string): void;
-  retry(): Promise<void>;
+  reload(): Promise<void>;
 }
-export const sourceText = (view: EditorView) => view.context.source.text ?? '{}\n';
-export const destination = (target: SettingsTarget) =>
-  `${target.profile === undefined ? 'Shared' : `Profile ${target.profile}`} · ${target.group ?? `${target.kind} ${target.name}`}`;
-export function roster(view: EditorView, kind: 'agent' | 'command'): string[] {
+export function roster(view: ConfigurationView, kind: 'agent' | 'command'): string[] {
   return [
     ...new Set([
       ...(kind === 'agent' ? Object.keys(builtins) : []),
       ...Object.keys(view.context.runtime.native[kind] ?? {}),
+      ...(kind === 'agent' ? Object.keys(view.context.disk.authority) : []),
     ]),
   ].sort();
 }
 export const permissionNotice =
   'Agent-level permission contribution. Global and built-in inheritance remains host-owned.\nOmitted rules do not mean no enforcement.';
-export function fieldDetail(view: EditorView, key: string, decision: FieldDecision | undefined): string {
+export function fieldDetail(view: ConfigurationView, key: string, decision: FieldDecision | undefined): string {
   if (decision === undefined) {
     return 'No authored value at this level. Native inheritance remains host-owned.';
   }

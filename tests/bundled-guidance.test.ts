@@ -11,10 +11,10 @@ test('bundled guidance is loadable and describes the shipped one-profile contrac
     '../skills/config-composer-explain/references/schema.md',
   ]) {
     const text = await readFile(new URL(path, import.meta.url), 'utf8');
-    assert.match(text, /compose-configs/);
+    assert.match(text, /view-configs/);
     assert.doesNotMatch(
       text,
-      /activeProfiles|configurationPresets|componentGroups|agent-models|reload-configs|profileShortcuts/,
+      /activeProfiles|configurationPresets|componentGroups|agent-models|compose-configs|profileShortcuts/,
     );
   }
 });

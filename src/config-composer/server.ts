@@ -12,6 +12,7 @@ import {
   compositionRevision,
   digest,
   discoveryContext,
+  nativeGlobalJsonPaths,
   observeNative,
 } from './composition/revision.ts';
 import {
@@ -26,6 +27,9 @@ interface Previous {
   native: Record<string, unknown>;
   applied: Record<string, unknown>;
 }
+// Native global JSON is cached for the server process. Rebootstrap must never
+// promote changed disk bytes to evidence that the native cache was refreshed.
+const globalBaselines = new Map<string, string>();
 const roots = new WeakMap<object, Previous>();
 const nested = new WeakMap<object, Previous>();
 function restore(
@@ -81,6 +85,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
       };
       let native: NativeBaseline | undefined;
       let observation: NativeObservation | undefined;
+      let globalJsonBaseline: string | undefined;
       const identities: Pick<RuntimeMarker, 'source' | 'selection'> = {};
       try {
         const previous = roots.get(config);
@@ -121,6 +126,9 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
         observation = await observeNative(
           discoveryContext(directory, typeof input.worktree === 'string' ? input.worktree : worktree),
         );
+        const globalKey = nativeGlobalJsonPaths(observation.context)[0];
+        globalJsonBaseline = globalBaselines.get(globalKey) ?? observation.globalJson;
+        globalBaselines.set(globalKey, globalJsonBaseline);
         const source = await loadSource(options, configDirectory);
         identities.source = {
           path: source.path,
@@ -177,6 +185,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           status: 'applied',
           native: metadata(native),
           observation,
+          globalJsonBaseline,
           revision,
           candidate: { ...candidate, ...metadata(candidate) },
         });
@@ -191,6 +200,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           diagnostic: `Composer not applied. ${error instanceof Error ? error.message : String(error)}`,
           ...(native === undefined ? {} : { native: metadata(native) }),
           ...(observation === undefined ? {} : { observation }),
+          ...(globalJsonBaseline === undefined ? {} : { globalJsonBaseline }),
         });
         throw error;
       }

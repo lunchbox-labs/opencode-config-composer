@@ -25,6 +25,7 @@ export interface RuntimeMarker {
   diagnostic?: string;
   native?: NativeBaseline;
   observation?: NativeObservation;
+  globalJsonBaseline?: string;
   selectionEnvironment: SelectionEnvironment;
   revision?: CompositionRevision;
   candidate?: ResolvedCandidate;
@@ -148,6 +149,9 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   const marker: unknown = config.plugin.flatMap((entry: unknown) =>
     Array.isArray(entry) && record(entry[1]) && Object.hasOwn(entry[1], key) ? [entry[1][key]] : [],
   )[0];
+  if (marker === undefined) {
+    return fail('No runtime marker.');
+  }
   if (!record(marker) || marker.version !== 2 || typeof marker.id !== 'string' || !record(marker.location)) {
     return fail('Unreadable runtime marker.');
   }
@@ -170,6 +174,9 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
     typeof marker.selectionEnvironment.lifetime !== 'string' ||
     !hash(marker.observation.metadata) ||
     !hash(marker.observation.json) ||
+    !hash(marker.observation.globalJson) ||
+    !hash(marker.observation.commands) ||
+    !hash(marker.globalJsonBaseline) ||
     !record(marker.observation.authority) ||
     !record(marker.observation.context) ||
     typeof marker.observation.context.directory !== 'string' ||
@@ -214,7 +221,4 @@ export function readRuntimeContext(config: unknown, location: RuntimeLocation): 
   }
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Runtime, target, field and authority shape checks above establish this internal transport boundary.
   return structuredClone(marker) as unknown as AttestedRuntime;
-}
-export function readRuntimeRevision(config: unknown, location: RuntimeLocation): RuntimeMarker {
-  return readRuntimeContext(config, location);
 }

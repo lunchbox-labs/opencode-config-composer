@@ -192,7 +192,7 @@ export async function readSelection(
 export async function verifySelection(snapshot: SelectionSnapshot): Promise<void> {
   const current = await observe(snapshot.path);
   if (current.text !== snapshot.text || current.identity !== snapshot.identity) {
-    throw changedInput('Profile selection changed. Reopen the editor.', snapshot.path, 'selection');
+    throw changedInput('Profile selection changed. Reopen Config Composer.', snapshot.path, 'selection');
   }
 }
 
@@ -200,11 +200,11 @@ export async function verifySelection(snapshot: SelectionSnapshot): Promise<void
 export async function withSelectionLock<T>(snapshot: SelectionSnapshot, operation: () => Promise<T>): Promise<T> {
   const directory = dirname(snapshot.path);
   if ((await canonical(directory)) !== directory) {
-    throw changedInput('Selection state directory changed identity. Reopen the editor.', directory, 'identity');
+    throw changedInput('Selection state directory changed identity. Reopen Config Composer.', directory, 'identity');
   }
   await mkdir(directory, { recursive: true, mode: 0o700 });
   if ((await realpath(directory)) !== directory) {
-    throw changedInput('Selection state directory changed identity. Reopen the editor.', directory, 'identity');
+    throw changedInput('Selection state directory changed identity. Reopen Config Composer.', directory, 'identity');
   }
   const lockPath = `${snapshot.path}.lock`;
   const lock = await open(lockPath, 'wx', 0o600).catch(() => {

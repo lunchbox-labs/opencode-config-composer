@@ -11,9 +11,9 @@ export function credentialKey(key: string): boolean {
   );
 }
 
-export function diagnosticText(value: string): string {
+export function inspectionText(value: string): string {
   // Keep line breaks for source locations, but remove terminal/control sequences.
-  const clean = Array.from(value.slice(0, 24000))
+  const clean = Array.from(value)
     .filter((char) => {
       const code = char.codePointAt(0) ?? 0;
       return char === '\n' || (code > 31 && (code < 127 || code > 159));
@@ -32,13 +32,17 @@ export function diagnosticText(value: string): string {
       return line;
     })
     .join('\n');
-  return redacted.length > 6000 || value.length > 24000 ? `${redacted.slice(0, 6000)}… (truncated)` : redacted;
+  return redacted;
+}
+export function diagnosticText(value: string): string {
+  const clean = inspectionText(value.slice(0, 24000));
+  return clean.length > 6000 || value.length > 24000 ? `${clean.slice(0, 6000)}… (truncated)` : clean;
 }
 
-/** Display only known editor diagnostics; never retain raw errors, causes or stacks. */
-export function editorErrorText(error: unknown): string {
+/** Display only known configuration diagnostics; never retain raw errors, causes or stacks. */
+export function configurationErrorText(error: unknown): string {
   if (!(error instanceof SettingsError)) {
-    return 'Could not update settings. Check the files and server connection.';
+    return 'Could not read or apply configuration. Check the files and server connection.';
   }
   return diagnosticText(error.message);
 }
