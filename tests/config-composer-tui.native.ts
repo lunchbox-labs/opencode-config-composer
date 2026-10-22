@@ -1,154 +1,19 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { once } from 'node:events';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-import { installPackage } from './install-package.ts';
-import { npmRegistration } from './npm-registration.ts';
-import { isolatedEnvironment } from './integration/harness.ts';
-
-for (const scope of ['shared', 'project-only', 'empty'] as const) {
-  test(`OpenCode renders both Composer menus with ${scope} sources`, { timeout: 260_000 }, async (t) => {
-    const root = await mkdtemp(join(tmpdir(), 'composer-tui-native-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
-    const configRoot = join(root, 'config', 'opencode');
-    const project = join(root, 'project');
-    await mkdir(configRoot, { recursive: true });
-    await mkdir(join(project, '.opencode'), { recursive: true });
-    await installPackage(configRoot);
-    const specification = await npmRegistration(t, configRoot, root);
-    const hostVersion = process.env.OPENCODE_TEST_VERSION;
-    assert.ok(hostVersion !== undefined, 'native runner must provide its resolved exact host version');
-    assert.match(hostVersion, /^\d+\.\d+\.\d+$/, 'native dependency version must be exact');
-    assert.ok(process.env.npm_execpath !== undefined, 'run native tests through npm');
-    await promisify(execFile)(
-      process.execPath,
-      [
-        process.env.npm_execpath,
-        'install',
-        '--prefix',
-        configRoot,
-        '--ignore-scripts',
-        '--no-audit',
-        '--no-fund',
-        '--save-exact',
-        `@opencode-ai/plugin@${hostVersion}`,
-      ],
-      { timeout: 120_000 },
-    );
-    for (const directory of [join(root, '.opencode'), join(project, '.opencode')]) {
-      await mkdir(directory, { recursive: true });
-      for (const name of ['package.json', 'package-lock.json', 'node_modules']) {
-        await cp(join(configRoot, name), join(directory, name), { recursive: true, verbatimSymlinks: true });
-      }
-    }
-    let requests = 0;
-    const provider = createServer((_request, response) => {
-      requests++;
-      response.writeHead(500);
-      response.end('The terminal check must not send a model request.');
-    });
-    provider.listen(0, '127.0.0.1');
-    await once(provider, 'listening');
-    t.after(() => {
-      provider.closeAllConnections();
-      provider.close();
-    });
-    const address = provider.address();
-    assert.ok(address !== null && typeof address !== 'string');
-    await writeFile(
-      join(configRoot, 'opencode.jsonc'),
-      JSON.stringify({
-        plugin: [specification],
-        model: 'fixture/model',
-        small_model: 'fixture/model',
-        default_agent: scope === 'shared' ? undefined : 'worker',
-        enabled_providers: ['fixture'],
-        provider: {
-          fixture: {
-            name: 'Fixture',
-            npm: '@ai-sdk/openai-compatible',
-            options: { baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: 'synthetic-test-key' },
-            models: { model: { name: 'Fixture model', limit: { context: 8192, output: 256 } } },
-          },
-        },
-        agent: { worker: { mode: 'primary', groups: ['workers'], prompt: 'Reply briefly.' } },
-      }),
-    );
-    if (scope !== 'empty') {
-      await writeFile(
-        join(scope === 'shared' ? configRoot : join(project, '.opencode'), 'config-composer.jsonc'),
-        JSON.stringify({
-          componentGroups: { workers: { configuration: { model: 'fixture/model' } } },
-          profiles: {
-            work: { layers: [{ componentGroup: 'workers' }] },
-            planning: { extends: 'work', agentAvailability: { build: false } },
-          },
-          activeProfiles: ['work'],
-          profileShortcuts: {
-            quiet: { activeProfiles: [], description: 'Select no profiles' },
-            planning: { activeProfiles: ['planning'], description: 'Select planning agents' },
-          },
-        }),
-      );
-    }
-    await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [specification] }));
-    const env: NodeJS.ProcessEnv = {
-      ...isolatedEnvironment(root),
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-      XDG_CONFIG_HOME: join(root, 'config'),
-      XDG_DATA_HOME: join(root, 'data'),
-      XDG_STATE_HOME: join(root, 'state'),
-      XDG_CACHE_HOME: join(root, 'cache'),
-      OPENCODE_TEST_HOME: root,
-      OPENCODE_DB: join(root, 'db.sqlite'),
-      OPENCODE_CONFIG: '',
-      OPENCODE_CONFIG_CONTENT: '',
-      OPENCODE_SERVER_PASSWORD: '',
-      OPENCODE_DISABLE_AUTOUPDATE: '1',
-      OPENCODE_DISABLE_MODELS_FETCH: '1',
-      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true',
-    };
-    delete env.OPENCODE_CONFIG_DIR;
-    delete env.OPENCODE_DISABLE_PROJECT_CONFIG;
-    const result = await promisify(execFile)(
-      'python3',
-      [fileURLToPath(new URL('./native-tui.py', import.meta.url)), process.env.OPENCODE_BIN ?? 'opencode', project],
-      { env, timeout: 130_000, maxBuffer: 1_000_000 },
-    );
-    assert.match(result.stdout, /native TUI rendered both Composer menus/);
-    if (scope === 'shared') {
-      const result = await promisify(execFile)(
-        'python3',
-        [
-          fileURLToPath(new URL('./native-shortcuts.py', import.meta.url)),
-          process.env.OPENCODE_BIN ?? 'opencode',
-          project,
-          'availability',
-        ],
-        { env, timeout: 130_000, maxBuffer: 1_000_000 },
-      );
-      assert.match(result.stdout, /native TUI saved and applied profile shortcut/);
-      await assert.rejects(readFile(join(project, '.opencode/config-composer.local.jsonc')), /ENOENT/);
-      const { readSelection } = await import('../src/config-composer/composition/selection-state.ts');
-      const selected = await readSelection(
-        { stateDirectory: join(root, 'state/opencode'), lifetime: 'inspection' },
-        { root: project, baseFile: join(configRoot, 'config-composer.jsonc') },
-        true,
-      );
-      assert.deepEqual(selected.profiles, []);
-      assert.deepEqual(
-        (JSON.parse(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8')) as { activeProfiles: string[] })
-          .activeProfiles,
-        ['work'],
-      );
-    }
-    assert.equal(requests, 0, 'opening Composer menus must not send a model prompt');
-  });
-}
+import { compositionFixture } from './integration/composition-fixture.ts';
+import { nativeTerminal } from './integration/terminal.ts';
+test('native TUI opens Profile, Groups and Effective for an empty installation', { timeout: 240000 }, async (t) => {
+  const f = await compositionFixture(t, 'tui-smoke');
+  await f.host.start();
+  const session = await f.host.api<{ id: string }>('/session', { title: 'Composer smoke' });
+  const terminal = await nativeTerminal(f.host, session.id);
+  await terminal.wait(['ctrl+p', 'commands']);
+  await terminal.command('/compose-configs', 'Compose configs', 'Profile', 'Groups', 'Effective');
+  await terminal.choose('Groups', 'always active', 'No groups configured');
+  await terminal.press('\x1b', 'Compose configs');
+  await terminal.choose('Profile', 'Follow default', 'None');
+  await terminal.press('\x1b', 'Compose configs');
+  await terminal.choose('Effective', 'Effective configuration', 'Retained session selection');
+  await terminal.choose('Retained session selection', 'Existing sessions can retain', '/models', '/variants');
+  assert.equal(f.host.requests.length, 0);
+});

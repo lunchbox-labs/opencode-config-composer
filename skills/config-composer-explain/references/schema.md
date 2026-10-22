@@ -1,96 +1,11 @@
-# Canonical composition reference
+# Configuration contract
 
-Use the installed package's `schema.json` to validate JSONC.
-OpenCode's native configuration stays in its own files. Composer's default shared source is
-`config-composer.jsonc` beside the native global configuration; an explicit plugin `configFile` is supported.
+Root: `$schema`, `defaultProfile`, `model`, `small_model`, `groups`, `agent`, `command`, `profiles`.
 
-| Key                      | Role                                                                                      |
-| ------------------------ | ----------------------------------------------------------------------------------------- |
-| `components.agents`      | Reusable inline `prompt` or Markdown `file`; optional `skills`, and `configuration`       |
-| `components.skills`      | Explicit native `SKILL.md` file definitions                                               |
-| `components.commands`    | Native command `file` or inline `template`                                                |
-| `componentGroups`        | Any mix of agent/skill/command names plus optional agent configuration                    |
-| `configurationPresets`   | Reusable model, variant, parameters, and ordered permission settings                      |
-| `profiles`               | Optional named `extends`, ordered `layers`, `agentAvailability`, and explicit `overrides` |
-| `defaults` / `overrides` | Scoped model defaults, global permissions, and selected-agent settings                    |
-| `selection`              | Configured `defaultProfiles` and `retainOnRestart` policy for project selections          |
-| `activeProfiles`         | Legacy profile defaults, used only when no scope supplies `selection.defaultProfiles`     |
-| `imports`                | Explicit JSONC paths; no automatic directory scan                                         |
+Groups: ordered `{ name, description?, members: { agent?: string[], command?: string[] }, agent?, command? }`. At least one nonempty member array. Membership-only groups are valid. Profiles: a map of `{ description?, model?, small_model?, groups?: [{ name, agent?, command? }], agent?, command? }`. All references and targets are exact names and validated even in inactive profiles.
 
-A group layer selects components. A preset layer configures agents already selected by earlier layers or an availability decision;
-it must specify `target.agents` and/or `target.componentGroups`. Parent layers replay before child layers.
-Active profiles replay in list order. Reusable imported files must contain definitions and imports only:
-top-level `selection`, legacy `activeProfiles`, `defaults`, and `overrides` are rejected rather than silently
-ignored. Shared, project, and local scope files participate in that order. Later supplied selection fields
-replace earlier ones; profile lists are not combined.
+Agent patch: `model`, `variant`, `temperature`, `top_p`, `options`, `mode`, `permission`. Command patch: `agent`, `model`, `subtask`. No null unset operations in the document. Persisted null selection means None; missing selection follows `defaultProfile`.
 
-A saved project selection overrides configured `selection.defaultProfiles`, including when the saved list is
-empty. If no scope supplies `selection.defaultProfiles`, the highest-scope legacy `activeProfiles` list supplies
-the defaults. Editing either default list does not replace a saved selection. In `/compose-configs`, save
-**Select no profiles** to override the defaults with an empty list, or **Use configured defaults** to remove
-the project override. Apply the saved change separately. Selecting no profiles leaves independent document
-defaults and overrides in effect.
+Precedence: root groups → supplied native fields → root named patches → profile groups → profile named patches → actual authored agent frontmatter. Synthetic empty native maps do not block defaults. Authored options/permission are whole-field pins; empty values are explicit. Later Markdown sources replace each authored whole field. Composer permission objects replace and reorder touched exact tool blocks; scalar actions replace the policy. Native bodies are never edited.
 
-Selections are stored outside configuration files and retained across server restarts by default. With
-`selection.retainOnRestart: false`, a selection lasts for the current server process, including apply/reload;
-a new process starts from configured defaults. This temporary selection does not erase a retained choice,
-which becomes active again if retention is re-enabled.
-Native group frontmatter can add agents to an existing selected group without duplicating native definitions.
-
-```jsonc
-{
-  "componentGroups": { "reviewers": { "agents": ["plan", "explore"] } },
-  "configurationPresets": {
-    "review-access": {
-      "permissions": [{ "tool": "bash", "pattern": "git *", "action": "ask" }],
-    },
-  },
-  "profiles": {
-    "review": {
-      "layers": [
-        { "componentGroup": "reviewers" },
-        {
-          "configurationPreset": "review-access",
-          "target": { "componentGroups": ["reviewers"] },
-        },
-      ],
-    },
-  },
-  "selection": { "defaultProfiles": ["review"] },
-}
-```
-
-Agent settings use `model` OR `modelRef` (`preset:<name>`, `opencode:model`, or `opencode:small_model`).
-A reference supplies model-bound settings; a targeted preset layer also contributes its permission rules.
-Within one ordered replay, changing the resolved model or authored model binding clears inherited Composer
-variant/parameter values, even when a new reference resolves to the same model. An unchanged binding or a
-parameter-only layer retains earlier contributions from that replay. New explicit settings apply after the
-reset; omitted values fall back to applicable native settings or remain unset. Switching profiles reconstructs from the original
-native/base configuration and removes old-profile-only settings, including when the destination resolves to
-the same model. Base values remain unless overridden. Native explicit pins remain unless
-an explicit component or agent override changes them. Parameters support `temperature`, `topP`, `topK`,
-`maxOutputTokens`, and JSON provider `options`; capability validation depends on the selected model.
-
-`defaults.agents` applies to selected agents before profile settings. `overrides.agents.<name>` and profile
-agent overrides apply explicitly to selected agents. Global permission rules use `defaults.permissions` and
-`overrides.permissions`, with active profile global overrides between scoped defaults and scoped overrides.
-Agent rules compile after applied global permissions and native agent permissions. Only a nonmatch falls
-back; `ask` is a real match. Repeated ordered rules are retained, including later allows after earlier denies.
-Unsupported wildcard ordering or host shapes warn and skip every Composer permission rule in that scope.
-An affected agent keeps native permissions plus applied globals; a global failure keeps native globals and
-lets independent agents compile. Other settings continue. That fallback may omit intended deny rules.
-
-**Compose configs → Running configuration inspector** reads current server defaults and running agent settings.
-**Applied Composer parameters** shows validated applied model-bound contributions, not saved edits awaiting apply.
-**Recorded conversation** separately labels stored session fallback, latest recorded request/response, and an earlier
-completed response when applicable. Missing, stale or foreign applied metadata is unavailable; observable native
-defaults remain usable even when saved composition is invalid. **Refresh** rereads the server.
-The current unsent native TUI model/variant selection and complete final provider request parameters are unavailable.
-Configured settings and recorded history do not predict the next request. Inspection changes no settings or history
-and sends no prompt; values under credential-like option keys are redacted and conversation bodies are omitted.
-
-The `skills` relationship describes intended on-demand use; it does not inject bodies or grant access.
-
-`/compose-configs` can author definitions, memberships, profile selection, parameters, permissions. Save and reload are separate. Invalid active memberships have a repair view; malformed
-JSONC, imports, and profile/preset reference errors need correction in the named source first.
-Read-only imported sources need an explicit writable destination; no tool should silently rewrite them.
+One source defaults to the configuration directory's `config-composer.jsonc`; optional `configFile` is absolute or relative to that directory. Missing implicit source is empty. No source stacking. The UI offers Profile, Groups, and Effective through `/compose-configs`. Source settings are authored directly; the editor writes selection state only. Native metadata and JSON changes require restart before applying.

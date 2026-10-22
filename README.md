@@ -1,50 +1,40 @@
-# OpenCode Config Composer
+# Config Composer
 
-Compose OpenCode configuration with reusable groups, presets and profiles to switch models and permissions
-across your agents. Manage selections, edit settings and inspect the result through `/compose-configs`.
+Compose settings for existing OpenCode agents and commands using one shared JSONC file, always-active groups, and one selected profile per worktree. Tested against OpenCode 1.19.x. This project is licensed under MIT. Native Markdown owns agent prompts and command templates; Composer changes settings only.
 
-Package: **`@lunchbox-labs/opencode-config-composer`** · Tested host range: **OpenCode V1 1.19.x**.
-Independently maintained; not affiliated with OpenCode or Anomaly.
+Register `@lunchbox-labs/opencode-config-composer` in the `plugin` array of both native `opencode.jsonc` and `tui.jsonc`. The package exports `.`, `./server`, `./tui`, and `./schema.json`; helpers are internal.
 
-## Add Composer
-
-Choose a published version from [Downloads](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Downloads), then replace `VERSION` below.
-Add the package to `plugin` in both `opencode.jsonc` and `tui.jsonc`:
+The definition file defaults to `configurationDirectory()/config-composer.jsonc` (the OpenCode config directory, honoring `OPENCODE_CONFIG_DIR`). A plugin tuple may specify `{ "configFile": "settings/composer.jsonc" }`; relative paths resolve in that directory. An absent implicit file means an empty installation. An explicitly configured missing file is an error. There is no project source stack.
 
 ```jsonc
-{ "plugin": ["@lunchbox-labs/opencode-config-composer@VERSION"] }
+{
+  "$schema": "https://unpkg.com/@lunchbox-labs/opencode-config-composer/schema.json",
+  "groups": [
+    {
+      "name": "reviewers",
+      "members": { "agent": ["plan", "explore"] },
+      "agent": { "temperature": 0.2 }
+    }
+  ],
+  "profiles": {
+    "review": { "groups": [{ "name": "reviewers", "agent": { "temperature": 0 } }] }
+  },
+  "defaultProfile": "review"
+}
 ```
 
-The editors need the server plugin registered in the shared `opencode.jsonc`, even when the Composer
-configuration lives in a project.
+Use `/compose-configs` → Profile → preview → confirm → Apply now. Definitions are shared across projects; the selection is stored for the canonical source and current worktree. Follow default uses `defaultProfile`; None still applies all root groups. Selection persists across restarts. This editor writes only selection state. Edit group, profile, and named settings directly in the JSONC definition file. Groups shows centralized membership; Effective shows server-attested applied values, origins, and blocked Composer candidates. A missing saved profile remains recoverable through Profile.
 
-Register Config Composer before any plugin that transforms agent prompt or command template bodies.
-This lets it resolve configuration and agent availability before the other plugin processes the resulting
-bodies. Downstream body changes preserve Config Composer’s editor baseline; running a transformer first
-can make that baseline differ from the authored native inputs.
+Precedence is root groups in array order → native settings → root named settings → selected profile groups in array order → selected profile named settings → actual authored agent frontmatter. Every group applies. Profile group references use root membership. Omitted frontmatter fields do not pin synthetic native defaults. Authored fields always win, including empty strings, zero, false, and empty objects. Across native Markdown roots, the last source authoring a field wins the entire field, even over a later native JSON value.
 
-You can download a verified build from its Actions run artifact while it is retained.
-The tarball contains plugin files and metadata, not bundled runtime dependencies; install it
-through npm so those dependencies are resolved. It is not a standalone offline bundle.
-For a local install, register the installed package directory in both configuration files, for example
-`./node_modules/@lunchbox-labs/opencode-config-composer` relative to each configuration file.
-Direct `.tgz` registrations are not supported for Composer editors or reference notices; install the archive first.
-Use one Config Composer installation; simultaneous versions or duplicate registrations are unsupported.
+Agent patches allow `model`, `variant`, `temperature`, `top_p`, `options`, `mode`, and `permission`. Command patches allow `agent`, `model`, and `subtask`. Global `model` and `small_model` affect only the corresponding native global fields. Models use `provider/model`; variant is independent and an empty variant means configured Default. Native empty models remain inherited. Composer never creates prompt content or enables disabled agents.
 
-Reference notices report missing, disabled, unselected or unverified agent, command and skill references.
-They use the running composition's diagnostics and OpenCode's inventories, independently of editor preview
-validation. An unavailable notice does not change permissions or stop the running composition.
-Editors still require a current configuration snapshot to preview and save changes correctly.
+`options` replaces the whole field. A Composer permission object replaces each touched exact tool block, moving that tool to incoming order; a pattern map replaces the whole block. Untouched keys retain their order. Composer `{}` contributes no changes. A scalar action replaces the policy. Authored frontmatter options and permissions replace the whole final field, including `{}`; scalar permission becomes `{ "*": action }`. Native `/agent` may still contain builtin or global permission inheritance even when `/config` has an empty agent policy.
 
-## Documentation
+Unknown keys, duplicate keys, duplicate groups or members, unknown targets, and invalid references fail before applying. All profiles are validated, including inactive profiles. A retained native default agent must remain enabled, visible, and not a subagent.
 
-- [User Guide](https://github.com/lunchbox-labs/opencode-config-composer/wiki/User-Guide)
-- [Configuration Reference](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Configuration-Reference)
-- [Component References](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Component-References)
-- [Integration Tests](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Integration-Tests)
-- [Example Provider Profiles](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Example-Provider-Profiles)
-- [Example Role Permissions](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Example-Role-Permissions)
-- [Example Review Programming](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Example-Review-Programming)
-- [Example Project Selection](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Example-Project-Selection)
+Selection save and apply verify the shared filesystem, connection, source, selection, and native observations. Changed native Markdown requires: “Native agent metadata changed. Restart OpenCode, then review again.” Native JSON changes also require a restart because the native global cache cannot be refreshed by instance disposal. Busy instances are not disposed. A failed refresh leaves the selection saved and pending. The public API has no conditional dispose transaction, so there is a small race after the last idle check.
 
-This project is licensed under MIT. See [LICENSE](LICENSE).
+Applying config does not clear every native session model or variant. Existing conversations remain saved; use `/models` and `/variants` to change retained selections. The inspector distinguishes configured effects from stored session fallback and does not claim to observe final provider parameters.
+
+Run `npm run check` for static, unit, and installed production-package checks. `npm run test:integration` exercises isolated native installations on the supported Linux and Windows CI matrix. No personal config or credentials are used by these fixtures.

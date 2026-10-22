@@ -1,39 +1,32 @@
-// Adapt names and settings in an explicit writable Composer source.
 {
-  "components": {
-    "agents": {
-      "reviewer": {
-        "prompt": "Review the requested changes and explain the evidence.",
-        "mode": "subagent"
+  "groups": [
+    {
+      "name": "reviewers",
+      "description": "Existing native review agents",
+      "members": {
+        "agent": [
+          "plan",
+          "explore"
+        ]
+      },
+      "agent": {
+        "permission": {
+          "bash": {
+            "git *": "ask"
+          }
+        }
       }
-    },
-    "commands": {
-      "review": { "template": "Review the current changes.", "agent": "reviewer", "subtask": true }
     }
-  },
-  "componentGroups": {
-    "reviewers": {
-      "agents": [
-        "plan",
-        "explore",
-        "reviewer"
-      ],
-      "commands": [
-        "review"
-      ]
-    }
-  },
-  "configurationPresets": {
-    "review-settings": {
-      "modelRef": "opencode:model",
-      "permissions": [{ "tool": "bash", "pattern": "git *", "action": "ask" }]
-    }
-  },
+  ],
   "profiles": {
     "review": {
-      "layers": [
-        { "componentGroup": "reviewers" },
-        { "configurationPreset": "review-settings", "target": { "componentGroups": ["reviewers"] } }
+      "groups": [
+        {
+          "name": "reviewers",
+          "agent": {
+            "temperature": 0
+          }
+        }
       ]
     }
   }

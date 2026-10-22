@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        suite: [registration, core, discovery, canonical, editor, terminal, cleanup, content, content-terminal, permissions, runtime-terminal, running-inspector, scoped-apply, shortcuts, availability, profile-switching]
+        suite: [registration, core, profile, permissions, inspector, apply, terminal, cleanup]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:

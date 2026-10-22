@@ -1,141 +1,123 @@
-import { changedInput } from '../save-diagnostics.ts';
-import { verifySelection } from './selection-state.ts';
 import { createHash } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
-import { join } from 'node:path';
-import { configurationDirectory, configurationFile } from '../configuration.ts';
-import { SettingsError, record } from '../settings.ts';
-import { type SourceFile, collectFileReads } from '../storage.ts';
-import type { LoadedSources } from './sources.ts';
-import type { ResolvedProfileRuntime } from './runtime.ts';
-
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { type NativeFrontmatterContext, nativeAgentSourceRoots, readNativeAgentFrontmatter } from '../frontmatter.ts';
+import type { NativeAuthority, ResolvedCandidate } from './document-types.ts';
+import type { Source } from './sources.ts';
+import type { SelectionSnapshot } from './selection-state.ts';
 export interface CompositionRevision {
   sources: string;
   effective: string;
 }
-const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const identity = async (path: string) =>
-  realpath(path).catch((error: unknown) => {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return undefined;
-    }
-    throw error;
-  });
-
-function componentPaths(sources: LoadedSources): Set<string> {
-  const paths = new Set<string>();
-  const registries: unknown[] = Object.values(sources.registry.components ?? {});
-  for (const entries of registries) {
-    if (!record(entries)) {
-      continue;
-    }
-    for (const value of Object.values(entries)) {
-      if (record(value) && typeof value.file === 'string') {
-        paths.add(value.file);
-      }
-    }
-  }
-  return paths;
+export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export interface NativeObservation {
+  context: NativeFrontmatterContext;
+  authority: NativeAuthority;
+  metadata: string;
+  json: string;
 }
-
-/** Freeze the explicit component inputs used by this resolution, including currently inactive definitions. */
-export async function captureCompositionInputs(sources: LoadedSources): Promise<SourceFile[]> {
-  const result: SourceFile[] = [];
-  for (const path of componentPaths(sources)) {
-    const canonicalPath = await realpath(path);
-    result.push({ ...(await configurationFile(canonicalPath)), path, canonicalPath });
-  }
-  return result;
-}
-
-/** Attest Composer inputs and their result against the running native baseline, not the freshness of native JSON. */
-export function compositionRevision(
-  sources: LoadedSources,
-  resolved: ResolvedProfileRuntime,
-  files: readonly SourceFile[],
-): CompositionRevision {
-  const components = componentPaths(sources);
-  const inputs = new Map<string, unknown>();
-  for (const file of collectFileReads(files).files) {
-    if (![file.path, ...(file.aliases ?? [])].some((path) => components.has(path))) {
-      continue;
-    }
-    const value = [file.canonicalPath ?? file.path, digest(file.text)];
-    for (const path of new Set([...[file.path, ...(file.aliases ?? [])].filter((path) => components.has(path))])) {
-      inputs.set(path, value);
-    }
-  }
-  for (const path of components) {
-    if (!inputs.has(path)) {
-      throw new SettingsError(`Composition input ${path} was not captured. Reopen the editor.`);
-    }
-  }
+export function discoveryContext(directory: string, worktree: string): NativeFrontmatterContext {
   return {
-    sources: digest({
-      paths: [...sources.paths].sort(([a], [b]) => a.localeCompare(b)),
-      documents: sources.documents.map((source) => [source.id, source.fingerprint]),
-      scopes: sources.scopes.map((scope) => scope.id),
-      activeProfiles: sources.activeProfiles,
-      inputs: [...inputs].sort(([a], [b]) => a.localeCompare(b)),
-    }),
-    effective: digest({
-      default_agent: resolved.default_agent,
-      model: resolved.model,
-      small_model: resolved.small_model,
-      permission: resolved.permission,
-      agent: resolved.agent,
-      commands: resolved.commands,
-      skillPaths: resolved.skillPaths,
-      choices: resolved.choices,
-    }),
+    directory,
+    worktree,
+    home: homedir(),
+    environment: Object.fromEntries(
+      [
+        'XDG_CONFIG_HOME',
+        'OPENCODE_DISABLE_PROJECT_CONFIG',
+        'OPENCODE_TEST_HOME',
+        'OPENCODE_CONFIG_DIR',
+        'OPENCODE_CONFIG',
+      ].flatMap((key) => {
+        const value = process.env[key];
+        return value === undefined
+          ? []
+          : [[key, key !== 'OPENCODE_DISABLE_PROJECT_CONFIG' && value !== '' ? resolve(value) : value]];
+      }),
+    ),
   };
 }
-
-/** Check the captured bytes and identities again before publishing or applying a revision. */
-export async function verifyCompositionInputs(sources: LoadedSources, files: readonly SourceFile[]): Promise<void> {
-  if (sources.selectionState !== undefined) {
-    await verifySelection(sources.selectionState);
-  }
-  for (const [path, expected] of sources.paths) {
-    if ((await identity(path)) !== expected) {
-      throw changedInput('Composition source identity changed. Reopen the editor.', path, 'identity');
+async function observation(path: string, bytes = false): Promise<unknown> {
+  try {
+    const info = await lstat(path);
+    const target = await realpath(path);
+    return [
+      resolve(path),
+      target,
+      info.dev,
+      info.ino,
+      info.isSymbolicLink(),
+      ...(bytes
+        ? [
+            createHash('sha256')
+              .update(await readFile(path))
+              .digest('hex'),
+          ]
+        : []),
+    ];
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return [resolve(path), null];
     }
-  }
-  const documents = sources.documents.map((source) => ({
-    path: source.path,
-    canonicalPath: source.id,
-    text: source.text,
-  }));
-  for (const file of [...documents, ...files]) {
-    const canonical = file.canonicalPath ?? file.path;
-    if ((await identity(file.path)) !== canonical) {
-      throw changedInput('Composition inputs changed. Reopen the editor before applying.', file.path, 'identity');
-    }
-    if ((await configurationFile(canonical)).text !== file.text) {
-      throw changedInput('Composition inputs changed. Reopen the editor before applying.', file.path, 'content');
-    }
-    if ('aliases' in file) {
-      for (const path of file.aliases ?? []) {
-        if ((await identity(path)) !== canonical) {
-          throw changedInput('Composition input identity changed. Reopen the editor.', path, 'identity');
-        }
-      }
-    }
+    throw error;
   }
 }
-
-/** Observe disk bytes as a change guard only; the host exposes no fingerprint of its cached native inputs.
- * A new instance can observe new bytes while inheriting old cached native values. Native JSON edits require restart.
- */
-export async function observeNativeFiles(directory = configurationDirectory()): Promise<string> {
-  // The native host can receive an 8.3 path or directory alias while the editor uses realpath.
-  // Compare the same physical directory without discarding file identities or exact authored bytes.
-  const observedDirectory = (await identity(directory)) ?? directory;
-  const inputs: unknown[] = [];
-  for (const name of ['config.json', 'opencode.json', 'opencode.jsonc']) {
-    const path = join(observedDirectory, name);
-    const canonical = await identity(path);
-    inputs.push([path, canonical ?? null, canonical === undefined ? null : (await configurationFile(canonical)).text]);
+export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
+  const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
+  const roots = nativeAgentSourceRoots(context);
+  const discovery = await Promise.all(
+    roots
+      .flatMap((root) => [root, ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name))])
+      .map((path) => observation(path)),
+  );
+  const sources = await Promise.all(
+    Object.values(authority)
+      .flatMap((item) => item.sources)
+      .map(async (source) => [source, await observation(source.path)]),
+  );
+  const jsonPaths = new Set(
+    roots.flatMap((root) => ['config.json', 'opencode.json', 'opencode.jsonc'].map((name) => join(root, name))),
+  );
+  for (let directory = context.directory; ; directory = dirname(directory)) {
+    jsonPaths.add(join(directory, 'opencode.json'));
+    jsonPaths.add(join(directory, 'opencode.jsonc'));
+    if (directory === context.worktree || dirname(directory) === directory) {
+      break;
+    }
   }
-  return digest(inputs);
+  const explicit = context.environment?.OPENCODE_CONFIG;
+  if (explicit !== undefined && explicit !== '') {
+    jsonPaths.add(explicit);
+  }
+  return {
+    context,
+    authority,
+    metadata: digest([discovery, sources]),
+    json: digest(await Promise.all([...jsonPaths].map((path) => observation(path, true)))),
+  };
+}
+export function compositionRevision(
+  source: Source,
+  state: SelectionSnapshot,
+  candidate: ResolvedCandidate,
+): CompositionRevision {
+  return {
+    sources: digest([source.path, source.canonicalPath, source.text, state.text ?? null]),
+    effective: digest({
+      ...candidate,
+      agent: Object.fromEntries(
+        Object.entries(candidate.agent).map(([name, entry]) => [
+          name,
+          Object.fromEntries(Object.entries(entry).filter(([key]) => key !== 'prompt')),
+        ]),
+      ),
+      command: Object.fromEntries(
+        Object.entries(candidate.command).map(([name, entry]) => [
+          name,
+          Object.fromEntries(Object.entries(entry).filter(([key]) => key !== 'template')),
+        ]),
+      ),
+    }),
+  };
 }

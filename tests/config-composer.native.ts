@@ -1,807 +1,137 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import type * as Parameters from '../src/config-composer/composition/parameter-authoring.ts';
-import type * as Permissions from '../src/config-composer/composition/permission-authoring.ts';
-import type * as Authoring from '../src/config-composer/composition/authoring.ts';
-import type * as NativeBaseline from '../src/config-composer/composition/native-baseline.ts';
-import type * as Apply from '../src/config-composer/composition/apply.ts';
-import { randomUUID } from 'node:crypto';
-import { setTimeout } from 'node:timers/promises';
-import { nativeHarness } from './integration/harness.ts';
-import { installedEditor } from './integration/editor.ts';
-import { httpRelay } from './integration/http-relay.ts';
-import { bundledPermissions } from './integration/bundled-permissions.ts';
-import type { NativePermissionRule } from './native-bundled-permissions.ts';
-import type * as Storage from '../src/config-composer/storage.ts';
-import type * as Baseline from '../src/config-composer/composition/runtime-baseline.ts';
-import { applyEdits, modify, parse } from 'jsonc-parser';
-
-// Real V1 configuration loading, provider dispatch, and cache invalidation; only the remote model is synthetic.
+import { test } from 'node:test';
+import { compositionFixture } from './integration/composition-fixture.ts';
 test(
-  'OpenCode composes ordered groups from dedicated settings and dispatches changes after reload',
-  { timeout: 180_000 },
+  'installed native authority preserves actual pins above every Composer layer and later JSON',
+  { timeout: 240000 },
   async (t) => {
-    const harness = await nativeHarness(t, 'composition');
-    const { configRoot, project, root, installed, requests } = harness;
-    await mkdir(join(configRoot, 'agents'), { recursive: true });
-    await mkdir(join(configRoot, 'skills/included-skill'), { recursive: true });
-    const observerProject = join(root, 'observer');
-    await mkdir(join(observerProject, '.opencode'), { recursive: true });
-    await writeFile(join(observerProject, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
-    const busyReceived = Promise.withResolvers<undefined>();
-    const releaseBusy = Promise.withResolvers<undefined>();
-    let blockRequests = true;
-    t.after(() => releaseBusy.resolve(undefined));
-    const provider = await httpRelay(t, () => harness.providerURL);
-    provider.intercept(async ({ body }) => {
-      if (blockRequests && body.toString().includes('SCOPED_APPLY_BUSY')) {
-        busyReceived.resolve(undefined);
-        await releaseBusy.promise;
-      }
-    });
-    const api = async <T>(
-      path: string,
-      body?: unknown,
-      method = body === undefined ? 'GET' : 'POST',
-      directory = project,
-    ): Promise<T> => {
-      const response = await fetch(`${harness.url}${path}`, {
-        method,
-        headers: { 'Content-Type': 'application/json', 'x-opencode-directory': directory },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(60_000),
-      });
-      assert.ok(response.ok, `${path}: ${await response.clone().text()}`);
-      return (await response.json()) as T;
+    const f = await compositionFixture(t, 'native-authority');
+    await mkdir(join(f.host.configRoot, 'agents'));
+    await mkdir(join(f.host.configRoot, 'modes'));
+    await mkdir(join(f.host.project, '.opencode/agents'), { recursive: true });
+    const laterMarkdown = '---\noptions: { last: false }\npermission: {}\n---\nOPAQUE_LATER_BODY';
+    await writeFile(join(f.host.project, '.opencode/agents/worker.md'), laterMarkdown);
+    const bodies = {
+      worker:
+        '---\nmodel: fixture/beta\nvariant: high\ntemperature: 0\ntop_p: 0\noptions: { flag: false }\npermission: deny\n---\nOPAQUE_WORKER_BODY',
+      empty: '---\nmodel: ""\nvariant: ""\noptions: {}\npermission: {}\n---\nOPAQUE_EMPTY_BODY',
+      scalar: '---\npermission: deny\n---\nOPAQUE_SCALAR_BODY',
+      tools: '---\ntools: { bash: false, read: true }\n---\nOPAQUE_TOOLS_BODY',
     };
-    const model = {
-      name: 'Synthetic model',
-      temperature: true,
-      limit: { context: 8192, output: 256 },
-      variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } },
-    };
-    const config = {
-      plugin: [installed.directory],
-      model: 'fixture/alpha',
-      small_model: 'fixture/alpha',
-      default_agent: 'main-follower',
-      enabled_providers: ['fixture'],
-      provider: {
-        fixture: {
-          name: 'Fixture',
-          npm: '@ai-sdk/openai-compatible',
-          options: { baseURL: `${provider.url}/v1`, apiKey: 'synthetic-test-key' },
-          models: { alpha: model, beta: model },
+    for (const [name, body] of Object.entries(bodies)) {
+      await writeFile(join(f.host.configRoot, 'agents', `${name}.md`), body);
+    }
+    await writeFile(join(f.host.configRoot, 'modes/legacy.md'), '---\nmode: subagent\n---\nOPAQUE_MODE_BODY');
+    await writeFile(join(f.host.configRoot, 'modes/omitted.md'), '---\n---\nOPAQUE_MODE_BODY');
+    await writeFile(
+      join(f.host.project, 'opencode.jsonc'),
+      JSON.stringify({
+        $schema: 'https://opencode.ai/config.json',
+        agent: {
+          worker: { model: 'fixture/alpha', temperature: 1, options: { later: true }, permission: 'allow' },
+          empty: { model: 'fixture/alpha', variant: 'high', options: { later: true }, permission: 'allow' },
         },
-      },
-      agent: {
-        'guidance-denied': {
-          mode: 'primary',
-          prompt: 'Reply briefly.',
-          permission: { skill: { '*': 'allow', 'config-composer-*': 'deny' } },
-        },
-        pinned: { mode: 'subagent', groups: ['base', 'developers'], model: 'fixture/alpha', variant: 'high' },
-        'main-follower': { mode: 'primary', groups: ['primary'], prompt: 'Reply briefly.' },
-        'small-follower': { mode: 'primary', groups: ['small'], prompt: 'Reply briefly.' },
-        compaction: { groups: ['base'] },
-      },
-    };
-    const composer = {
-      components: { agents: { 'component-worker': { prompt: 'CONSUMER_BASE', mode: 'primary' } } },
-      configurationPresets: { balanced: { model: 'fixture/alpha', variant: 'low' } },
-      defaults: { agents: {} },
-      componentGroups: {
-        base: { configuration: { model: 'fixture/beta', variant: 'high' } },
-        developers: {
-          agents: ['component-worker'],
-          configuration: { modelRef: 'preset:balanced' },
-        },
-        primary: { configuration: { modelRef: 'opencode:model', variant: 'low' } },
-        small: { configuration: { modelRef: 'opencode:small_model', variant: 'low' } },
-      },
-      profiles: {
-        work: {
-          layers: [
-            { componentGroup: 'base' },
-            { componentGroup: 'developers' },
-            { componentGroup: 'primary' },
-            { componentGroup: 'small' },
-          ],
-        },
-      },
-      activeProfiles: ['work'],
-    };
-    await writeFile(
-      join(configRoot, 'config-composer.jsonc'),
-      `// Dedicated settings\n${JSON.stringify(composer, null, 2)}\n`,
-    );
-    await writeFile(
-      join(configRoot, 'skills/included-skill/SKILL.md'),
-      '---\nname: included-skill\ndescription: Synthetic native skill.\n---\n' +
-        'SKILL_BODY_BEFORE\nNATIVE_SKILL_BODY\nSKILL_BODY_AFTER\n',
-    );
-    await writeFile(join(configRoot, 'skills/included-skill/notes.txt'), 'Companion resource');
-    await writeFile(
-      join(configRoot, 'opencode.jsonc'),
-      `// Native integration fixture\n${JSON.stringify(config, null, 2)}\n`,
-    );
-    await writeFile(
-      join(configRoot, 'agents/worker.md'),
-      '---\nmode: primary\ngroups: [base, developers]\n---\nReply briefly.\nNATIVE_WORKER_BODY\n',
-    );
-    await writeFile(join(configRoot, 'tui.jsonc'), JSON.stringify({ plugin: [installed.directory] }));
-    await writeFile(
-      join(project, 'opencode.json'),
-      JSON.stringify({ model: 'fixture/beta', small_model: 'fixture/beta' }),
-    );
-    await harness.prepareConfigurationDependencies([observerProject]);
-    await harness.start();
-    interface Agent {
-      permission: NativePermissionRule[];
-      name: string;
-      model: { providerID: string; modelID: string };
-      variant?: string;
-      options: Record<string, unknown>;
-      prompt?: string;
-    }
-    interface Message {
-      info: { modelID: string; error?: unknown };
-      parts: {
-        type: string;
-        text?: string;
-        tool?: string;
-        state?: {
-          status: string;
-          error?: string;
-          title?: string;
-          output?: string;
-          metadata?: { name?: string; dir?: string; truncated?: boolean };
-        };
-      }[];
-    }
-    const globalBefore = await api('/global/config');
-    const otherBeforeComposition = await api('/config', undefined, 'GET', observerProject);
-    const agents = await api<Agent[]>('/agent');
-    assert.deepEqual(await api('/global/config'), globalBefore, 'composition preserves cached native global inputs');
-    assert.deepEqual(
-      await api('/config', undefined, 'GET', observerProject),
-      otherBeforeComposition,
-      'composing this instance does not alter another opened instance',
-    );
-    const worker = agents.find((agent) => agent.name === 'worker');
-    assert.ok(worker !== undefined);
-    assert.deepEqual(worker.model, { providerID: 'fixture', modelID: 'alpha' });
-    assert.equal(worker.variant, 'low');
-    assert.deepEqual(worker.options.groups, ['base', 'developers']);
-    assert.equal(worker.prompt?.includes('NATIVE_WORKER_BODY'), true);
-    const compactionPrompt = agents.find((agent) => agent.name === 'compaction')?.prompt;
-    assert.ok(typeof compactionPrompt === 'string' && compactionPrompt.length > 0);
-    for (const name of ['main-follower', 'small-follower']) {
-      assert.equal(
-        agents.find((agent) => agent.name === name)?.model.modelID,
-        'beta',
-        'use project defaults, not global file values',
-      );
-    }
-    const providers = await api<{ providers: { id: string; models: Record<string, unknown> }[] }>('/config/providers');
-    assert.ok(Boolean(providers.providers.find((item) => item.id === 'fixture')?.models.beta));
-    const request = async (agent = 'worker') => {
-      const session = await api<{ id: string }>('/session', { title: 'Synthetic integration check' });
-      const result = await api<Message>(`/session/${session.id}/message`, {
-        agent,
-        parts: [{ type: 'text', text: 'Reply with verified.' }],
-      });
-      assert.equal(result.info.error, undefined, JSON.stringify(result.info.error));
-      assert.ok(result.parts.some((part) => part.type === 'text' && part.text === 'verified'));
-      return result;
-    };
-    assert.equal((await request()).info.modelID, 'alpha');
-    const beforeReload = requests.find((body) => JSON.stringify(body).includes('NATIVE_WORKER_BODY'));
-    assert.ok(beforeReload !== undefined, 'send authored agent text to the provider');
-    assert.equal(beforeReload.model, 'alpha');
-    assert.equal(beforeReload.reasoning_effort, 'low');
-    const skillSession = await api<{ id: string }>('/session', { title: 'Native skill check' });
-    const skillResult = await api<Message>(`/session/${skillSession.id}/message`, {
-      agent: 'worker',
-      parts: [{ type: 'text', text: 'Load included-skill now.' }],
-    });
-    assert.equal(skillResult.info.error, undefined, JSON.stringify(skillResult.info.error));
-    assert.ok(skillResult.parts.some((part) => part.type === 'text' && part.text === 'verified'));
-    const skillMessages = await api<Message[]>(`/session/${skillSession.id}/message`);
-    const skillPart = skillMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
-    assert.equal(skillPart?.state?.status, 'completed', 'run the native skill tool before returning to the model');
-    assert.equal(skillPart.state.title, 'Loaded skill: included-skill');
-    assert.deepEqual(skillPart.state.metadata, {
-      name: 'included-skill',
-      dir: join(configRoot, 'skills/included-skill'),
-      truncated: false,
-    });
-    const skillOutput = skillPart.state.output;
-    assert.ok(typeof skillOutput === 'string');
-    assert.ok(skillOutput.startsWith('<skill_content name="included-skill">\n# Skill: included-skill\n\n'));
-    assert.ok(skillOutput.includes('SKILL_BODY_BEFORE\nNATIVE_SKILL_BODY\nSKILL_BODY_AFTER'));
-    assert.ok(skillOutput.includes('Base directory for this skill:'));
-    assert.ok(skillOutput.includes('<skill_files>'));
-    assert.ok(skillOutput.includes(join(configRoot, 'skills/included-skill/notes.txt')));
-    assert.ok(skillOutput.endsWith('</skill_content>'));
-    const skillRequest = requests.find((body) => JSON.stringify(body.messages).includes('<skill_content'));
-    assert.ok(skillRequest !== undefined && Array.isArray(skillRequest.messages));
-    const toolMessage = skillRequest.messages.find(
-      (message: unknown) =>
-        message !== null && typeof message === 'object' && 'role' in message && message.role === 'tool',
-    ) as { content?: unknown } | undefined;
-    assert.equal(toolMessage?.content, skillOutput, 'the next provider request receives the native skill result');
-    assert.equal((await request('main-follower')).info.modelID, 'beta');
-    assert.equal((await request('small-follower')).info.modelID, 'beta');
-    for (const name of ['config-composer-explain', 'config-composer-create']) {
-      const beforeGuidance = requests.length;
-      const session = await api<{ id: string }>('/session', { title: `Bundled guidance ${name}` });
-      await api(`/session/${session.id}/message`, {
-        agent: 'worker',
-        parts: [{ type: 'text', text: `Load ${name} now.` }],
-      });
-      const messages = await api<Message[]>(`/session/${session.id}/message`);
-      const loaded = messages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
-      assert.equal(loaded?.state?.status, 'completed', `native bundled skill ${name}`);
-      assert.ok(loaded.state.metadata?.dir !== undefined);
-      assert.equal(
-        await realpath(loaded.state.metadata.dir),
-        await realpath(join(installed.directory, 'skills', name)),
-      );
-      assert.equal(loaded.state.metadata.name, name);
-      assert.match(loaded.state.output ?? '', /references|examples/);
-      const resource = await readFile(join(installed.directory, 'skills', name, 'SKILL.md'), 'utf8');
-      const normalized = resource.replaceAll('\r\n', '\n');
-      const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(normalized);
-      assert.ok(frontmatter !== null, `packaged guidance frontmatter: ${name}`);
-      const body = normalized.slice(frontmatter[0].length).trim();
-      assert.ok(body.length > 0);
-      assert.equal(
-        loaded.state.output?.replaceAll('\r\n', '\n').includes(body),
-        true,
-        `packaged guidance body: ${name}`,
-      );
-      assert.ok(
-        requests
-          .slice(beforeGuidance)
-          .some((request) =>
-            (request.messages as { role: string; content: string }[]).some(
-              (message) => message.role === 'tool' && message.content === loaded.state!.output,
-            ),
-          ),
-        `provider receives loaded guidance: ${name}`,
-      );
-    }
-    const beforeDeniedGuidance = requests.length;
-    const deniedSession = await api<{ id: string }>('/session', { title: 'Native bundled guidance denial' });
-    await api(`/session/${deniedSession.id}/message`, {
-      agent: 'guidance-denied',
-      parts: [{ type: 'text', text: 'Load config-composer-explain now.' }],
-    });
-    const deniedMessages = await api<Message[]>(`/session/${deniedSession.id}/message`);
-    const deniedSkill = deniedMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill');
-    assert.equal(deniedSkill?.state?.status, 'error', 'bundled registration cannot bypass native skill denial');
-    assert.match(deniedSkill.state.error ?? '', /rule which prevents you from using this specific tool call/);
-    assert.ok(
-      !JSON.stringify(requests.slice(beforeDeniedGuidance)).includes('<skill_content'),
-      'denied guidance never reaches the provider',
-    );
-    const settingsPath = join(configRoot, 'config-composer.jsonc');
-    const settingsBefore = await readFile(settingsPath, 'utf8');
-    await writeFile(
-      settingsPath,
-      applyEdits(
-        settingsBefore,
-        modify(
-          settingsBefore,
-          ['configurationPresets', 'balanced'],
-          {
-            model: 'fixture/beta',
-            variant: 'high',
-          },
-          {},
-        ),
-      ),
-    );
-    const savedSettings = parse(await readFile(settingsPath, 'utf8')) as typeof composer;
-    assert.deepEqual(savedSettings.componentGroups.developers, composer.componentGroups.developers);
-    const reload = () =>
-      api(
-        '/global/config',
-        {
-          plugin: [[installed.directory, { reloadToken: randomUUID() }]],
-        },
-        'PATCH',
-      );
-    const editor = await installedEditor(harness);
-    const { loadEditorSnapshot, loadSnapshot, previewFilePlan, saveFilePlan } = editor.storage;
-    const settingsId = await realpath(settingsPath);
-    const { configurationTargets, planParameter } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/parameter-authoring.js')).href
-    )) as typeof Parameters;
-    for (const [field, text] of [
-      ['temperature', '0.35'],
-      ['topP', '0.8'],
-      ['maxOutputTokens', '128'],
-      ['options', '{"reasoningEffort":"medium"}'],
-    ] as const) {
-      const snapshot = await editor.snapshot();
-      const target = configurationTargets(snapshot, settingsId).find((target) => target.label === 'Preset: balanced');
-      assert.ok(target !== undefined);
-      const plan = planParameter(snapshot, target, field, text);
-      await saveFilePlan(plan, async () => {
-        await previewFilePlan(plan);
-      });
-    }
-    const { planDefinition } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/authoring.js')).href
-    )) as typeof Authoring;
-    const { planPermissions } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/permission-authoring.js')).href
-    )) as typeof Permissions;
-    const beforePermissions = await editor.snapshot();
-    const createPermissions = planDefinition(beforePermissions, {
-      operation: 'create',
-      registry: 'configurationPresets',
-      name: 'checks',
-      sourceId: settingsId,
-      value: { permissions: [] },
-    });
-    await saveFilePlan(createPermissions, async () => {
-      await previewFilePlan(createPermissions);
-    });
-    const permissionSnapshot = await editor.snapshot();
-    const permissionTarget = configurationTargets(permissionSnapshot, settingsId).find(
-      (target) => target.label === 'Preset: checks',
-    );
-    assert.ok(permissionTarget !== undefined);
-    const permissionPlan = planPermissions(permissionSnapshot, permissionTarget, [
-      { tool: 'bash', pattern: 'git *', action: 'deny' },
-      { tool: 'bash', pattern: 'git status', action: 'allow' },
-    ]);
-    await saveFilePlan(permissionPlan, async () => {
-      assert.equal(
-        (await previewFilePlan(permissionPlan)).resolved.permissions.length,
-        0,
-        'inactive rules do not affect active agents',
-      );
-    });
-    await reload();
-    let refreshed = agents;
-    for (let attempt = 0; attempt < 100; attempt++) {
-      refreshed = await api<Agent[]>('/agent');
-      if (refreshed.find((agent) => agent.name === 'worker')?.model.modelID === 'beta') {
-        break;
-      }
-      await setTimeout(100);
-    }
-    assert.equal(refreshed.find((agent) => agent.name === 'worker')?.model.modelID, 'beta');
-    assert.equal(refreshed.find((agent) => agent.name === 'worker')?.variant, 'high');
-    assert.equal(refreshed.find((agent) => agent.name === 'pinned')?.model.modelID, 'alpha');
-    assert.equal(refreshed.find((agent) => agent.name === 'worker')?.prompt?.includes('NATIVE_WORKER_BODY'), true);
-    assert.equal((await request()).info.modelID, 'beta');
-    const reloadedRequest = requests.findLast((body) => body.model === 'beta');
-    assert.ok(reloadedRequest !== undefined, 'send the updated model settings after reload');
-    assert.equal(reloadedRequest.temperature, 0.35);
-    assert.equal(reloadedRequest.top_p, 0.8);
-    assert.equal(reloadedRequest.max_tokens, 128);
-    assert.equal(
-      reloadedRequest.reasoning_effort,
-      'high',
-      'native selected variant retains precedence over authored provider options',
-    );
-    assert.equal(reloadedRequest.model, 'beta');
-    assert.ok(JSON.stringify(reloadedRequest).includes('NATIVE_WORKER_BODY'));
-    assert.equal((await request('component-worker')).info.modelID, 'beta');
-    await writeFile(
-      join(project, 'opencode.json'),
-      JSON.stringify({ model: 'fixture/alpha', small_model: 'fixture/alpha' }),
-    );
-    await reload();
-    refreshed = await api<Agent[]>('/agent');
-    for (const name of ['main-follower', 'small-follower']) {
-      assert.equal(refreshed.find((agent) => agent.name === name)?.model.modelID, 'alpha');
-      assert.equal((await request(name)).info.modelID, 'alpha');
-    }
-    assert.equal(refreshed.find((agent) => agent.name === 'worker')?.model.modelID, 'beta');
-    // Overlay only Composer settings; native files stay unchanged after each explicit native token reload.
-    const nativePaths = [
-      join(configRoot, 'opencode.jsonc'),
-      join(project, 'opencode.json'),
-      join(configRoot, 'agents/worker.md'),
-    ];
-    const readNative = () => Promise.all(nativePaths.map((path) => readFile(path, 'utf8')));
-    let nativeBytes: string[];
-    const overlaySettings = await readFile(settingsPath, 'utf8');
-    await writeFile(
-      settingsPath,
-      applyEdits(overlaySettings, modify(overlaySettings, ['defaults', 'model'], 'fixture/beta', {})),
-    );
-    // Use the existing token reload to invalidate the host's cached global configuration.
-    await reload();
-    nativeBytes = await readNative();
-    let effective = await api<{ model: string; small_model: string }>('/config');
-    assert.equal(effective.model, 'fixture/beta');
-    assert.equal(effective.small_model, 'fixture/alpha');
-    assert.equal((await api<Agent[]>('/agent')).find((agent) => agent.name === 'main-follower')?.model.modelID, 'beta');
-    assert.equal((await request('main-follower')).info.modelID, 'beta');
-    assert.equal((await request('small-follower')).info.modelID, 'alpha');
-    assert.deepEqual(await readNative(), nativeBytes);
-    const mainOnly = await readFile(settingsPath, 'utf8');
-    await writeFile(
-      settingsPath,
-      applyEdits(mainOnly, modify(mainOnly, ['defaults', 'small_model'], 'fixture/beta', {})),
-    );
-    // Use the existing token reload to invalidate the host's cached global configuration.
-    await reload();
-    nativeBytes = await readNative();
-    effective = await api('/config');
-    assert.equal(effective.small_model, 'fixture/beta');
-    assert.equal((await request('small-follower')).info.modelID, 'beta');
-    const overlayAgents = await api<Agent[]>('/agent');
-    assert.equal(overlayAgents.find((agent) => agent.name === 'pinned')?.model.modelID, 'alpha');
-    const selectedSession = await api<{ id: string }>('/session', { title: 'Explicit session model' });
-    const selected = await api<Message>(`/session/${selectedSession.id}/message`, {
-      agent: 'main-follower',
-      model: { providerID: 'fixture', modelID: 'alpha' },
-      parts: [{ type: 'text', text: 'Reply with verified.' }],
-    });
-    assert.equal(selected.info.error, undefined);
-    assert.equal(selected.info.modelID, 'alpha');
-    assert.deepEqual(await readNative(), nativeBytes);
-    await writeFile(settingsPath, overlaySettings);
-    // Use the existing token reload to invalidate the host's cached global configuration.
-    await reload();
-    nativeBytes = await readNative();
-    effective = await api('/config');
-    assert.equal(effective.model, 'fixture/alpha');
-    assert.equal(effective.small_model, 'fixture/alpha');
-    assert.equal((await request('main-follower')).info.modelID, 'alpha');
-    assert.equal((await request('small-follower')).info.modelID, 'alpha');
-    assert.deepEqual(await readNative(), nativeBytes);
-    assert.ok(requests.some((body) => body.model === 'alpha'));
-    assert.ok(requests.some((body) => body.model === 'beta'));
-    // A fresh native instance with invalid membership still exposes exact repair inputs.
-    const settingsBeforeFailure = await readFile(settingsPath, 'utf8');
-    const validMembers = (parse(settingsBeforeFailure) as typeof composer).componentGroups.developers.agents;
-    const brokenSettings = applyEdits(
-      settingsBeforeFailure,
-      modify(
-        settingsBeforeFailure,
-        ['componentGroups', 'developers', 'agents'],
-        [...validMembers, 'removed-for-repair'],
-        {},
-      ),
-    );
-    await writeFile(settingsPath, brokenSettings);
-    const otherBeforeDisposal = await api('/config', undefined, 'GET', observerProject);
-    await api('/instance/dispose', undefined, 'POST');
-    const { baseline: cachedBaseline, path: hostPath, location } = await editor.runtime();
-    const { readRuntimeBaseline } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
-    )) as typeof Baseline;
-    assert.ok(
-      'resolved' in
-        (await loadEditorSnapshot(configRoot, location.root, cachedBaseline, hostPath.directory, hostPath.worktree)),
-      'scoped disposal retains exact native inputs when the next composition needs repair',
-    );
-    assert.deepEqual(
-      await api('/config', undefined, 'GET', observerProject),
-      otherBeforeDisposal,
-      'scoped disposal and rebootstrap preserve the other instance',
-    );
-    const failedConfig = await api<{ model?: string; agent?: Record<string, unknown> }>('/config');
-    const { baseline: repairBaseline } = await editor.runtime();
-    assert.equal(failedConfig.model, 'fixture/alpha', 'valid global configuration remains active');
-    assert.ok(failedConfig.agent?.['component-worker'] !== undefined, 'valid component publication continues');
-    const { nativeAgentProjection } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/native-baseline.js')).href
-    )) as typeof NativeBaseline;
-    const localRepairInputs = await loadEditorSnapshot(
-      configRoot,
-      location.root,
-      undefined,
-      hostPath.directory,
-      hostPath.worktree,
-    );
-    assert.deepEqual(
-      nativeAgentProjection(repairBaseline.agent ?? {}),
-      nativeAgentProjection(localRepairInputs.nativeSourceAgents),
-      'failed native hook publishes original agent inputs for repair',
-    );
-    const inspection = await loadEditorSnapshot(
-      configRoot,
-      location.root,
-      repairBaseline,
-      hostPath.directory,
-      hostPath.worktree,
-    );
-    assert.ok('resolved' in inspection);
-    assert.ok(inspection.resolved.diagnostics.some((item) => item.name === 'removed-for-repair'));
-    const repairPlan = planDefinition(inspection, {
-      operation: 'patch',
-      registry: 'componentGroups',
-      name: 'developers',
-      path: ['agents'],
-      value: validMembers,
-    });
-    await saveFilePlan(repairPlan, async () => {
-      await previewFilePlan(repairPlan);
-    });
-    assert.deepEqual(await api('/config'), failedConfig, 'saving the repair does not apply it');
-    // Match TUI preparation, preserving the complete native baseline including normalized agent fields.
-    const repaired = await loadSnapshot(configRoot, project, repairBaseline, project, '/');
-    const { applySavedComposition } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/apply.js')).href
-    )) as typeof Apply;
-    const { readRuntimeRevision } = (await import(
-      pathToFileURL(join(installed.directory, 'dist/config-composer/composition/runtime-baseline.js')).href
-    )) as typeof Baseline;
-    const beforeApply = readRuntimeRevision(failedConfig, { root: project, directory: project }, configRoot);
-    await applySavedComposition(repaired, beforeApply, {
-      assertCurrent: () => {},
-      activity: () => api('/session/status'),
-      dispose: async () => {
-        await api('/instance/dispose', undefined, 'POST');
-      },
-      refresh: async () => {
-        const config = await api('/config');
-        await api('/config/providers');
-        await api('/agent');
-        return readRuntimeRevision(config, { root: project, directory: project }, configRoot);
-      },
-    });
-    const applyInstance = async (snapshot: Storage.Snapshot, directory = project) => {
-      const location = { root: directory, directory };
-      const previous = readRuntimeRevision(await api('/config', undefined, 'GET', directory), location, configRoot);
-      return applySavedComposition(snapshot, previous, {
-        assertCurrent: () => {},
-        activity: () => api('/session/status', undefined, 'GET', directory),
-        dispose: async () => {
-          await api('/instance/dispose', undefined, 'POST', directory);
-        },
-        refresh: async () => {
-          const config = await api('/config', undefined, 'GET', directory);
-          await api('/config/providers', undefined, 'GET', directory);
-          await api('/agent', undefined, 'GET', directory);
-          return readRuntimeRevision(config, location, configRoot);
-        },
-      });
-    };
-    const childSession = await api<{ id: string }>('/session', {
-      title: 'Busy apply child',
-      parentID: skillSession.id,
-    });
-    const childRequest = api(`/session/${childSession.id}/message`, {
-      agent: 'main-follower',
-      parts: [{ type: 'text', text: 'SCOPED_APPLY_BUSY' }],
-    });
-    await busyReceived.promise;
-    const beforeBusy = await api('/config');
-    await assert.rejects(applyInstance(repaired), /still running.*saved/i);
-    assert.deepEqual(await api('/config'), beforeBusy, 'busy child prevents disposal and retains the publication');
-    blockRequests = false;
-    releaseBusy.resolve(undefined);
-    await childRequest;
-    const childMessages = await api(`/session/${childSession.id}/message`);
-    const retried = await applyInstance(repaired);
-    assert.deepEqual(await applyInstance(repaired), retried, 'repeated apply is idempotent');
-    const reviewedPath = join(configRoot, 'config-composer.jsonc');
-    const reviewedText = await readFile(reviewedPath, 'utf8');
-    const reviewedRunning = await api('/config');
-    let staleDisposals = 0;
-    try {
-      await assert.rejects(
-        applySavedComposition(
-          repaired,
-          readRuntimeRevision(reviewedRunning, { root: project, directory: project }, configRoot),
-          {
-            assertCurrent: () => {},
-            activity: async () => {
-              const status = await api<Record<string, { type: string }>>('/session/status');
-              await writeFile(
-                reviewedPath,
-                applyEdits(reviewedText, modify(reviewedText, ['defaults', 'model'], 'fixture/unreviewed', {})),
-              );
-              return status;
-            },
-            dispose: async () => {
-              staleDisposals++;
-              await api('/instance/dispose', undefined, 'POST');
-            },
-            refresh: async () =>
-              readRuntimeRevision(await api('/config'), { root: project, directory: project }, configRoot),
-          },
-        ),
-        /changed/i,
-      );
-      assert.equal(
-        staleDisposals,
-        0,
-        'a change during the native activity request cannot dispose the reviewed instance',
-      );
-      assert.deepEqual(await api('/config'), reviewedRunning, 'the running publication remains exactly unchanged');
-    } finally {
-      await writeFile(reviewedPath, reviewedText);
-    }
-    assert.deepEqual(
-      await api(`/session/${childSession.id}/message`),
-      childMessages,
-      'apply retains child conversation records',
-    );
-    assert.deepEqual(await api('/config', undefined, 'GET', observerProject), otherBeforeDisposal);
-    assert.ok((await api<Agent[]>('/agent')).some((agent) => agent.name === 'component-worker'));
-    assert.equal((await request('component-worker')).info.modelID, 'beta');
-    assert.deepEqual(
-      await api<Message[]>(`/session/${skillSession.id}/message`),
-      skillMessages,
-      'repair and explicit reload retain previous conversation records',
-    );
-    assert.ok(
-      requests
-        .filter((body) => !JSON.stringify(body.messages).includes('Load config-composer-'))
-        .every((body) => !/agent_group|modelRef|modelPresets|configFile/.test(JSON.stringify(body))),
-    );
-    assert.match(await readFile(join(configRoot, 'opencode.jsonc'), 'utf8'), /^\/\/ Native integration fixture/);
-    assert.match(await readFile(join(configRoot, 'config-composer.jsonc'), 'utf8'), /^\/\/ Dedicated settings/);
-    // A newly opened instance can observe new disk bytes while inheriting cached native globals.
-    const nativePath = join(configRoot, 'opencode.jsonc');
-    const nativeBeforeEdit = await readFile(nativePath, 'utf8');
-    const freshProject = join(root, 'opened-after-native-edit');
-    await mkdir(join(freshProject, '.opencode'), { recursive: true });
-    await writeFile(join(freshProject, '.opencode/config-composer.local.jsonc'), '{"activeProfiles":[]}');
-    await harness.prepareConfigurationDependencies([freshProject]);
-    await writeFile(nativePath, applyEdits(nativeBeforeEdit, modify(nativeBeforeEdit, ['model'], 'fixture/beta', {})));
-    try {
-      const freshConfig = await api<{ model: string }>('/config', undefined, 'GET', freshProject);
-      assert.equal(freshConfig.model, 'fixture/alpha', 'instance bootstrap retains the cached native model');
-      const running = readRuntimeBaseline(freshConfig, { root: freshProject, directory: freshProject }, configRoot);
-      const pending = await loadSnapshot(configRoot, freshProject, running, freshProject, '/');
-      const revision = await applyInstance(pending, freshProject);
-      const after = await api<{ model: string }>('/config', undefined, 'GET', freshProject);
-      assert.equal(after.model, 'fixture/alpha', 'Composer apply does not claim to refresh saved native JSON');
-      const { applyStatus } = (await import(
-        pathToFileURL(join(installed.directory, 'dist/config-composer/composition/apply.js')).href
-      )) as typeof Apply;
-      assert.match(
-        applyStatus(revision, readRuntimeRevision(after, { root: freshProject, directory: freshProject }, configRoot)),
-        /Composer revision .* applied against the running native baseline/,
-      );
-      assert.equal((parse(await readFile(nativePath, 'utf8')) as { model: string }).model, 'fixture/beta');
-    } finally {
-      await writeFile(nativePath, nativeBeforeEdit);
-    }
-    // Workflow availability changes native admission, retaining authored definitions and conversation records.
-    const availabilitySession = await api<{ id: string }>('/session', { title: 'Workflow availability history' });
-    await api(`/session/${availabilitySession.id}/message`, {
-      agent: 'worker',
-      parts: [{ type: 'text', text: 'Reply with verified.' }],
-    });
-    const availabilityHistory = await api<Message[]>(`/session/${availabilitySession.id}/message`);
-    const normalizeBundled = await bundledPermissions(harness);
-    const enabledRegistry = await api<Agent[]>('/agent');
-    const availableSource = await readFile(settingsPath, 'utf8');
-    const disabledNames = ['worker', 'build', 'component-worker'];
-    const disabledSource = applyEdits(
-      availableSource,
-      modify(
-        availableSource,
-        ['profiles', 'work', 'agentAvailability'],
-        Object.fromEntries(disabledNames.map((name) => [name, false])),
-        {},
-      ),
-    );
-    await writeFile(settingsPath, disabledSource);
-    assert.ok(
-      (await api<Agent[]>('/agent')).some((agent) => agent.name === 'worker'),
-      'saving availability alone does not change admission',
-    );
-    const availabilityBaseline = readRuntimeBaseline(
-      await api('/config'),
-      { root: project, directory: project },
-      configRoot,
-    );
-    assert.equal(availabilityBaseline.default_agent, 'main-follower');
-    await applyInstance(await loadSnapshot(configRoot, project, availabilityBaseline, project, '/'));
-    for (const name of disabledNames) {
-      assert.ok(
-        !(await api<Agent[]>('/agent')).some((agent) => agent.name === name),
-        `${name} is disabled after explicit apply`,
-      );
-    }
-    const providerBeforeDisabled = requests.length;
-    const disabledResponse = await fetch(`${harness.url}/session/${availabilitySession.id}/message`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-opencode-directory': project },
-      body: JSON.stringify({
-        agent: 'worker',
-        parts: [{ type: 'text', text: 'Disabled request must fail.' }],
       }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    assert.equal(disabledResponse.status, 500);
-    assert.equal(((await disabledResponse.json()) as { name: string }).name, 'UnknownError');
-    assert.equal(requests.length, providerBeforeDisabled, 'disabled selection does not reach the provider');
-    assert.deepEqual(await api(`/session/${availabilitySession.id}/message`), availabilityHistory);
-    const continued = await api<Message>(`/session/${availabilitySession.id}/message`, {
-      agent: 'main-follower',
-      parts: [{ type: 'text', text: 'Reply with verified.' }],
-    });
-    assert.equal(continued.info.error, undefined);
-    const continuedHistory = await api(`/session/${availabilitySession.id}/message`);
-    // A process restart preserves the saved workflow selection and the same native database history.
-    await harness.stop();
-    await harness.start();
-    assert.ok(!(await api<Agent[]>('/agent')).some((agent) => agent.name === 'worker'));
-    assert.deepEqual(await api(`/session/${availabilitySession.id}/message`), continuedHistory);
-    const enabledSource = applyEdits(
-      disabledSource,
-      modify(
-        disabledSource,
-        ['profiles', 'work', 'agentAvailability'],
-        Object.fromEntries(disabledNames.map((name) => [name, true])),
-        {},
-      ),
     );
-    await writeFile(settingsPath, enabledSource);
-    const enabledBaseline = readRuntimeBaseline(
-      await api('/config'),
-      { root: project, directory: project },
-      configRoot,
-    );
-    await applyInstance(await loadSnapshot(configRoot, project, enabledBaseline, project, '/'));
-    const reenabled = await api<Agent[]>('/agent');
-    // Native optional fields serialize as null after a builtin gets an explicit config entry.
-    // Preserve all other fields/order except complete disjoint bundled native skill-grant blocks.
-    const definition = (agent: Agent | undefined) =>
-      agent === undefined
-        ? undefined
-        : Object.fromEntries(
-            Object.entries(agent)
-              .filter(
-                ([key, value]) =>
-                  value !== null ||
-                  !['color', 'hidden', 'prompt', 'steps', 'temperature', 'topP', 'variant'].includes(key),
-              )
-              .map(([key, value]) => [key, key === 'permission' ? normalizeBundled(agent.permission) : value]),
-          );
-    for (const name of disabledNames) {
-      assert.deepEqual(
-        definition(reenabled.find((agent) => agent.name === name)),
-        definition(enabledRegistry.find((agent) => agent.name === name)),
-        `${name} restores the native/composed definition`,
-      );
-    }
-    assert.equal((await request('worker')).info.error, undefined);
-    assert.equal(await readFile(nativePath, 'utf8'), nativeBeforeEdit, 'workflow toggles never rewrite native JSON');
-    await writeFile(settingsPath, availableSource);
-    // Packaged guidance remains available while invalid configuration is rejected.
-    await writeFile(settingsPath, JSON.stringify({ unexpected: {} }));
-    await reload();
-    const rejected = await api<{ agent?: Record<string, unknown>; skills?: { paths?: string[] } }>('/config');
-    assert.equal(rejected.agent?.['component-worker'], undefined, 'invalid configuration applies no component agents');
+    const patch = {
+      model: 'fixture/alpha',
+      variant: 'high',
+      temperature: 1,
+      top_p: 1,
+      options: { composer: true },
+      permission: { read: 'allow' },
+    };
+    await f.write(f.paths.shared, {
+      groups: [{ name: 'all', members: { agent: ['worker', 'empty', 'legacy', 'omitted'] }, agent: patch }],
+      agent: { worker: patch, empty: patch, legacy: { mode: 'subagent' }, omitted: { mode: 'subagent' } },
+      profiles: { review: { groups: [{ name: 'all', agent: patch }], agent: { worker: patch, empty: patch } } },
+      defaultProfile: 'review',
+    });
+    const nativeBytes = await readFile(f.paths.native, 'utf8');
+    const projectBytes = await readFile(join(f.host.project, 'opencode.jsonc'), 'utf8');
+    await f.host.start();
+    const config = await f.host.api<{ agent: Record<string, Record<string, unknown>> }>('/config');
+    assert.equal(config.agent.worker.model, 'fixture/beta');
+    assert.equal(config.agent.worker.temperature, 0);
+    assert.equal(config.agent.worker.top_p, 0);
+    assert.deepEqual(config.agent.worker.options, { last: false });
+    assert.deepEqual(config.agent.worker.permission, {});
+    assert.equal((await f.editor.runtime()).observation.authority.worker.fields.model?.value, 'fixture/beta');
+    assert.equal(config.agent.empty.model, '');
+    assert.equal(config.agent.empty.variant, '');
+    assert.deepEqual(config.agent.empty.options, {});
+    assert.deepEqual(config.agent.empty.permission, {});
+    assert.equal(config.agent.legacy.mode, 'primary');
+    assert.equal(config.agent.omitted.mode, 'subagent');
+    assert.deepEqual(config.agent.scalar.permission, { '*': 'deny' });
+    assert.deepEqual(config.agent.tools.permission, { bash: 'deny', read: 'allow' });
+    const agents = await f.host.api<{ name: string; model?: { modelID: string }; permission: unknown[] }[]>('/agent');
+    assert.equal(agents.find((agent) => agent.name === 'worker')?.model?.modelID, 'beta');
     assert.ok(
-      (await Promise.all((rejected.skills?.paths ?? []).map((path) => realpath(path)))).includes(
-        await realpath(join(installed.directory, 'skills')),
-      ),
+      agents.find((agent) => agent.name === 'empty')!.permission.length > 0,
+      'native /agent inherits builtin/global policies after an empty final config policy',
     );
-    const guidance = await api<{ id: string }>('/session', { title: 'Guidance for invalid configuration' });
-    await api(`/session/${guidance.id}/message`, {
-      agent: 'main-follower',
-      parts: [{ type: 'text', text: 'Load config-composer-explain now.' }],
-    });
-    const guidanceMessages = await api<Message[]>(`/session/${guidance.id}/message`);
-    assert.equal(
-      guidanceMessages.flatMap((message) => message.parts).find((part) => part.tool === 'skill')?.state?.status,
-      'completed',
-    );
-    assert.match(harness.stderr, /must NOT have additional properties/);
-    for (const body of requests) {
-      const { messages: _messages, tools: _tools, ...parameters } = body;
-      assert.doesNotMatch(JSON.stringify(parameters), /agent_group|modelRef|modelPresets|configFile/);
+    const runtime = await f.editor.runtime();
+    const decision = runtime.candidate!.decisions['/agent/worker/model'];
+    assert.equal(decision.value, 'fixture/beta');
+    assert.match(decision.origin.source!, /worker\.md$/);
+    assert.equal(decision.blockedComposer?.value, 'fixture/alpha');
+    assert.doesNotMatch(JSON.stringify(runtime), /OPAQUE_.*BODY/);
+    assert.equal((await f.send()).captured.model, 'beta');
+    for (const [name, body] of Object.entries(bodies)) {
+      assert.equal(await readFile(join(f.host.configRoot, 'agents', `${name}.md`), 'utf8'), body);
     }
+    assert.equal(await readFile(join(f.host.project, '.opencode/agents/worker.md'), 'utf8'), laterMarkdown);
+    assert.equal(await readFile(f.paths.native, 'utf8'), nativeBytes);
+    assert.equal(await readFile(join(f.host.project, 'opencode.jsonc'), 'utf8'), projectBytes);
+  },
+);
+
+test(
+  'invalid Composer permission and mode values leave native endpoints readable and publish errors',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'invalid-native-values');
+    const documents = [
+      ...['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'].flatMap((tool) =>
+        [{}, { '*': 'deny' }].map((value) => ({
+          model: 'fixture/beta',
+          agent: { worker: { temperature: 0.9, permission: { [tool]: value } } },
+        })),
+      ),
+      {
+        groups: [{ name: 'bad', members: { agent: ['worker'] }, agent: { permission: { webfetch: {} } } }],
+      },
+      ...[['primary'], ['subagent'], ['all'], [[['primary']]]].map((mode) => ({
+        agent: { worker: { model: 'fixture/beta' } },
+        profiles: { inactive: { agent: { worker: { mode } } } },
+      })),
+    ];
+    const nativeBytes = await readFile(f.paths.native, 'utf8');
+    for (const [index, document] of documents.entries()) {
+      await f.write(f.paths.shared, document);
+      if (index === 0) {
+        await f.host.start();
+      } else {
+        await f.host.api('/instance/dispose', {});
+      }
+      const config = await f.host.api<{ model: string; agent: Record<string, Record<string, unknown>> }>('/config');
+      assert.equal(config.model, f.native.model);
+      assert.equal(config.agent.worker.model, undefined);
+      assert.equal(config.agent.worker.temperature, undefined);
+      assert.equal(config.agent.worker.mode, 'primary');
+      const runtime = await f.editor.runtime();
+      assert.equal(runtime.status, 'error');
+      assert.equal(runtime.revision, undefined);
+      assert.match(runtime.diagnostic!, /Composer not applied.*Expected/);
+      const agents = await f.host.api<{ name: string; mode: string }[]>('/agent');
+      assert.equal(agents.find((agent) => agent.name === 'worker')?.mode, 'primary');
+    }
+    assert.equal(await readFile(f.paths.native, 'utf8'), nativeBytes);
+    await f.write(f.paths.shared, {});
+    await f.host.api('/instance/dispose', {});
+    assert.equal((await f.editor.runtime()).status, 'applied');
   },
 );

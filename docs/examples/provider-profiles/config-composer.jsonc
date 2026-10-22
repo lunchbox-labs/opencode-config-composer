@@ -1,21 +1,37 @@
 {
-  "componentGroups": {
-    "coding": { "agents": ["build", "plan", "explore"] },
-  },
-  "configurationPresets": {
-    "anthropic": { "model": "anthropic/claude-sonnet-4-5" },
-    "openai": { "model": "openai/gpt-5" },
-  },
+  "groups": [
+    {
+      "name": "coding",
+      "members": {
+        "agent": [
+          "build",
+          "plan",
+          "explore"
+        ]
+      }
+    }
+  ],
   "profiles": {
-    "coding": { "layers": [{ "componentGroup": "coding" }] },
     "anthropic": {
-      "extends": "coding",
-      "layers": [{ "configurationPreset": "anthropic", "target": { "componentGroups": ["coding"] } }],
+      "groups": [
+        {
+          "name": "coding",
+          "agent": {
+            "model": "anthropic/claude-sonnet-4-5"
+          }
+        }
+      ]
     },
     "openai": {
-      "extends": "coding",
-      "layers": [{ "configurationPreset": "openai", "target": { "componentGroups": ["coding"] } }],
-    },
+      "groups": [
+        {
+          "name": "coding",
+          "agent": {
+            "model": "openai/gpt-5"
+          }
+        }
+      ]
+    }
   },
-  "activeProfiles": ["anthropic"],
+  "defaultProfile": "anthropic"
 }

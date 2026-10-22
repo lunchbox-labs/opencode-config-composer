@@ -1,429 +1,200 @@
-import { publishSelectionProof, selectionLifetime, selectionStateDirectory } from './composition/selection-state.ts';
-import {
-  type ComponentInventory,
-  type ReferenceDiagnostic,
-  readComponentInventory,
-  referenceDescription,
-  validateReferenceDiagnostics,
-} from './composition/reference-diagnostics.ts';
-import { validateShortcutCommands } from './composition/shortcuts.ts';
-import type { Config as NativeConfig } from '@opencode-ai/sdk/v2';
-import type { Config, Plugin, PluginModule } from '@opencode-ai/plugin';
-import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
 import { isDeepStrictEqual } from 'node:util';
-import { type AgentSettings, type EffectiveChoice, SettingsError, record } from './settings.ts';
-import { permissionNotifications } from './composition/permission-warnings.ts';
-import { publishRuntimeBaseline } from './composition/runtime-baseline.ts';
-import { MembershipValidationError } from './composition/membership.ts';
-import { loadCompositionSources } from './composition/sources.ts';
-import { type ResolvedModelSettings, resolveProfileRuntime } from './composition/runtime.ts';
-import { filterParameters, mergeOptions, parametersForDispatch, unprotectedOptions } from './composition/parameters.ts';
+import { resolve } from 'node:path';
+import type { Plugin, PluginModule } from '@opencode-ai/plugin';
+import { configurationDirectory } from './configuration.ts';
+import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
+import { SettingsError, record } from './settings.ts';
+import { loadSource, pluginOptions } from './composition/sources.ts';
+import { resolveComposition } from './composition/runtime.ts';
+import { type RuntimeMarker, configFields, metadata, publishRuntime } from './composition/runtime-baseline.ts';
 import {
-  captureCompositionInputs,
+  type NativeObservation,
   compositionRevision,
-  observeNativeFiles,
-  verifyCompositionInputs,
+  digest,
+  discoveryContext,
+  observeNative,
 } from './composition/revision.ts';
-
-const ConfigComposerPlugin: Plugin = async (input, options = {}) => {
-  if (
-    !record(options) ||
-    Object.keys(options).some((key) => !['configFile', 'reloadToken'].includes(key)) ||
-    (options.configFile !== undefined && typeof options.configFile !== 'string') ||
-    (options.reloadToken !== undefined && typeof options.reloadToken !== 'string')
-  ) {
-    throw new SettingsError('Config Composer plugin options support only configFile and an optional reloadToken.');
+import {
+  publishSelectionProof,
+  readSelection,
+  selectionLifetime,
+  selectionStateDirectory,
+  verifySelection,
+} from './composition/selection-state.ts';
+import type { NativeBaseline } from './composition/document-types.ts';
+interface Previous {
+  native: Record<string, unknown>;
+  applied: Record<string, unknown>;
+}
+const roots = new WeakMap<object, Previous>();
+const nested = new WeakMap<object, Previous>();
+function restore(
+  value: Record<string, unknown>,
+  previous: Previous | undefined,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const result = { ...value };
+  if (previous !== undefined) {
+    for (const key of keys) {
+      if (isDeepStrictEqual(value[key], previous.applied[key])) {
+        if (Object.hasOwn(previous.native, key)) {
+          Object.defineProperty(result, key, {
+            value: structuredClone(previous.native[key]),
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+        } else {
+          Reflect.deleteProperty(result, key);
+        }
+      }
+    }
   }
+  return result;
+}
+const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
+  const options = pluginOptions(rawOptions);
+  const directory = resolve(typeof input.directory === 'string' ? input.directory : process.cwd());
+  const worktree = resolve(
+    typeof input.worktree === 'string' && input.worktree !== '' && input.worktree !== '/' ? input.worktree : directory,
+  );
+  const location = { root: worktree, directory };
+  const configDirectory = configurationDirectory();
   const selectionEnvironment = { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() };
   await publishSelectionProof(selectionEnvironment);
-  const context = {
-    selectionEnvironment,
-    root:
-      typeof input.worktree === 'string' && input.worktree !== '' && input.worktree !== '/'
-        ? input.worktree
-        : typeof input.directory === 'string'
-          ? input.directory
-          : process.cwd(),
-    baseFile: typeof options.configFile === 'string' ? options.configFile : undefined,
-    baseExplicit: options.configFile !== undefined,
-    // An optional empty installation must expose native state so the editor can create its first source.
-    allowEmpty: true,
-  };
   await validateBundledSkills();
-  const notifications = permissionNotifications(input.client);
-  let agents: Partial<Record<string, AgentSettings>> = {};
-  let choices: Partial<Record<string, EffectiveChoice & ResolvedModelSettings>> = {};
-  interface Authored {
-    native: Record<string, unknown>;
-    applied: Record<string, unknown>;
-    owned: boolean;
-  }
-  let referenceDiagnostics: ReferenceDiagnostic[] = [];
-  let inventory: Promise<ComponentInventory> | undefined;
-  let validationGeneration = 0;
-  let lastReferenceNotice = '';
-  async function validateReferences() {
-    if (referenceDiagnostics.length === 0) {
-      return;
-    }
-    const generation = validationGeneration;
-    const pending = referenceDiagnostics.some((item) => item.status === 'pending');
-    inventory ??= pending
-      ? (async (): Promise<ComponentInventory> => {
-          try {
-            const response = await input.client.command.list({
-              query: { directory: input.directory },
-              signal: AbortSignal.timeout(5000),
-            });
-            if (response.error !== undefined) {
-              return {};
-            }
-            return { commands: readComponentInventory(response.data) };
-          } catch {
-            // Only an inventory read failed. This cannot establish that a reference is missing.
-            return {};
-          }
-        })()
-      : Promise.resolve({});
-    const current = await inventory;
-    if (generation !== validationGeneration) {
-      return;
-    }
-    if (pending && current.commands === undefined) {
-      inventory = undefined;
-    }
-    const diagnostics = validateReferenceDiagnostics(referenceDiagnostics, current);
-    const notice = diagnostics.map(referenceDescription).join('\n\n');
-    if (notice !== '' && notice !== lastReferenceNotice) {
-      console.error(`[Config Composer] Reference notices. Run /compose-configs to inspect.\n${notice}`);
-    }
-    lastReferenceNotice = notice;
-  }
-  const agentSnapshots = new WeakMap<object, Authored>();
-  const resources = new WeakMap<
-    object,
-    {
-      commands: { native: Record<string, unknown>; applied: Record<string, unknown> };
-      addedPaths: Set<string>;
-    }
-  >();
-  const configurations = new WeakMap<
-    object,
-    {
-      native: Record<string, unknown>;
-      applied: Record<string, unknown>;
-      added: Set<string>;
-      agents: Map<string, Authored>;
-    }
-  >();
-  function agentConfigurations(value: unknown): value is Record<string, AgentSettings> {
-    return record(value) && Object.values(value).every(record);
-  }
-  function commandConfigurations(value: unknown): value is NonNullable<Config['command']> {
-    return record(value) && Object.values(value).every((item) => record(item) && typeof item.template === 'string');
-  }
-  function restore(
-    value: Record<string, unknown>,
-    previous: { native: Record<string, unknown>; applied: Record<string, unknown> } | undefined,
-    recursive = false,
-  ): Record<string, unknown> {
-    const result = { ...value };
-    if (previous !== undefined) {
-      for (const key of [...new Set([...Object.keys(previous.native), ...Object.keys(previous.applied)])]) {
-        if (
-          key === 'permission'
-            ? JSON.stringify(value[key]) === JSON.stringify(previous.applied[key])
-            : isDeepStrictEqual(value[key], previous.applied[key])
-        ) {
-          if (Object.hasOwn(previous.native, key)) {
-            result[key] = previous.native[key];
-          } else {
-            Reflect.deleteProperty(result, key);
-          }
-        } else if (key !== 'permission' && recursive && record(value[key]) && record(previous.applied[key])) {
-          const restored = restore(
-            value[key],
-            {
-              native: record(previous.native[key]) ? previous.native[key] : {},
-              applied: previous.applied[key],
-            },
-            true,
-          );
-          if (Object.keys(restored).length === 0 && !Object.hasOwn(previous.native, key)) {
-            Reflect.deleteProperty(result, key);
-          } else {
-            result[key] = restored;
-          }
-        }
-      }
-    }
-    return result;
-  }
   return {
-    'command.execute.before': async () => {
-      await validateReferences();
-    },
-    'chat.message': async (input, output) => {
-      await validateReferences();
-      await notifications.session(input.sessionID, output.message.agent);
-    },
-    config: async (config: Config & Pick<NativeConfig, 'skills' | 'default_agent'>) => {
-      // Packaged help stays discoverable even when a source requires repair.
-      config.skills = {
-        ...config.skills,
-        paths: [...new Set([...(config.skills?.paths ?? []), bundledSkillDirectory])],
+    config: async (config) => {
+      const target = config as Record<string, unknown>;
+      // Package help remains available when a composition needs repair.
+      const skills = record(target.skills) ? target.skills : {};
+      target.skills = {
+        ...skills,
+        paths: [
+          ...new Set([
+            ...(Array.isArray(skills.paths)
+              ? skills.paths.filter((path: unknown): path is string => typeof path === 'string')
+              : []),
+            bundledSkillDirectory,
+          ]),
+        ],
       };
-      const configured: unknown = config.agent ?? {};
-      if (!agentConfigurations(configured)) {
-        throw new SettingsError('An agent configuration must be an object.');
-      }
-      const previous = configurations.get(config);
-      const nativeGlobals = restore(
-        {
-          model: config.model,
-          small_model: config.small_model,
-          permission: config.permission,
-          default_agent: config.default_agent,
-        },
-        previous,
-      );
-      const staged: Record<string, AgentSettings> = {};
-      const owned: Record<string, AgentSettings> = {};
-      for (const [name, value] of Object.entries(configured)) {
-        if (!record(value)) {
-          throw new SettingsError('An agent configuration must be an object.');
-        }
-        const saved = previous?.agents.get(name) ?? agentSnapshots.get(value);
-        const restored = restore(value, saved, true);
-        if (previous?.added.has(name) === true || (previous === undefined && saved?.owned === true)) {
-          if (Object.keys(restored).length > 0) {
-            owned[name] = restored;
-          }
-        } else {
-          staged[name] = restored;
-        }
-      }
-      const previousResources = resources.get(config);
-      const nativeCommands = restore(config.command ?? {}, previousResources?.commands);
-      for (const [name, command] of Object.entries(nativeCommands)) {
-        const native = previousResources?.commands.native[name];
-        const applied = previousResources?.commands.applied[name];
-        if (record(command) && record(native) && record(applied)) {
-          // Restore authored bodies even if a later plugin changed metadata. Generated
-          // commands have no native baseline and retain the existing whole-command policy.
-          nativeCommands[name] = restore(command, { native, applied }, true);
-        }
-      }
-      if (!commandConfigurations(nativeCommands)) {
-        throw new SettingsError('Native commands must contain valid templates.');
-      }
-      const nextSources = await loadCompositionSources(context);
-      const inputs = await captureCompositionInputs(nextSources);
-      const observedNativeFiles = await observeNativeFiles();
-      let resolved: Awaited<ReturnType<typeof resolveProfileRuntime>>;
+      let native: NativeBaseline | undefined;
+      let observation: NativeObservation | undefined;
+      const identities: Pick<RuntimeMarker, 'source' | 'selection'> = {};
       try {
-        resolved = await resolveProfileRuntime(
-          nextSources,
-          { ...nativeGlobals, agent: staged, composerOwnedAgents: owned, commandNames: Object.keys(nativeCommands) },
-          new Map(inputs.map((file) => [file.path, file.text])),
+        const previous = roots.get(config);
+        const restored = restore(
+          Object.fromEntries(
+            ['model', 'small_model', 'default_agent', 'permission', 'agent', 'command']
+              .filter((key) => Object.hasOwn(target, key))
+              .map((key) => [key, target[key]]),
+          ),
+          previous,
+          ['model', 'small_model', 'agent', 'command'],
         );
-      } catch (error) {
-        if (error instanceof MembershipValidationError) {
-          // Expose exact inspection inputs without applying any part of the invalid composition.
-          publishRuntimeBaseline(
-            config,
-            options,
-            { root: context.root, directory: input.directory },
-            nativeGlobals,
-            staged,
-            { observedNativeFiles, selectionEnvironment, commandNames: Object.keys(nativeCommands) },
-          );
+        for (const kind of ['agent', 'command'] as const) {
+          if (restored[kind] !== undefined && !record(restored[kind])) {
+            throw new SettingsError(`Invalid native ${kind} configuration.`);
+          }
+          if (record(restored[kind])) {
+            restored[kind] = Object.fromEntries(
+              Object.entries(restored[kind]).map(([name, value]) => {
+                if (!record(value)) {
+                  throw new SettingsError(`Invalid native ${kind} ${name}.`);
+                }
+                return [
+                  name,
+                  restore(
+                    value,
+                    nested.get(value),
+                    kind === 'agent'
+                      ? ['model', 'variant', 'temperature', 'top_p', 'options', 'mode', 'permission']
+                      : ['agent', 'model', 'subtask'],
+                  ),
+                ];
+              }),
+            );
+          }
         }
+        native = restored;
+        observation = await observeNative(
+          discoveryContext(directory, typeof input.worktree === 'string' ? input.worktree : worktree),
+        );
+        const source = await loadSource(options, configDirectory);
+        identities.source = {
+          path: source.path,
+          canonicalPath: source.canonicalPath,
+          fingerprint: digest(source.text ?? null),
+        };
+        const selection = await readSelection(selectionEnvironment, { root: worktree, baseFile: source.canonicalPath });
+        identities.selection = {
+          path: selection.path,
+          choice: selection.choice,
+          revision: selection.revision,
+          identity: selection.identity,
+        };
+        const candidate = resolveComposition(source.document, selection.choice, native, observation.authority);
+        const revision = compositionRevision(source, selection, candidate);
+        const checked = await loadSource(options, configDirectory);
+        if (
+          checked.identity !== source.identity ||
+          checked.text !== source.text ||
+          checked.canonicalPath !== source.canonicalPath
+        ) {
+          throw new SettingsError('Composition source changed while loading.');
+        }
+        await verifySelection(selection);
+        const after = await observeNative(observation.context);
+        if (!isDeepStrictEqual(after, observation)) {
+          throw new SettingsError('Native agent metadata changed. Restart OpenCode, then review again.');
+        }
+        // The complete candidate and all observed inputs are valid before any managed mutation.
+        for (const field of ['model', 'small_model'] as const) {
+          if (Object.hasOwn(candidate, field)) {
+            target[field] = candidate[field];
+          } else {
+            Reflect.deleteProperty(target, field);
+          }
+        }
+        for (const kind of ['agent', 'command'] as const) {
+          const applied = structuredClone(candidate[kind]);
+          target[kind] = applied;
+          for (const [name, value] of Object.entries(applied)) {
+            nested.set(value, { native: structuredClone(native[kind]?.[name] ?? {}), applied: structuredClone(value) });
+          }
+        }
+        roots.set(config, {
+          native: structuredClone(native),
+          applied: configFields(target),
+        });
+        publishRuntime(target, rawOptions, {
+          location,
+          configurationDirectory: configDirectory,
+          options,
+          selectionEnvironment,
+          ...identities,
+          status: 'applied',
+          native: metadata(native),
+          observation,
+          revision,
+          candidate: { ...candidate, ...metadata(candidate) },
+        });
+      } catch (error) {
+        publishRuntime(target, rawOptions, {
+          location,
+          configurationDirectory: configDirectory,
+          options,
+          selectionEnvironment,
+          ...identities,
+          status: 'error',
+          diagnostic: `Composer not applied. ${error instanceof Error ? error.message : String(error)}`,
+          ...(native === undefined ? {} : { native: metadata(native) }),
+          ...(observation === undefined ? {} : { observation }),
+        });
         throw error;
       }
-      for (const name of Object.keys(resolved.commands)) {
-        if (Object.hasOwn(nativeCommands, name)) {
-          throw new SettingsError(`Component command ${name} conflicts with an existing native command.`);
-        }
-      }
-      validateShortcutCommands(nextSources, Object.keys(nativeCommands));
-      const nextCommands = { ...nativeCommands, ...resolved.commands };
-      const nativeSkills = config.skills ?? {};
-      const nativePaths = (nativeSkills.paths ?? []).filter((path) => previousResources?.addedPaths.has(path) !== true);
-      const nextSkills = {
-        ...nativeSkills,
-        paths: [...new Set([...nativePaths, bundledSkillDirectory, ...resolved.skillPaths])],
-      };
-      const revision = compositionRevision(nextSources, resolved, inputs);
-      await verifyCompositionInputs(nextSources, inputs);
-      // Validate the complete candidate before mutating host objects.
-      for (const key of ['model', 'small_model'] as const) {
-        if (resolved[key] === undefined) {
-          Reflect.deleteProperty(config, key);
-        } else {
-          config[key] = resolved[key];
-        }
-      }
-      if (resolved.permission === undefined) {
-        delete config.permission;
-      } else {
-        Object.assign(config, { permission: structuredClone(resolved.permission) });
-      }
-      const authored = new Map<string, Authored>();
-      const nextAgents: Record<string, AgentSettings> = {};
-      for (const [name, value] of Object.entries(resolved.agent)) {
-        // Native config merges may retain objects owned by the server-wide cache.
-        // Publish an instance-owned map and values rather than modifying those shared inputs.
-        const target = structuredClone(value);
-        nextAgents[name] = target;
-        const snapshot = {
-          native: structuredClone(
-            Object.hasOwn(staged, name) ? staged[name] : Object.hasOwn(owned, name) ? owned[name] : {},
-          ),
-          applied: structuredClone(value),
-          owned: !Object.hasOwn(staged, name),
-        };
-        authored.set(name, snapshot);
-        agentSnapshots.set(target, snapshot);
-      }
-      config.agent = nextAgents;
-      configurations.set(config, {
-        native: structuredClone(nativeGlobals),
-        applied: structuredClone({
-          model: config.model,
-          small_model: config.small_model,
-          default_agent: config.default_agent,
-          permission: config.permission,
-        }),
-        added: new Set(Object.keys(resolved.agent).filter((name) => !Object.hasOwn(staged, name))),
-        agents: authored,
-      });
-      agents = resolved.agent;
-      choices = Object.fromEntries(
-        Object.entries(resolved.choices).map(([name, value]) => [name, { ...value, source: 'group' }]),
-      );
-      config.command = nextCommands;
-      config.skills = nextSkills;
-      resources.set(config, {
-        commands: { native: structuredClone(nativeCommands), applied: structuredClone(nextCommands) },
-        addedPaths: new Set(
-          [bundledSkillDirectory, ...resolved.skillPaths].filter((path) => !nativePaths.includes(path)),
-        ),
-      });
-      referenceDiagnostics = resolved.diagnostics;
-      validationGeneration++;
-      inventory = undefined;
-      if (referenceDiagnostics.length === 0) {
-        lastReferenceNotice = '';
-      }
-      publishRuntimeBaseline(
-        config,
-        options,
-        { root: context.root, directory: input.directory },
-        nativeGlobals,
-        staged,
-        {
-          revision,
-          observedNativeFiles,
-          selectionEnvironment,
-          choices: resolved.choices,
-          commandNames: Object.keys(nativeCommands),
-          diagnostics: resolved.diagnostics,
-        },
-      );
-      await notifications.applied(resolved.permissionWarnings);
-    },
-    // eslint-disable-next-line @typescript-eslint/require-await -- OpenCode requires a Promise-returning parameter hook.
-    'chat.params': async (input, output) => {
-      delete output.options.groups;
-      const model = input.model;
-      const selected = `${model.providerID}/${model.id}`;
-      const modelVariants: unknown = 'variants' in model ? model.variants : undefined;
-      const variants = record(modelVariants) ? modelVariants : {};
-      const message: unknown = input.message;
-      const requestModel = record(message) && record(message.model) ? message.model : undefined;
-      // The title hook receives the original user's model/variant, but the host
-      // dispatches it with small=true and deliberately skips variant selection.
-      const small = input.agent === 'title';
-      // Normal requests (including compaction on another model) retain the
-      // original user variant under OpenCode's request preparation rules.
-      const requested = small
-        ? undefined
-        : typeof requestModel?.variant === 'string'
-          ? requestModel.variant
-          : record(message) && typeof message.variant === 'string'
-            ? message.variant
-            : undefined;
-      const choice = choices[input.agent];
-      // Validate normal variants, plus the explicit legacy fallback materialized below.
-      // Never validate the original worker variant for a small title dispatch.
-      if (
-        (!small || Object.hasOwn(agents[input.agent]?.options ?? {}, 'reasoningEffort')) &&
-        choice !== undefined &&
-        (choice.source === 'group' || (choice.modelRef !== undefined && choice.modelRef !== '')) &&
-        choice.model === selected
-      ) {
-        const key = requested ?? choice.variant;
-        if (key !== undefined && key !== '' && (!record(variants[key]) || variants[key].disabled === true)) {
-          throw new SettingsError(
-            'The group model does not support this reasoning variant. Update the agent or group settings.',
-          );
-        }
-      }
-      const parameters =
-        choice?.model !== undefined && choice.parameters !== undefined
-          ? parametersForDispatch(choice.model, selected, choice.parameters)
-          : undefined;
-      if (parameters !== undefined) {
-        const explicit = filterParameters(parameters, model);
-        const agent = agents[input.agent];
-        // Native temperature/top_p are agent-wide and would leak these model-bound values
-        // to a different session selection. Supply only explicit controls at dispatch instead.
-        if (explicit.temperature !== undefined && agent?.temperature === undefined) {
-          output.temperature = explicit.temperature;
-        }
-        if (explicit.topP !== undefined && agent?.top_p === undefined && agent?.topP === undefined) {
-          output.topP = explicit.topP;
-        }
-        if (explicit.topK !== undefined) {
-          output.topK = explicit.topK;
-        }
-        if (explicit.maxOutputTokens !== undefined) {
-          output.maxOutputTokens = explicit.maxOutputTokens;
-        }
-        const selectedVariant = small ? undefined : variants[requested ?? choice?.variant ?? ''];
-        output.options = mergeOptions(
-          output.options,
-          unprotectedOptions(explicit.options ?? {}, [
-            agent?.options ?? {},
-            ...(record(selectedVariant) ? [selectedVariant] : []),
-          ]),
-        );
-      }
-      // Small title requests skip native variant selection. Align the built-in fallbacks
-      // with the configured model's variant without forwarding stale provider-specific values.
-      if (!['title', 'compaction'].includes(input.agent)) {
-        return;
-      }
-      const agent = agents[input.agent];
-      if (agent === undefined || !Object.hasOwn(agent.options ?? {}, 'reasoningEffort')) {
-        return;
-      }
-      if (typeof agent.model === 'string' && agent.model !== '' && agent.model !== selected) {
-        return;
-      }
-      const key =
-        input.agent === 'compaction' && requested !== undefined && requested !== '' && record(variants[requested])
-          ? requested
-          : agent.variant;
-      const variant = key !== undefined && key !== '' ? variants[key] : undefined;
-      delete output.options.reasoningEffort;
-      if (record(variant)) {
-        Object.assign(output.options, variant);
-      }
-      delete output.options.groups;
     },
   };
 };
-
 export default { id: 'config-composer', server: ConfigComposerPlugin } satisfies PluginModule;

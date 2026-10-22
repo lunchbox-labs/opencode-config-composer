@@ -8,7 +8,7 @@ import { selectionStateDirectory } from '../../src/config-composer/composition/s
 test('server startup publishes a real selection proof', async () => {
   await server.server({});
   const directory = selectionStateDirectory();
-  assert.equal((await readdir(join(directory, 'config-composer/v1/processes'))).length, 1);
+  assert.equal((await readdir(join(directory, 'config-composer/v2/processes'))).length, 1);
   console.log(`STATE_DIRECTORY=${JSON.stringify(process.env.XDG_STATE_HOME)}`);
   if (process.env.COMPOSER_FAIL_FIXTURE === '1') {
     assert.fail('intentional fixture failure');
