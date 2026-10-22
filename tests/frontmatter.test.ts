@@ -262,6 +262,19 @@ test('native recursive agent paths include dotfiles and symlinks; flat modes for
   assert.equal(Object.hasOwn(agents.get('default')!.fields, 'mode'), false);
 });
 
+test('native dotfiles named exactly .md keep their full root and nested identities', async (t) => {
+  const f = await fixture(t);
+  const dot = await f.markdown(f.global, 'agents/.md', 'model: fixture/dot');
+  const nested = await f.markdown(f.global, 'agents/nested/.md', 'model: fixture/nested');
+  const agents = await readNativeAgentFrontmatter(f.context);
+  assert.equal(agents.get('.md')?.fields.model?.value, 'fixture/dot');
+  assert.equal(agents.get('.md')?.fields.model?.source.path, dot);
+  assert.equal(agents.get('nested/.md')?.fields.model?.value, 'fixture/nested');
+  assert.equal(agents.get('nested/.md')?.fields.model?.source.path, nested);
+  assert.equal(agents.has(''), false);
+  assert.equal(agents.has('nested/'), false);
+});
+
 test('same-batch duplicate native identities fail across singular and plural aliases', async (t) => {
   const f = await fixture(t);
   const first = await f.markdown(f.global, 'agent/first.md', 'name: collision\nmodel: fixture/first');
@@ -302,6 +315,18 @@ test('source fingerprints cover exact read bytes including opaque bodies and fol
   assert.notEqual(next.fields.model?.source.fingerprint, first.fields.model.source.fingerprint);
   assert.equal(next.fields.model?.value, first.fields.model.value);
   assert.equal(JSON.stringify(next).includes('opaque body'), false);
+});
+
+test('invalid UTF-8 bytes in opaque native bodies preserve metadata and exact source fingerprints', async (t) => {
+  const f = await fixture(t);
+  const path = await f.markdown(f.global, 'agents/invalid-body.md', 'model: fixture/invalid-body');
+  const bytes = Buffer.concat([await readFile(path), Buffer.from([0xff])]);
+  await writeFile(path, bytes);
+  const agent = (await readNativeAgentFrontmatter(f.context)).get('invalid-body')!;
+  assert.equal(agent.fields.model?.value, 'fixture/invalid-body');
+  assert.equal(agent.fields.model.source.fingerprint, createHash('sha256').update(bytes).digest('hex'));
+  assert.deepEqual(await readFile(path), bytes);
+  assert.equal(JSON.stringify(agent).includes('Opaque native body'), false);
 });
 
 test('mode batches follow agent batches and only explicit mode values create final pins', async (t) => {

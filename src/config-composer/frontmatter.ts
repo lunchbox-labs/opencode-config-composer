@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, extname, join, relative, sep } from 'node:path';
 import matter from 'gray-matter';
 import jsYaml from 'js-yaml';
 import { SettingsError, record } from './settings.ts';
@@ -358,7 +358,7 @@ async function readMetadata(path: string): Promise<{ data: Record<string, unknow
     ) {
       throw diagnostic(path, 'native source changed while reading; retry discovery.');
     }
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const text = bytes.toString('utf8');
     return {
       data: parseMetadata(text, path),
       source: { path, canonicalPath, fingerprint: createHash('sha256').update(bytes).digest('hex') },
@@ -402,8 +402,14 @@ export async function readNativeAgentFrontmatter(
               continue;
             }
             const { data, source } = await readMetadata(path);
+            const candidate = relative(base, path).replaceAll('\\', '/');
+            const extension = extname(candidate);
             const name =
-              typeof data.name === 'string' ? data.name : relative(base, path).replaceAll('\\', '/').slice(0, -3);
+              typeof data.name === 'string'
+                ? data.name
+                : extension === ''
+                  ? candidate
+                  : candidate.slice(0, -extension.length);
             const previous = batch.get(name);
             if (previous !== undefined) {
               throw diagnostic(
