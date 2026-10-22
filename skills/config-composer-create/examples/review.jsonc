@@ -1,33 +1,25 @@
 {
-  "groups": [
-    {
-      "name": "reviewers",
+  "groups": {
+    "reviewers": {
       "description": "Existing native review agents",
-      "members": {
-        "agent": [
-          "plan",
-          "explore"
-        ]
-      },
       "agent": {
         "permission": {
           "bash": {
-            "git *": "ask"
-          }
-        }
-      }
-    }
-  ],
+            "git *": "ask",
+          },
+        },
+      },
+    },
+  },
   "profiles": {
     "review": {
-      "groups": [
-        {
-          "name": "reviewers",
+      "groups": {
+        "reviewers": {
           "agent": {
-            "temperature": 0
-          }
-        }
-      ]
-    }
-  }
+            "temperature": 0,
+          },
+        },
+      },
+    },
+  },
 }

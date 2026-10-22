@@ -12,18 +12,21 @@ test('provider examples allocate one provider or an explicit mixed profile to ex
       await readFile(new URL('../docs/examples/provider-profiles/config-composer.jsonc', import.meta.url), 'utf8'),
     ),
   );
+  const native = parseConfiguration(
+    await readFile(new URL('../docs/examples/provider-profiles/opencode.jsonc', import.meta.url), 'utf8'),
+  );
   for (const [profile, expected] of Object.entries({
     anthropic: ['anthropic/claude-sonnet-4-5', 'anthropic/claude-sonnet-4-5', 'anthropic/claude-sonnet-4-5'],
     openai: ['openai/gpt-5', 'openai/gpt-5', 'openai/gpt-5'],
     mixed: ['openai/gpt-5', 'anthropic/claude-sonnet-4-5', 'anthropic/claude-sonnet-4-5'],
   })) {
-    const result = resolveComposition(document, profile, {}, {});
+    const result = resolveComposition(document, profile, native, {});
     assert.deepEqual(
       ['build', 'plan', 'explore'].map((name) => result.agent[name].model),
       expected,
     );
   }
-  const shared = resolveComposition(document, null, {}, {});
+  const shared = resolveComposition(document, null, native, {});
   assert.ok(['build', 'plan', 'explore'].every((name) => shared.agent[name].model === undefined));
 });
 
@@ -41,8 +44,11 @@ test('shipped examples validate against strict schema and target native builtins
     const raw = parseConfiguration(await readFile(new URL(path, import.meta.url), 'utf8'));
     assert.ok(validate(raw), JSON.stringify(validate.errors));
     const doc = readCompositionDocument(raw);
+    const native = parseConfiguration(
+      await readFile(new URL('opencode.jsonc', new URL(path, import.meta.url)), 'utf8'),
+    );
     for (const profile of Object.keys(doc.profiles)) {
-      assert.equal(resolveComposition(doc, profile, {}, {}).profile, profile);
+      assert.equal(resolveComposition(doc, profile, native, {}).profile, profile);
     }
   }
 });
@@ -55,7 +61,7 @@ test('published schema uses native action-only permissions and string modes in e
       const patch = { permission: { [tool]: value } };
       for (const document of [
         { agent: { worker: patch } },
-        { groups: [{ name: 'workers', members: { agent: ['worker'] }, agent: patch }] },
+        { groups: { workers: { agent: patch } } },
         { profiles: { inactive: { agent: { worker: patch } } } },
       ]) {
         assert.equal(validate(document), false, JSON.stringify(document));

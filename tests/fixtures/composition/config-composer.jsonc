@@ -1,11 +1,7 @@
 {
-  "groups": [
-    {
-      "name": "reviewers",
+  "groups": {
+    "reviewers": {
       "description": "Existing native review agents",
-      "members": {
-        "agent": ["plan", "explore"],
-      },
       "agent": {
         "permission": {
           "bash": {
@@ -14,17 +10,16 @@
         },
       },
     },
-  ],
+  },
   "profiles": {
     "review": {
-      "groups": [
-        {
-          "name": "reviewers",
+      "groups": {
+        "reviewers": {
           "agent": {
             "temperature": 0,
           },
         },
-      ],
+      },
     },
   },
 }

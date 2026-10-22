@@ -74,6 +74,9 @@ function patch(value: unknown, kind: 'agent' | 'command', path: string) {
       if (!record(v)) {
         fail(at, 'Expected an options object.');
       }
+      if (Object.hasOwn(v, 'groups')) {
+        fail(`${at}/groups`, 'Group membership belongs on the native agent, not in options.');
+      }
     } else {
       permission(v, at);
     }
@@ -123,46 +126,21 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
       named(value[kind], kind, `/${kind}`);
     }
   }
-  const groups = Object.hasOwn(value, 'groups') ? value.groups : [];
-  if (!Array.isArray(groups)) {
-    fail('/groups', 'Expected an ordered array.');
+  const groups = Object.hasOwn(value, 'groups') ? value.groups : {};
+  if (!record(groups)) {
+    fail('/groups', 'Expected a group map.');
   }
-  const names = new Set<string>();
-  groups.forEach((group: unknown, index: number) => {
-    const at = `/groups/${index}`;
-    object(group, ['name', 'description', 'members', 'agent', 'command'], at);
-    name(group.name, at + '/name');
-    if (names.has(group.name)) {
-      fail(at, 'Duplicate group identity.');
-    }
-    names.add(group.name);
+  for (const [key, group] of Object.entries(groups)) {
+    const at = `/groups/${pointer(key)}`;
+    name(key, at);
+    object(group, ['description', 'agent'], at);
     if (Object.hasOwn(group, 'description') && typeof group.description !== 'string') {
       fail(at, 'Expected description string.');
     }
-    object(group.members, ['agent', 'command'], at + '/members');
-    let count = 0;
-    for (const kind of ['agent', 'command'] as const) {
-      if (Object.hasOwn(group.members, kind)) {
-        const entries = group.members[kind];
-        if (!Array.isArray(entries)) {
-          fail(at, 'Expected member array.');
-        }
-        for (const item of entries) {
-          name(item, at);
-        }
-        if (new Set(entries).size !== entries.length) {
-          fail(at, 'Duplicate member.');
-        }
-        count += entries.length;
-      }
-      if (Object.hasOwn(group, kind)) {
-        patch(group[kind], kind, `${at}/${kind}`);
-      }
+    if (Object.hasOwn(group, 'agent')) {
+      patch(group.agent, 'agent', `${at}/agent`);
     }
-    if (count === 0) {
-      fail(at, 'At least one nonempty member array is required.');
-    }
-  });
+  }
   const profiles = Object.hasOwn(value, 'profiles') ? value.profiles : {};
   if (!record(profiles)) {
     fail('/profiles', 'Expected a profile map.');
@@ -185,27 +163,20 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
       }
     }
     if (Object.hasOwn(profile, 'groups')) {
-      if (!Array.isArray(profile.groups)) {
-        fail(at, 'Expected ordered group references.');
+      if (!record(profile.groups)) {
+        fail(`${at}/groups`, 'Expected a group patch map.');
       }
-      const seen = new Set<string>();
-      profile.groups.forEach((group: unknown, index: number) => {
-        const path = `${at}/groups/${index}`;
-        object(group, ['name', 'agent', 'command'], path);
-        name(group.name, path);
-        if (!names.has(group.name)) {
+      for (const [key, group] of Object.entries(profile.groups)) {
+        const path = `${at}/groups/${pointer(key)}`;
+        name(key, path);
+        object(group, ['agent'], path);
+        if (!Object.hasOwn(groups, key)) {
           fail(path, 'Unknown group.');
         }
-        if (seen.has(group.name)) {
-          fail(path, 'Duplicate group reference.');
+        if (Object.hasOwn(group, 'agent')) {
+          patch(group.agent, 'agent', `${path}/agent`);
         }
-        seen.add(group.name);
-        for (const k of ['agent', 'command'] as const) {
-          if (Object.hasOwn(group, k)) {
-            patch(group[k], k, `${path}/${k}`);
-          }
-        }
-      });
+      }
     }
   }
   if (Object.hasOwn(value, 'defaultProfile')) {

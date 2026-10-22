@@ -24,16 +24,41 @@ export function openField(view: ConfigurationView, kind: 'agent' | 'command', na
   );
 }
 export function openEntity(view: ConfigurationView, kind: 'agent' | 'command', name: string): void {
-  const entities = configured(view)[kind];
+  const candidate = configured(view);
+  const entities = candidate[kind];
   const entity = Object.hasOwn(entities, name) ? entities[name] : {};
+  const membership = Object.hasOwn(candidate.memberships, name) ? candidate.memberships[name] : undefined;
   view.nav.menu({
     title: `${kind} ${name}`,
-    options: (kind === 'agent' ? agentFields : commandFields).map((field) => ({
-      title: field,
-      value: field,
-      description: Object.hasOwn(entity, field) ? JSON.stringify(entity[field]) : 'Inherit',
-    })),
-    onSelect: (option) => view.run(() => openField(view, kind, name, option.value)),
+    options: [
+      ...(kind === 'agent'
+        ? [
+            {
+              title: 'groups',
+              value: '\0groups',
+              description: JSON.stringify(membership?.groups ?? []),
+            },
+          ]
+        : []),
+      ...(kind === 'agent' ? agentFields : commandFields).map((field) => ({
+        title: field,
+        value: field,
+        description: Object.hasOwn(entity, field) ? JSON.stringify(entity[field]) : 'Inherit',
+      })),
+    ],
+    onSelect: (option) =>
+      view.run(() => {
+        if (option.value === '\0groups') {
+          view.details(
+            `agent ${name} · groups`,
+            membership === undefined
+              ? 'No declared groups.'
+              : `Application order: ${JSON.stringify(membership.groups)}\nSource: ${membership.origin.source ?? 'Native agent configuration'} ${membership.origin.pointer ?? ''}\nEach group applies its shared settings, then its selected profile patch. Later listed groups win overlapping settings.`,
+          );
+        } else {
+          openField(view, kind, name, option.value);
+        }
+      }),
   });
 }
 export function openEffective(view: ConfigurationView): void {
@@ -64,7 +89,11 @@ export function openEffective(view: ConfigurationView): void {
           value: '\0status',
           description: `${selectionLabel(view.context.selection.choice)} · ${status}`,
         },
-        { title: 'Shared groups', value: '\0groups', description: 'Membership, order and settings · read only' },
+        {
+          title: 'Shared groups',
+          value: '\0groups',
+          description: 'Shared settings · membership belongs to each agent',
+        },
         {
           title: 'Profile definitions',
           value: '\0profiles',
@@ -95,16 +124,13 @@ export function openEffective(view: ConfigurationView): void {
           if (option.value === '\0groups') {
             view.nav.menu({
               title: 'Shared groups',
-              options: document.groups.map((group, index) => ({
-                title: group.name,
-                value: String(index),
-                description: `${index + 1}. ${group.description ?? 'Shared membership and settings'}`,
+              options: Object.entries(document.groups).map(([name, group]) => ({
+                title: name,
+                value: name,
+                description: group.description ?? 'Shared agent settings',
               })),
               onSelect: (item) =>
-                view.details(
-                  `Shared group ${document.groups[Number(item.value)].name}`,
-                  JSON.stringify(document.groups[Number(item.value)], null, 2),
-                ),
+                view.details(`Shared group ${item.value}`, JSON.stringify(document.groups[item.value], null, 2)),
             });
           } else if (option.value === '\0profiles') {
             view.nav.menu({

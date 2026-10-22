@@ -1,39 +1,29 @@
 {
-  "groups": [
-    {
-      "name": "coding",
-      "members": {
-        "agent": [
-          "build",
-          "plan"
-        ]
-      }
-    }
-  ],
+  "groups": {
+    "coding": {},
+  },
   "profiles": {
     "development": {
-      "groups": [
-        {
-          "name": "coding",
+      "groups": {
+        "coding": {
           "agent": {
-            "temperature": 0.2
-          }
-        }
-      ]
+            "temperature": 0.2,
+          },
+        },
+      },
     },
     "review": {
-      "groups": [
-        {
-          "name": "coding",
+      "groups": {
+        "coding": {
           "agent": {
             "temperature": 0,
             "permission": {
-              "edit": "ask"
-            }
-          }
-        }
-      ]
-    }
+              "edit": "ask",
+            },
+          },
+        },
+      },
+    },
   },
-  "defaultProfile": "development"
+  "defaultProfile": "development",
 }

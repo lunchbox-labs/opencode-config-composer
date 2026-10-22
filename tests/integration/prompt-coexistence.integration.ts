@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { compositionFixture } from './composition-fixture.ts';
 
 const promptPackage = '@lunchbox-labs/opencode-prompt-composer';
-const promptVersion = '0.0.6';
+const promptVersion = '0.1.0';
 
 for (const order of ['config-first', 'prompt-first']) {
   test(
@@ -50,18 +50,14 @@ for (const order of ['config-first', 'prompt-first']) {
       }
       const inputs = {
         'agents/worker.md':
-          '---\nmodel: fixture/alpha\nmode: primary\ntemperature: 0\noptions: { opaque: false }\npermission: { edit: deny }\ndescription: Opaque worker metadata\ncolor: "#112233"\n---\nWORKER_BODY {{include:agent.md}}',
+          '---\ngroups: [workers]\nmodel: fixture/alpha\nmode: primary\ntemperature: 0\noptions: { opaque: false }\npermission: { edit: deny }\ndescription: Opaque worker metadata\ncolor: "#112233"\n---\nWORKER_BODY {{include:agent.md}}',
         'agents/helper.md':
-          '---\nmode: subagent\ndescription: Opaque helper metadata\n---\nHELPER_BODY {{include:agent.md}}',
+          '---\ngroups: [workers]\nmode: subagent\ndescription: Opaque helper metadata\n---\nHELPER_BODY {{include:agent.md}}',
         'commands/review.md':
           '---\nagent: helper\nmodel: fixture/alpha\nsubtask: false\ndescription: Opaque command metadata\n---\nCOMMAND_BODY {{include:command.md}} $ARGUMENTS',
-        'prompts/agent.md': 'AGENT_INCLUDE',
+        'prompts/agent.md': 'AGENT_INCLUDE {{include:shared.md}}',
         'prompts/command.md': 'COMMAND_INCLUDE',
         'prompts/shared.md': 'SHARED_APPEND',
-        'prompt-composer.jsonc': JSON.stringify({
-          defaults: { append: ['{{include:shared.md}}'] },
-          agents: { worker: { prepend: ['WORKER_PREPEND'], append: ['WORKER_APPEND'] } },
-        }),
       };
       for (const [path, text] of Object.entries(inputs)) {
         await writeFile(join(projectConfig, path), text);
@@ -73,18 +69,12 @@ for (const order of ['config-first', 'prompt-first']) {
         permission: { edit: 'allow' },
       };
       await f.write(f.paths.shared, {
-        groups: [
-          {
-            name: 'workers',
-            members: { agent: ['worker', 'helper'], command: ['review'] },
-            agent: { model: 'fixture/alpha', temperature: 0.4, permission: { read: 'ask' } },
-            command: { subtask: false },
-          },
-        ],
+        groups: { workers: { agent: { model: 'fixture/alpha', temperature: 0.4, permission: { read: 'ask' } } } },
         agent: { worker: patch },
+        command: { review: { subtask: false } },
         profiles: {
           a: {
-            groups: [{ name: 'workers', agent: patch }],
+            groups: { workers: { agent: patch } },
             agent: { worker: patch, helper: { model: 'fixture/beta', variant: 'high', options: { from_a: false } } },
             command: { review: { model: 'fixture/beta' } },
           },
@@ -100,12 +90,12 @@ for (const order of ['config-first', 'prompt-first']) {
       ]) {
         preserved.set(path, await readFile(path));
       }
-      const expectedWorker = 'WORKER_PREPEND\n\nWORKER_BODY AGENT_INCLUDE\n\nSHARED_APPEND\n\nWORKER_APPEND';
-      const expectedHelper = 'HELPER_BODY AGENT_INCLUDE\n\nSHARED_APPEND';
+      const expectedWorker = 'WORKER_BODY AGENT_INCLUDE SHARED_APPEND';
+      const expectedHelper = 'HELPER_BODY AGENT_INCLUDE SHARED_APPEND';
       const expectedCommand = 'COMMAND_BODY COMMAND_INCLUDE $ARGUMENTS';
       const verify = async (profile: 'a' | 'b' | null) => {
         const config = await f.host.api<{
-          plugin: [string, Record<string, Record<string, unknown>>][];
+          plugin: (string | [string, Record<string, Record<string, unknown>>])[];
           agent: Record<string, Record<string, unknown>>;
           command: Record<string, Record<string, unknown>>;
         }>('/config');
@@ -127,27 +117,18 @@ for (const order of ['config-first', 'prompt-first']) {
         assert.equal(config.command.review.model, profile === 'a' ? 'fixture/beta' : 'fixture/alpha');
         assert.equal(config.command.review.subtask, false);
         assert.equal(
-          config.plugin.filter(([, options]) => Object.hasOwn(options, '__configComposerRuntime')).length,
+          config.plugin.filter((entry) => Array.isArray(entry) && Object.hasOwn(entry[1], '__configComposerRuntime'))
+            .length,
           1,
         );
         assert.equal(
-          config.plugin.filter(([, options]) => Object.hasOwn(options, '__promptComposerRuntime')).length,
-          1,
+          config.plugin.filter((entry) => Array.isArray(entry) && Object.hasOwn(entry[1], '__promptComposerRuntime'))
+            .length,
+          0,
         );
         assert.deepEqual(
-          config.plugin.map(([path]) => path),
+          config.plugin.map((entry) => (Array.isArray(entry) ? entry[0] : entry)),
           plugins.map((path) => pathToFileURL(path).href),
-        );
-        const prompt = config.plugin.find(([path]) => path === pathToFileURL(promptDirectory).href)?.[1]
-          .__promptComposerRuntime;
-        assert.ok(prompt !== undefined);
-        assert.equal(prompt.version, 1);
-        assert.deepEqual((prompt.applied as { agent: Record<string, { prompt: string }> }).agent.worker, {
-          prompt: expectedWorker,
-        });
-        assert.match(
-          (prompt.native as { agent: Record<string, { prompt: string }> }).agent.worker.prompt,
-          /\{\{include:agent\.md\}\}/,
         );
         const runtime = await f.editor.runtime();
         assert.equal(runtime.status, 'applied');
@@ -165,7 +146,7 @@ for (const order of ['config-first', 'prompt-first']) {
         );
         const commands = await f.host.api<{ name: string; template: string }[]>('/command');
         assert.equal(commands.find((command) => command.name === 'review')?.template, expectedCommand);
-        return { config: runtime.id, prompt: prompt.id };
+        return runtime.id;
       };
       await f.host.start();
       let previous = await verify('a');
@@ -174,20 +155,17 @@ for (const order of ['config-first', 'prompt-first']) {
         const revision = await f.editor.applySelection(saved);
         assert.deepEqual((await f.editor.runtime()).revision, revision);
         const ids = await verify(choice === undefined ? 'a' : choice);
-        assert.notEqual(ids.config, previous.config);
-        assert.notEqual(ids.prompt, previous.prompt);
+        assert.notEqual(ids, previous);
         previous = ids;
       }
       await f.host.api('/instance/dispose', {});
       let ids = await verify('a');
-      assert.notEqual(ids.config, previous.config);
-      assert.notEqual(ids.prompt, previous.prompt);
+      assert.notEqual(ids, previous);
       previous = ids;
       await f.host.stop();
       await f.host.start();
       ids = await verify('a');
-      assert.notEqual(ids.config, previous.config);
-      assert.notEqual(ids.prompt, previous.prompt);
+      assert.notEqual(ids, previous);
       const sent = await f.send('helper');
       assert.equal(sent.captured.model, 'beta');
       for (const token of ['HELPER_BODY', 'AGENT_INCLUDE', 'SHARED_APPEND']) {

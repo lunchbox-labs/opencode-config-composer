@@ -1,52 +1,37 @@
 {
-  "groups": [
-    {
-      "name": "review",
-      "members": {
-        "agent": [
-          "plan",
-          "explore"
-        ]
-      },
+  "groups": {
+    "review": {
       "agent": {
         "permission": {
           "bash": {
             "git *": "ask",
-            "npm *": "deny"
-          }
-        }
-      }
-    },
-    {
-      "name": "programming",
-      "members": {
-        "agent": [
-          "build",
-          "general"
-        ]
+            "npm *": "deny",
+          },
+        },
       },
+    },
+    "programming": {
       "agent": {
         "permission": {
           "bash": {
             "git *": "allow",
-            "npm *": "ask"
-          }
-        }
-      }
-    }
-  ],
+            "npm *": "ask",
+          },
+        },
+      },
+    },
+  },
   "profiles": {
     "cautious": {
-      "groups": [
-        {
-          "name": "programming",
+      "groups": {
+        "programming": {
           "agent": {
             "permission": {
-              "bash": "ask"
-            }
-          }
-        }
-      ]
-    }
-  }
+              "bash": "ask",
+            },
+          },
+        },
+      },
+    },
+  },
 }

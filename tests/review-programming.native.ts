@@ -14,6 +14,10 @@ test(
         await readFile(new URL('../docs/examples/review-programming/config-composer.jsonc', import.meta.url), 'utf8'),
       ),
     );
+    const exampleNative = parseConfiguration(
+      await readFile(new URL('../docs/examples/review-programming/opencode.jsonc', import.meta.url), 'utf8'),
+    );
+    await f.write(f.paths.native, { ...f.native, agent: { ...f.native.agent, ...(exampleNative.agent as object) } });
     await f.host.start();
     await f.editor.applySelection(await f.editor.select('review'));
     const config = await f.host.api<{ agent: { plan: { temperature: number }; explore: { temperature: number } } }>(
@@ -106,7 +110,7 @@ test('all shipped examples select and reset settings on existing native agents',
       profiles: { review: { plan: { temperature: 0 }, explore: { temperature: 0 } } },
     },
   ];
-  const nativeBytes = await readFile(f.paths.native);
+
   await f.host.start();
   const nativeNames = new Set((await f.host.api<{ name: string }[]>('/agent')).map((agent) => agent.name));
   for (const example of examples) {
@@ -114,6 +118,11 @@ test('all shipped examples select and reset settings on existing native agents',
     const text = await readFile(new URL(example.path, import.meta.url), 'utf8');
     parseConfiguration(text);
     await writeFile(f.paths.shared, text);
+    const exampleNative = parseConfiguration(
+      await readFile(new URL('opencode.jsonc', new URL(example.path, import.meta.url)), 'utf8'),
+    );
+    await f.write(f.paths.native, { ...f.native, agent: { ...f.native.agent, ...(exampleNative.agent as object) } });
+    const nativeBytes = await readFile(f.paths.native);
     await f.host.stop();
     await f.host.start();
     for (const choice of [undefined, ...Object.keys(example.profiles), null]) {
@@ -135,8 +144,8 @@ test('all shipped examples select and reset settings on existing native agents',
       assert.equal(config.command.review.template, 'NATIVE_REVIEW $ARGUMENTS');
       await f.host.api('/agent');
       assert.equal(await readFile(f.paths.shared, 'utf8'), text);
+      assert.deepEqual(await readFile(f.paths.native), nativeBytes);
     }
   }
-  assert.deepEqual(await readFile(f.paths.native), nativeBytes);
   assert.equal(f.host.requests.length, 0, 'illustrative provider allocations must not send model requests');
 });

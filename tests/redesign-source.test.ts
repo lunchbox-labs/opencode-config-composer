@@ -39,6 +39,6 @@ test('implicit absence is empty but an explicit missing source is rejected; no p
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, '.opencode'));
   await writeFile(join(root, '.opencode/config-composer.jsonc'), 'invalid ignored project file');
-  assert.deepEqual((await loadSource({}, root)).document, { groups: [], profiles: {} });
+  assert.deepEqual((await loadSource({}, root)).document, { groups: {}, profiles: {} });
   await assert.rejects(loadSource({ configFile: 'missing.jsonc' }, root), /Explicit.*does not exist/);
 });

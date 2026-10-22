@@ -17,19 +17,16 @@ export interface CommandPatch extends Record<string, unknown> {
   subtask?: boolean;
 }
 export interface GroupPatch {
-  name: string;
   agent?: AgentPatch;
-  command?: CommandPatch;
 }
 export interface Group extends GroupPatch {
   description?: string;
-  members: { agent?: string[]; command?: string[] };
 }
 export interface Profile {
   description?: string;
   model?: string;
   small_model?: string;
-  groups?: GroupPatch[];
+  groups?: Record<string, GroupPatch>;
   agent?: Record<string, AgentPatch>;
   command?: Record<string, CommandPatch>;
 }
@@ -38,7 +35,7 @@ export interface CompositionDocument {
   defaultProfile?: string;
   model?: string;
   small_model?: string;
-  groups: Group[];
+  groups: Record<string, Group>;
   agent?: Record<string, AgentPatch>;
   command?: Record<string, CommandPatch>;
   profiles: Record<string, Profile>;
@@ -62,7 +59,12 @@ export interface FieldDecision {
   origin: Origin;
   blockedComposer?: { value: unknown; origin: Origin };
 }
+export interface GroupMembership {
+  groups: string[];
+  origin: Origin;
+}
 export interface ResolvedCandidate extends NativeBaseline {
+  memberships: Partial<Record<string, GroupMembership>>;
   profile: string | null;
   agent: Record<string, Record<string, unknown>>;
   command: Record<string, Record<string, unknown>>;
