@@ -90,23 +90,22 @@ export function nativeJsonPaths(context: NativeFrontmatterContext): string[] {
 /** Native command bodies are opaque; fingerprint bytes and identities without interpreting their contents. */
 export async function nativeCommandPaths(context: NativeFrontmatterContext): Promise<string[]> {
   const paths: string[] = [];
-  const visited = new Set<string>();
-  const scan = async (directory: string): Promise<void> => {
+  const scan = async (directory: string, parents = new Set<string>()): Promise<void> => {
     const identity = await realpath(directory).catch((error: unknown) => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
         return undefined;
       }
       throw error;
     });
-    if (identity === undefined || visited.has(identity)) {
+    if (identity === undefined || parents.has(identity)) {
       return;
     }
-    visited.add(identity);
+    const ancestors = new Set([...parents, identity]);
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       const info = entry.isSymbolicLink() ? await stat(path) : entry;
       if (info.isDirectory()) {
-        await scan(path);
+        await scan(path, ancestors);
       } else if (info.isFile() && entry.name.endsWith('.md')) {
         paths.push(path);
       }

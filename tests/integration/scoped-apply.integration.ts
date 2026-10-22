@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { compositionFixture } from './composition-fixture.ts';
@@ -204,5 +204,48 @@ test(
     assert.equal(disposed, 0);
     await assert.rejects(f.editor.select(null), /Restart the OpenCode server/);
     assert.equal((await f.editor.runtime()).id, current.runtime.id);
+  },
+);
+
+test(
+  'installed command alias additions, removal and retargeting stay pending until scoped reload',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'command-alias-reload');
+    const commands = join(f.host.configRoot, 'commands');
+    const shared = join(f.host.root, 'shared-commands');
+    const alternate = join(f.host.root, 'alternate-commands');
+    await Promise.all([commands, shared, alternate].map((path) => mkdir(path)));
+    const body = '---\ndescription: ALIAS_COMMAND\n---\nALIAS_BODY';
+    await writeFile(join(shared, 'run.md'), body);
+    await writeFile(join(alternate, 'run.md'), body + '_RETARGETED');
+    const one = join(commands, 'one');
+    const two = join(commands, 'two');
+    const link = (target: string, path: string) =>
+      symlink(target, path, process.platform === 'win32' ? 'junction' : 'dir');
+    await link(shared, one);
+    await f.host.start();
+    const previous = await f.editor.runtime();
+    await link(shared, two);
+    const added = await f.editor.context();
+    assert.notEqual(added.disk.commands, previous.observation.commands);
+    await assert.rejects(f.editor.storage.previewSelection(added, null), /Native command Markdown changed/);
+    await f.editor.reloadConfiguration(added);
+    const list = () => f.host.api<{ name: string; template: string }[]>('/command');
+    assert.ok((await list()).some((command) => command.name === 'one/run'));
+    assert.ok((await list()).some((command) => command.name === 'two/run'));
+    await rm(one, { recursive: true });
+    await f.editor.reloadConfiguration();
+    assert.equal(
+      (await list()).some((command) => command.name === 'one/run'),
+      false,
+    );
+    assert.ok((await list()).some((command) => command.name === 'two/run'));
+    await rm(two, { recursive: true });
+    await link(alternate, two);
+    await f.editor.reloadConfiguration();
+    assert.match((await list()).find((command) => command.name === 'two/run')!.template, /ALIAS_BODY_RETARGETED/);
+    assert.equal(await readFile(join(shared, 'run.md'), 'utf8'), body);
+    assert.equal(f.host.requests.length, 0);
   },
 );

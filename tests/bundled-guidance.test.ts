@@ -18,3 +18,16 @@ test('bundled guidance is loadable and describes the shipped one-profile contrac
     );
   }
 });
+test('bundled reload guidance distinguishes incomplete bootstrap and native normalization', async () => {
+  const explain = await readFile(new URL('../skills/config-composer-explain/SKILL.md', import.meta.url), 'utf8');
+  const schema = await readFile(
+    new URL('../skills/config-composer-explain/references/schema.md', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(explain, /Native Markdown changes require a restart/);
+  assert.match(schema, /incomplete.*attestation/i);
+  assert.match(schema, /restart.*server/i);
+  assert.match(schema, /normalize.*project JSON/i);
+  assert.match(schema, /unexpected byte change.*unconfirmed/i);
+  assert.doesNotMatch(schema, /No definition or native files are written by these commands/);
+});
