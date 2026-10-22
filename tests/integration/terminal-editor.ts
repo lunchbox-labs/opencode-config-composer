@@ -2,48 +2,28 @@ import assert from 'node:assert/strict';
 import timers from 'node:timers/promises';
 import type { compositionFixture } from './composition-fixture.ts';
 import type { nativeTerminal } from './terminal.ts';
-
 export async function reloadFromTerminal(
   fixture: Awaited<ReturnType<typeof compositionFixture>>,
   terminal: Awaited<ReturnType<typeof nativeTerminal>>,
 ) {
   await fixture.host.prepareConfigurationDependencies();
   const previous = await fixture.editor.runtime();
-  await terminal.choose(
-    'Reload now',
-    'Apply saved revision?',
-    'only this instance',
-    'cannot reset',
-    '/models',
-    '/variants',
-    'Default',
-  );
-  await terminal.press('\r', 'Composer revision applied');
-  // A previous toast can remain visible during another reload. Observe this
-  // reload's new native registration before sending any request or more keys.
-  let pendingRegistration: Error | undefined;
+  await terminal.choose('Apply now', 'Composer revision applied');
+  let pending: Error | undefined;
   for (let attempt = 0; attempt < 200; attempt++) {
     const current = await fixture.editor.runtime().catch((error: unknown) => {
-      // An unpublished sample is not yet a usable registration after disposal.
-      // Retry only this baseline diagnostic, within the existing readiness bound.
-      // Persistent missing/unreadable metadata still fails with its original cause;
-      // transport failures and changed/invalid configuration fail immediately.
-      if (
-        !(error instanceof Error) ||
-        error.message !==
-          'The server did not provide a readable editor snapshot. Exact native baseline is unavailable. Reload the matching Config Composer server plugin and reopen the editor.'
-      ) {
+      if (!(error instanceof Error) || !error.message.startsWith('Unreadable runtime marker.')) {
         throw error;
       }
-      pendingRegistration = error;
+      pending = error;
       return undefined;
     });
-    if (current !== undefined && current.applied.id !== previous.applied.id) {
+    if (current !== undefined && current.id !== previous.id) {
       await fixture.host.api('/agent');
-      assert.deepEqual(current.baseline, previous.baseline, 'scoped apply retains the native baseline');
+      assert.deepEqual(current.native, previous.native, 'scoped apply retains the native baseline');
       return;
     }
     await timers.setTimeout(50);
   }
-  throw new Error('The terminal reload did not publish a new native registration', { cause: pendingRegistration });
+  throw new Error('The terminal reload did not publish a new native registration', { cause: pending });
 }

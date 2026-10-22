@@ -1,46 +1,52 @@
 {
-  "componentGroups": {
-    "developers": {
-      "agents": ["developer", "test-writer"],
-      "configuration": {
-        "permissions": [
-          { "tool": "edit", "action": "allow" },
-          { "tool": "bash", "action": "ask" },
-          { "tool": "bash", "pattern": "git diff *", "action": "allow" },
-          { "tool": "bash", "pattern": "npm test*", "action": "allow" },
-        ],
+  "groups": [
+    {
+      "name": "review",
+      "members": {
+        "agent": [
+          "plan",
+          "explore"
+        ]
       },
+      "agent": {
+        "permission": {
+          "bash": {
+            "git *": "ask",
+            "npm *": "deny"
+          }
+        }
+      }
     },
-    "reviewers": {
-      "agents": ["reviewer"],
-      "configuration": {
-        "permissions": [
-          { "tool": "edit", "action": "deny" },
-          { "tool": "bash", "action": "ask" },
-          { "tool": "bash", "pattern": "git diff *", "action": "allow" },
-          { "tool": "bash", "pattern": "npm test*", "action": "deny" },
-        ],
+    {
+      "name": "programming",
+      "members": {
+        "agent": [
+          "build",
+          "general"
+        ]
       },
-    },
-    "orchestrators": {
-      "agents": ["orchestrator"],
-      "configuration": {
-        "permissions": [
-          { "tool": "edit", "action": "deny" },
-          { "tool": "bash", "action": "ask" },
-          { "tool": "task", "action": "allow" },
-        ],
-      },
-    },
-  },
+      "agent": {
+        "permission": {
+          "bash": {
+            "git *": "allow",
+            "npm *": "ask"
+          }
+        }
+      }
+    }
+  ],
   "profiles": {
-    "roles": {
-      "layers": [
-        { "componentGroup": "developers" },
-        { "componentGroup": "reviewers" },
-        { "componentGroup": "orchestrators" },
-      ],
-    },
-  },
-  "activeProfiles": ["roles"],
+    "cautious": {
+      "groups": [
+        {
+          "name": "programming",
+          "agent": {
+            "permission": {
+              "bash": "ask"
+            }
+          }
+        }
+      ]
+    }
+  }
 }

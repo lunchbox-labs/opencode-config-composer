@@ -1,35 +1,61 @@
 {
-  "imports": ["./profiles.jsonc"],
-  "componentGroups": {
+  "groups": [
+    {
+      "name": "review",
+      "members": {
+        "agent": [
+          "plan",
+          "explore"
+        ]
+      },
+      "agent": {
+        "permission": {
+          "bash": {
+            "git *": "ask",
+            "npm *": "deny"
+          }
+        }
+      }
+    },
+    {
+      "name": "programming",
+      "members": {
+        "agent": [
+          "build",
+          "general"
+        ]
+      },
+      "agent": {
+        "permission": {
+          "bash": {
+            "git *": "allow",
+            "npm *": "ask"
+          }
+        }
+      }
+    }
+  ],
+  "profiles": {
     "review": {
-      "agents": ["code-reviewer", "test-auditor"],
+      "groups": [
+        {
+          "name": "review",
+          "agent": {
+            "temperature": 0
+          }
+        }
+      ]
     },
     "programming": {
-      "agents": ["implementer", "test-writer"],
-    },
+      "groups": [
+        {
+          "name": "programming",
+          "agent": {
+            "temperature": 0.2
+          }
+        }
+      ]
+    }
   },
-  "configurationPresets": {
-    "claude-code": {
-      "model": "anthropic/claude-sonnet-4-5",
-      "parameters": { "maxOutputTokens": 4096 },
-    },
-    "openai-code": {
-      "model": "openai/gpt-5",
-      "parameters": { "maxOutputTokens": 4096 },
-    },
-    "review-checks": {
-      "permissions": [
-        { "tool": "bash", "pattern": "git *", "action": "ask" },
-        { "tool": "bash", "pattern": "npm *", "action": "deny" },
-      ],
-    },
-    "programming-checks": {
-      "permissions": [
-        { "tool": "bash", "pattern": "git *", "action": "allow" },
-        { "tool": "bash", "pattern": "npm *", "action": "ask" },
-      ],
-    },
-  },
-  // Configured default; a saved project selection takes precedence.
-  "activeProfiles": ["claude-coding"],
+  "defaultProfile": "review"
 }

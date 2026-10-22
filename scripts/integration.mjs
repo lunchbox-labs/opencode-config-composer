@@ -22,46 +22,13 @@ export function nativePackage(platform = process.platform, arch = process.arch) 
 
 const suites = {
   registration: ['tests/npm-registration.native.ts'],
-  core: [
-    'tests/config-composer.native.ts',
-    'tests/composition-profiles.native.ts',
-    'tests/integration/lifecycle.integration.ts',
-  ],
-  discovery: ['tests/native-command-references.native.ts', 'tests/native-component-references.native.ts'],
-  canonical: ['tests/integration/canonical.integration.ts', 'tests/integration/canonical-regressions.integration.ts'],
-  terminal: ['tests/integration/terminal.integration.ts'],
-  editor: [
-    'tests/integration/activation.integration.ts',
-    'tests/integration/authoring.integration.ts',
-    'tests/integration/selection-state.integration.ts',
-  ],
+  core: ['tests/config-composer.native.ts', 'tests/review-programming.native.ts'],
+  profile: ['tests/composition-profiles.native.ts'],
+  permissions: ['tests/integration/permission-runtime.integration.ts'],
+  inspector: ['tests/integration/running-inspector.integration.ts'],
+  apply: ['tests/integration/scoped-apply.integration.ts'],
+  terminal: ['tests/config-composer-tui.native.ts', 'tests/integration/terminal.integration.ts'],
   cleanup: ['tests/integration/cleanup.integration.mjs'],
-  'content-terminal': [
-    'tests/integration/content-terminal.integration.ts',
-    'tests/integration/move-to-position.integration.ts',
-  ],
-  content: ['tests/integration/parameters.integration.ts', 'tests/integration/permission-editor.integration.ts'],
-  permissions: [
-    'tests/canonical-permissions.native.ts',
-    'tests/integration/permission-runtime.integration.ts',
-    'tests/integration/permission-notifications.integration.ts',
-  ],
-  'runtime-terminal': ['tests/integration/runtime-terminal.integration.ts'],
-  'running-inspector': ['tests/integration/running-inspector.integration.ts'],
-  'scoped-apply': [
-    'tests/integration/scoped-apply.integration.ts',
-    'tests/integration/alias-native.integration.ts',
-    'tests/integration/body-transform.integration.ts',
-  ],
-  shortcuts: ['tests/integration/shortcuts.integration.ts'],
-  availability: [
-    'tests/integration/availability.integration.ts',
-    'tests/integration/availability-terminal.integration.ts',
-  ],
-  'profile-switching': [
-    'tests/integration/profile-recomposition.integration.ts',
-    'tests/integration/profile-session-terminal.integration.ts',
-  ],
 };
 
 export function integrationFiles(suite = 'all') {
@@ -188,7 +155,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|core|discovery|canonical|editor|terminal|cleanup|content|content-terminal|permissions|runtime-terminal|running-inspector|scoped-apply|shortcuts|availability|profile-switching]',
+    'Usage: npm run test:integration -- [--suite all|registration|core|profile|permissions|inspector|apply|terminal|cleanup]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);

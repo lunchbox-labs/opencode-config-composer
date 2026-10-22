@@ -44,7 +44,7 @@ for (const registration of ['npm', 'relative-directory'] as const) {
       const session = await harness.api<{ id: string }>('/session', { title: 'Npm registration smoke' });
       const terminal = await nativeTerminal(harness, session.id, 'npm-registration');
       await terminal.wait(['ctrl+p', 'commands']);
-      await terminal.command('/agent-models', 'Agent models: scope', 'Global defaults');
+      await terminal.command('/compose-configs', 'Compose configs', 'Profile', 'Effective');
       await terminal.stop();
       assert.equal(harness.requests.length, 0, 'npm TUI startup must not send a model request');
       assert.doesNotMatch(harness.stderr, /incompatible|Failed to install|Failed to load/);

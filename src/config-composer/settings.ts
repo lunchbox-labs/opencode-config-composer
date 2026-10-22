@@ -1,292 +1,7 @@
-export interface ModelChoice {
-  model?: string;
-  variant?: string;
-}
-export type GroupChoice = ModelChoice & { modelRef?: string };
-export type Groups = Record<string, GroupChoice>;
-export type ModelPresets = Record<string, ModelChoice>;
-export interface NativeModels {
-  default_agent?: string;
-  permission?: unknown;
-  model?: string;
-  small_model?: string;
-}
-export interface ResolutionContext {
-  modelPresets?: ModelPresets;
-  native?: NativeModels;
-}
-export interface GroupOptions extends NativeModels {
-  groups: Groups;
-  modelPresets: ModelPresets;
-}
-export type AgentSettings = ModelChoice & {
-  groups?: string[];
-  disable?: boolean;
-  options?: Record<string, unknown>;
-  [key: string]: unknown;
-};
-export type EffectiveChoice = GroupChoice & {
-  group?: string;
-  groups?: string[];
-  source: 'agent' | 'group' | 'native';
-};
-
 export class SettingsError extends Error {}
 
 export function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function settingName(value: unknown, kind: string): string {
-  if (
-    typeof value !== 'string' ||
-    !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value) ||
-    value.length > 64 ||
-    ['constructor', 'prototype'].includes(value)
-  ) {
-    throw new SettingsError(`Use a ${kind} name of up to 64 lowercase letters, digits, and hyphens.`);
-  }
-  return value;
-}
-
-export function groupName(value: unknown): string {
-  return settingName(value, 'group');
-}
-
-export function presetName(value: unknown): string {
-  return settingName(value, 'preset');
-}
-
-function variantName(value: unknown): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'string' || !/^[\w.-]{1,64}$/.test(value)) {
-    throw new SettingsError('Select a valid reasoning variant.');
-  }
-  return value;
-}
-
-export function modelChoice(value: unknown): ModelChoice {
-  if (!record(value) || Object.keys(value).some((key) => !['model', 'variant'].includes(key))) {
-    throw new SettingsError('Model choices support only model and variant.');
-  }
-  if (value.model !== undefined && (typeof value.model !== 'string' || !/^[^\s/]+\/\S+$/.test(value.model))) {
-    throw new SettingsError('Select a model in provider/model format.');
-  }
-  const variant = variantName(value.variant);
-  if (variant !== undefined && value.model === undefined) {
-    throw new SettingsError('A variant requires a model or a group model reference.');
-  }
-  return {
-    ...(value.model !== undefined ? { model: value.model } : {}),
-    ...(variant !== undefined ? { variant } : {}),
-  };
-}
-
-export function modelReference(value: unknown): string {
-  if (value === 'opencode:model' || value === 'opencode:small_model') {
-    return value;
-  }
-  if (typeof value === 'string' && value.startsWith('preset:')) {
-    return `preset:${presetName(value.slice(7))}`;
-  }
-  throw new SettingsError('Select opencode:model, opencode:small_model, or preset:<name> as the model reference.');
-}
-
-export function groupChoice(value: unknown): GroupChoice {
-  if (!record(value) || Object.keys(value).some((key) => !['model', 'modelRef', 'variant'].includes(key))) {
-    throw new SettingsError('Group defaults support only model, modelRef, and variant.');
-  }
-  if (value.modelRef === undefined) {
-    return { ...modelChoice({ model: value.model, variant: value.variant }) };
-  }
-  if (value.model !== undefined) {
-    throw new SettingsError('Choose either a model or a model reference, not both.');
-  }
-  const modelRef = modelReference(value.modelRef);
-  const variant = variantName(value.variant);
-  return { modelRef, ...(variant !== undefined ? { variant } : {}) };
-}
-
-function normalizedSettings(options: Record<string, unknown>, rawGroups: unknown): GroupOptions {
-  if (
-    (rawGroups !== undefined && !record(rawGroups)) ||
-    ['modelPresets'].some((key) => options[key] !== undefined && !record(options[key]))
-  ) {
-    throw new SettingsError('Config Composer settings must contain valid group and model preset objects.');
-  }
-  const rawPresets = record(options.modelPresets) ? options.modelPresets : {};
-  const modelPresets = Object.fromEntries(
-    Object.entries(rawPresets).map(([name, value]) => {
-      const choice = modelChoice(value);
-      if (choice.model === undefined || choice.model === '') {
-        throw new SettingsError('Each model preset requires a concrete model.');
-      }
-      return [presetName(name), choice];
-    }),
-  );
-  const groups = Object.fromEntries(
-    Object.entries(record(rawGroups) ? rawGroups : {}).map(([name, choice]) => [groupName(name), groupChoice(choice)]),
-  );
-  for (const choice of Object.values(groups)) {
-    if (choice.modelRef?.startsWith('preset:') === true && !Object.hasOwn(modelPresets, choice.modelRef.slice(7))) {
-      throw new SettingsError(
-        `Model preset ${choice.modelRef.slice(7)} does not exist. Create it or change the reference.`,
-      );
-    }
-  }
-  return {
-    groups,
-    modelPresets,
-  };
-}
-
-export function readSettings(value: unknown): GroupOptions {
-  if (
-    !record(value) ||
-    Object.keys(value).some((key) => !['$schema', 'model', 'small_model', 'agent', 'command', 'skill'].includes(key)) ||
-    (value.$schema !== undefined && typeof value.$schema !== 'string')
-  ) {
-    throw new SettingsError('Use a valid Config Composer configuration object.');
-  }
-  const agent = value.agent === undefined ? {} : value.agent;
-  if (!record(agent) || Object.keys(agent).some((key) => !['groups', 'modelPresets'].includes(key))) {
-    throw new SettingsError('Config Composer agent settings support only groups and modelPresets.');
-  }
-  for (const namespace of ['command', 'skill']) {
-    const entries: unknown = value[namespace];
-    if (entries !== undefined && (!record(entries) || Object.keys(entries).length !== 0)) {
-      throw new SettingsError(
-        `Config Composer ${namespace} settings are reserved and are not supported yet. Leave this namespace empty.`,
-      );
-    }
-  }
-  const defaults: NativeModels = {};
-  for (const field of ['model', 'small_model'] as const) {
-    const choice = modelChoice({ model: value[field] });
-    if (choice.model !== undefined) {
-      defaults[field] = choice.model;
-    }
-  }
-  return {
-    ...defaults,
-    ...normalizedSettings(
-      {
-        modelPresets: agent.modelPresets,
-      },
-      agent.groups,
-    ),
-  };
-}
-
-export function agentGroups(agent: AgentSettings, available?: Groups): string[] {
-  if (Object.hasOwn(agent, 'agent_group') || (record(agent.options) && Object.hasOwn(agent.options, 'agent_group'))) {
-    throw new SettingsError('agent_group is not supported. Use an ordered groups array.');
-  }
-  const memberships: unknown = agent.groups ?? agent.options?.groups;
-  if (memberships !== undefined) {
-    if (
-      !Array.isArray(memberships) ||
-      memberships.length > 64 ||
-      !memberships.every((name) => typeof name === 'string')
-    ) {
-      throw new SettingsError('Agent groups must be an ordered array of up to 64 group names.');
-    }
-    const groups = memberships.map(groupName);
-    if (new Set(groups).size !== groups.length) {
-      throw new SettingsError('Agent groups must not contain duplicate memberships.');
-    }
-    if (available !== undefined && groups.some((name) => !Object.hasOwn(available, name))) {
-      throw new SettingsError(
-        'An agent names an unknown Config Composer group. Create the group or correct its ordered memberships.',
-      );
-    }
-    return groups;
-  }
-  return [];
-}
-
-export function resolveGroup(choice: GroupChoice, context: ResolutionContext = {}): GroupChoice {
-  const selected = groupChoice(choice);
-  if (selected.modelRef === undefined || selected.modelRef === '') {
-    return selected;
-  }
-  let defaults: ModelChoice;
-  if (selected.modelRef.startsWith('preset:')) {
-    const name = selected.modelRef.slice(7);
-    if (!record(context.modelPresets) || !Object.hasOwn(context.modelPresets, name)) {
-      throw new SettingsError(`Model preset ${name} does not exist. Create it or change the reference.`);
-    }
-    defaults = modelChoice(context.modelPresets[name]);
-  } else {
-    const field = selected.modelRef === 'opencode:model' ? 'model' : 'small_model';
-    defaults = modelChoice({ model: context.native?.[field] });
-  }
-  if (defaults.model === undefined || defaults.model === '') {
-    throw new SettingsError(
-      `${selected.modelRef} has no configured model. Set its model or clear the group model defaults.`,
-    );
-  }
-  return { modelRef: selected.modelRef, model: defaults.model, variant: selected.variant ?? defaults.variant };
-}
-
-export function resolveChoice(agent: AgentSettings, groups: Groups, context: ResolutionContext = {}): EffectiveChoice {
-  const memberships = agentGroups(agent, groups);
-  const group =
-    memberships.findLast(
-      (name) =>
-        Object.hasOwn(groups, name) && (groups[name].model !== undefined || groups[name].modelRef !== undefined),
-    ) ?? memberships.at(-1);
-  const metadata = agent.groups !== undefined || agent.options?.groups !== undefined ? { groups: memberships } : {};
-  if (typeof agent.model === 'string' && agent.model !== '') {
-    return { group, ...metadata, model: agent.model, variant: agent.variant, source: 'agent' };
-  }
-  const defaults: GroupChoice = {};
-  for (const name of memberships) {
-    if (!Object.hasOwn(groups, name)) {
-      continue;
-    }
-    const next = resolveGroup(groups[name], context);
-    if (next.model !== undefined) {
-      defaults.model = next.model;
-      defaults.modelRef = next.modelRef;
-    }
-    if (next.variant !== undefined) {
-      defaults.variant = next.variant;
-    }
-  }
-  if (defaults.model !== undefined && defaults.model !== '') {
-    return {
-      group,
-      ...metadata,
-      model: defaults.model,
-      variant: agent.variant ?? defaults.variant,
-      source: 'group',
-      ...(defaults.modelRef !== undefined && defaults.modelRef !== '' ? { modelRef: defaults.modelRef } : {}),
-    };
-  }
-  return { group, ...metadata, variant: agent.variant, source: 'native' };
-}
-
-export function applyDefaults(
-  agents: Record<string, AgentSettings>,
-  groups: Groups,
-  context: ResolutionContext = {},
-): void {
-  // Validate every membership and reference before changing the loaded configuration.
-  const choices = Object.entries(agents)
-    .filter(([, agent]) => agent.disable !== true)
-    .map(([name, agent]) => ({ name, choice: resolveChoice(agent, groups, context) }));
-  for (const { name, choice } of choices) {
-    if (choice.source !== 'group') {
-      continue;
-    }
-    agents[name].model = choice.model;
-    if (choice.variant !== undefined) {
-      agents[name].variant = choice.variant;
-    }
-  }
 }
 
 export interface CatalogModel {
@@ -294,7 +9,6 @@ export interface CatalogModel {
   name: string;
   provider: string;
   variants: Record<string, Record<string, unknown>>;
-  parameterMetadata?: Record<string, unknown>;
 }
 
 export function catalogModels(providers: unknown): CatalogModel[] {
@@ -325,15 +39,6 @@ export function catalogModels(providers: unknown): CatalogModel[] {
             name: typeof model.name === 'string' ? model.name : id,
             provider: providerName,
             variants,
-            parameterMetadata: {
-              ...(record(model.api) && typeof model.api.npm === 'string' ? { api: { npm: model.api.npm } } : {}),
-              ...(record(model.capabilities) && typeof model.capabilities.temperature === 'boolean'
-                ? { capabilities: { temperature: model.capabilities.temperature } }
-                : {}),
-              ...(record(model.limit) && typeof model.limit.output === 'number'
-                ? { limit: { output: model.limit.output } }
-                : {}),
-            },
           },
         ];
       });
@@ -344,7 +49,10 @@ export function catalogModels(providers: unknown): CatalogModel[] {
     });
 }
 
-export function validateChoice(choice: ModelChoice, models: CatalogModel[]): CatalogModel | undefined {
+export function validateChoice(
+  choice: { model?: string; variant?: string },
+  models: CatalogModel[],
+): CatalogModel | undefined {
   if (typeof choice.model !== 'string' || choice.model === '') {
     return undefined;
   }

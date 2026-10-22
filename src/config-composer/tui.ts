@@ -1,1701 +1,234 @@
-import { diagnosticPages, diagnosticText, editorErrorText } from './tui/editor-error.ts';
-import { verifySelectionProof } from './composition/selection-state.ts';
-import { readHostComponentInventory, referenceNotices } from './tui/reference-diagnostics.ts';
-import { referenceDescription } from './composition/reference-diagnostics.ts';
-import { verifyNativeAgents } from './composition/native-baseline.ts';
-import { isDeepStrictEqual } from 'node:util';
-import { realpath } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
-import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
-import type { Config } from '@opencode-ai/sdk/v2';
+import { resolve } from 'node:path';
+import type { TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
 import { dialogNavigation } from '../tui/navigation.ts';
-import { permissionReview } from './tui/permission-review.ts';
-import {
-  type CatalogModel,
-  type GroupChoice,
-  type ModelChoice,
-  type NativeModels,
-  type ResolutionContext,
-  SettingsError,
-  catalogModels,
-  groupName,
-  presetName,
-  resolveGroup,
-  validateChoice,
-} from './settings.ts';
-import {
-  type Change,
-  type FilePlan,
-  type Snapshot,
-  type SourceSnapshot,
-  type StoredAgent,
-  affectedGroups,
-  groupNames,
-  loadEditorSnapshot,
-  loadSnapshot,
-  memberships,
-  planChange,
-  plannedChoices,
-  previewFilePlan,
-  saveFilePlan,
-} from './storage.ts';
-import { configurationDirectory } from './configuration.ts';
 import { verifySharedFilesystem } from './connection.ts';
+import { SettingsError, catalogModels } from './settings.ts';
 import {
-  type EditorNativeBaseline,
-  readRuntimeBaseline,
-  readRuntimeReferenceDiagnostics,
-  readRuntimeRevision,
-  sameNativePermissionOrder,
-} from './composition/runtime-baseline.ts';
-import { editorSettings } from './composition/editor.ts';
-import { resolveProfileRuntime } from './composition/runtime.ts';
-import { openEffective } from './tui/compose.ts';
-import { openRunning, readRunningInspection } from './tui/running.ts';
-import { openAuthoring } from './tui/authoring.ts';
-import { type DefinitionChange, planDefinition } from './composition/authoring.ts';
-import { profileShortcutRegistration } from './tui/shortcuts.ts';
-import { planScope, planSelection } from './composition/activation.ts';
-import { openParameters } from './tui/parameters.ts';
-import { type ConfigurationTarget, planParameter } from './composition/parameter-authoring.ts';
-import { parameterReview, validateParameterChoice } from './composition/parameter-review.ts';
-import { openActivation } from './tui/activation.ts';
-import { openMembershipRepair } from './tui/membership-repair.ts';
-import { planMembershipRepair } from './composition/membership-repair.ts';
-import { openPermissions } from './tui/permissions.ts';
-import { permissionStatus, planPermissions, previewPermission } from './composition/permission-authoring.ts';
-import { type ApplyFailure, applySavedComposition, applyStatus } from './composition/apply.ts';
-import { compositionRevision } from './composition/revision.ts';
-
-type Action = TuiDialogSelectOption<string> & { run: () => void | Promise<void> };
-const label = (choice: ModelChoice) =>
-  typeof choice.model === 'string' && choice.model !== ''
-    ? `${choice.model}${typeof choice.variant === 'string' && choice.variant !== '' ? ` (${choice.variant})` : ''}`
-    : 'OpenCode fallback';
-const nativeSelectionNotice =
-  'Clearing profiles can retain a previous model in native session fallback.\n' +
-  'The public plugin API cannot reset native TUI session model or variant selections or identify profile-owned picks.\n' +
-  'Use /models to select the destination model.\n' +
-  'Use /variants to select its variant; Default clears an old variant. Conversations remain saved.';
-
-// The directory argument also lets tests exercise the real file editor in an isolated installation.
-export function registerSettings(
-  api: TuiPluginApi,
-  directory = configurationDirectory(),
-  globalDirectory = join(
-    process.env.XDG_CONFIG_HOME !== undefined &&
-      process.env.XDG_CONFIG_HOME !== '' &&
-      isAbsolute(process.env.XDG_CONFIG_HOME)
-      ? process.env.XDG_CONFIG_HOME
-      : join(homedir(), '.config'),
-    'opencode',
-  ),
-): { refreshShortcuts: () => Promise<void>; refreshDiagnostics: () => Promise<void> } {
+  type EditorConnection,
+  type EditorContext,
+  loadEditorContext,
+  previewSelection,
+  saveSelectionGuarded,
+} from './storage.ts';
+import { readRuntimeRevision } from './composition/runtime-baseline.ts';
+import { applySavedComposition } from './composition/apply.ts';
+import { retainedSession, sessionNotice } from './tui/running.ts';
+import type { Selection } from './composition/document-types.ts';
+export function registerSettings(api: TuiPluginApi): void {
   const navigation = dialogNavigation(api);
-  const referenceWarnings = referenceNotices(api, directory);
   let busy = false;
-  let disposed = false;
-  let errorGeneration = 0;
-  let lastEditorError: { message: string; context: string } | undefined;
-  const errorScope = () => ({
-    client: api.client,
-    config: api.state.path.config,
-    directory: (api.state.path as { directory?: string }).directory,
-    worktree: (api.state.path as { worktree?: string }).worktree,
-    state: api.state.path.state,
-  });
-  let scope = errorScope();
-  const clearEditorError = () => {
-    lastEditorError = undefined;
-    errorGeneration++;
-    navigation.refresh();
-  };
-  const currentErrorScope = () => {
-    const next = errorScope();
-    if ((['client', 'config', 'directory', 'worktree', 'state'] as const).some((key) => next[key] !== scope[key])) {
-      scope = next;
-      clearEditorError();
-    }
-    return !disposed && !api.lifecycle.signal.aborted;
-  };
-  api.lifecycle.signal.addEventListener('abort', clearEditorError, { once: true });
-  const stopErrorEvents = [
-    api.event.on('server.instance.disposed', clearEditorError),
-    api.event.on('server.connected', clearEditorError),
-  ];
-  let nativeSaveNeedsRestart = false;
-  let lastFailure: (ApplyFailure & { directory: string }) | undefined;
-  const native = new WeakMap<Snapshot, NativeModels>();
-  const context = (snapshot: Snapshot): ResolutionContext => ({
-    modelPresets: snapshot.modelPresets,
-    native: native.get(snapshot) ?? { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model },
-  });
-  const readNative = async (): Promise<EditorNativeBaseline> => {
-    const path = api.state.path as { worktree?: string; directory?: string };
-    const root =
-      typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
-        ? path.worktree
-        : (path.directory ?? directory);
-    const client = api.client;
-    const scope = { root, directory: path.directory ?? root };
-    const pathBefore = { worktree: path.worktree, directory: path.directory };
-    const signal = AbortSignal.any([api.lifecycle.signal, AbortSignal.timeout(5000)]);
-    const response: { error?: unknown; data?: Config | null } = await client.config.get(
-      { directory: scope.directory },
-      { signal },
-    );
-    if (Boolean(response.error) || response.data === undefined || response.data === null) {
-      throw new SettingsError(
-        'Could not read effective workspace defaults. Reopen the editor after checking the server.',
-      );
-    }
-    const baseline = readRuntimeBaseline(response.data, { root, directory: path.directory ?? root }, directory);
-    const hostState = api.state.path.state;
-    if (
-      baseline.selectionEnvironment !== undefined &&
-      typeof hostState === 'string' &&
-      resolve(baseline.selectionEnvironment.stateDirectory) !== resolve(hostState)
-    ) {
-      throw new SettingsError(
-        'The server selection state directory differs from OpenCode. Restart with matching state paths.',
-      );
-    }
-    const marker = readRuntimeReferenceDiagnostics(response.data, scope, directory);
-    const componentInventory = await readHostComponentInventory(client, scope.directory, signal);
-    const after = await client.config.get({ directory: scope.directory }, { signal });
-    if (
-      api.lifecycle.signal.aborted ||
-      api.client !== client ||
-      api.state.path.worktree !== pathBefore.worktree ||
-      api.state.path.directory !== pathBefore.directory ||
-      after.error !== undefined ||
-      readRuntimeReferenceDiagnostics(after.data, scope, directory).id !== marker.id
-    ) {
-      throw new SettingsError('The running instance changed during component discovery. Reopen the editor.');
-    }
-    return { ...baseline, componentInventory };
-  };
-  const refreshNative = async (snapshot: Snapshot) => {
-    const models = await readNative();
-    if (!isDeepStrictEqual(snapshot.nativeModels.selectionEnvironment, models.selectionEnvironment)) {
-      throw new SettingsError(
-        'The server selection lifetime or state directory changed. Reopen the editor after restart.',
-      );
-    }
-    if (
-      !isDeepStrictEqual(snapshot.nativeModels.agent, models.agent) ||
-      snapshot.nativeModels.default_agent !== models.default_agent ||
-      !sameNativePermissionOrder(snapshot.nativeModels, models)
-    ) {
-      throw new SettingsError(
-        'Native agent settings changed on the server. Reopen the editor and review the new preview.',
-      );
-    }
-    if (models.agent !== undefined) {
-      verifyNativeAgents(snapshot.nativeSourceAgents, models.agent);
-      snapshot.nativeAgents = models.agent;
-    }
-    snapshot.nativeModels = models;
-    snapshot.settings = editorSettings(snapshot.sources, models);
-    snapshot.modelPresets = snapshot.settings.modelPresets;
-    snapshot.resolved = await resolveProfileRuntime(
-      snapshot.sources,
-      { ...models, agent: snapshot.nativeAgents },
-      new Map(snapshot.files.map((file) => [file.path, file.text])),
-    );
-    native.set(snapshot, { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model });
-  };
-  const run = (action: () => void | Promise<void>) => {
-    if (!currentErrorScope() || busy) {
+  const run = (action: () => Promise<void>) => {
+    if (busy || api.lifecycle.signal.aborted) {
       return;
     }
     busy = true;
-    const generation = errorGeneration;
-    return Promise.resolve()
-      .then(action)
+    void action()
       .catch((error: unknown) => {
-        if (currentErrorScope() && generation === errorGeneration) {
-          const message = editorErrorText(error);
-          lastEditorError = {
-            message,
-            context: diagnosticText(
-              `Project: ${scope.directory ?? scope.worktree ?? directory}\nConfiguration: ${directory}`,
-            ),
-          };
-          api.ui.toast({ variant: 'error', title: 'Agent settings', message, duration: 8000 });
-          navigation.refresh();
-        }
+        navigation.alert({ title: 'Config Composer', message: error instanceof Error ? error.message : String(error) });
       })
       .finally(() => {
         busy = false;
       });
   };
-  const errorPages = () => {
-    currentErrorScope();
-    const message =
-      lastEditorError === undefined
-        ? 'No editor error in this project and instance.'
-        : `${lastEditorError.context}\n\n${lastEditorError.message}`;
-    return diagnosticPages(
-      message,
-      Math.max(10, Math.min(96, api.renderer.width - 8)),
-      Math.max(1, Math.min(12, Math.floor(api.renderer.height * 0.75) - 9)),
-    );
+  const connection = (): EditorConnection => {
+    const client = api.client;
+    const directory = resolve(api.state.path.directory);
+    const worktree = api.state.path.worktree;
+    const root = resolve(worktree !== '' && worktree !== '/' ? worktree : directory);
+    const assertCurrent = () => {
+      if (
+        api.client !== client ||
+        api.lifecycle.signal.aborted ||
+        resolve(api.state.path.directory) !== directory ||
+        api.state.path.worktree !== worktree
+      ) {
+        throw new SettingsError('The server connection changed. Reopen Config Composer.');
+      }
+    };
+    return {
+      location: { root, directory },
+      assertCurrent,
+      config: async () => {
+        const response = await client.config.get({ directory });
+        if (response.error !== undefined) {
+          throw new SettingsError('Could not read server configuration.');
+        }
+        return response.data;
+      },
+      proveFilesystem: async () => {
+        await verifySharedFilesystem(api, root, root);
+        assertCurrent();
+      },
+    };
   };
-  const errorPage = (index: number) => {
-    if (!currentErrorScope()) {
-      return;
-    }
-    navigation.alert({
-      title: 'Last editor error',
-      get message() {
-        return errorPages()[index] ?? 'No editor error in this project and instance.';
+  const apply = async (context: EditorContext) => {
+    const client = api.client;
+    const directory = context.connection.location.directory;
+    await applySavedComposition(context, context.runtime, {
+      assertCurrent: () => context.connection.assertCurrent(),
+      activity: async () => {
+        const result = await client.session.status({ directory });
+        if (result.error !== undefined) {
+          throw new SettingsError('Could not check instance activity. Selection saved and pending.');
+        }
+        return result.data;
+      },
+      dispose: async () => {
+        const result = await client.instance.dispose({ directory });
+        if (result.error !== undefined || !result.data) {
+          throw new SettingsError('Instance apply failed. Selection saved and pending.');
+        }
+      },
+      refresh: async () => {
+        const config = await context.connection.config();
+        const views = await Promise.all([
+          client.config.providers({ directory }),
+          client.app.agents({ directory }),
+          client.command.list({ directory }),
+        ]);
+        if (views.some((view) => view.error !== undefined)) {
+          throw new SettingsError('Could not refresh server views. Selection saved and pending.');
+        }
+        return readRuntimeRevision(config, context.connection.location);
       },
     });
-    api.ui.dialog.setSize('xlarge');
+    navigation.alert({ title: 'Composer revision applied', message: sessionNotice });
   };
-  const editorErrorAction: Action = {
-    title: 'Last editor error',
-    value: 'last-editor-error',
-    description: 'Inspect the latest error in this project and instance',
-    run: () => {
-      if (errorPages().length === 1) {
-        errorPage(0);
-        return;
+  const offerApply = (context: EditorContext) =>
+    navigation.menu({
+      title: 'Selection saved',
+      options: [
+        { title: 'Apply now', value: 'apply', description: 'Apply to this idle instance; conversations remain saved' },
+        { title: 'Apply on next restart', value: 'later', description: 'Keep the saved selection pending' },
+      ],
+      onSelect: (option) => {
+        if (option.value === 'apply') {
+          run(() => apply(context));
+        } else {
+          navigation.close();
+        }
+      },
+    });
+  const choose = async (context: EditorContext, choice: Selection) => {
+    const preview = await previewSelection(context, choice, async () => {
+      const response = await api.client.config.providers({ directory: context.connection.location.directory });
+      if (response.error !== undefined) {
+        throw new SettingsError('Provider catalog unavailable. Review again.');
       }
-      navigation.menu({
-        title: 'Last editor error',
-        get options() {
-          return errorPages().map((page, index, pages) => ({
-            title: `Details ${index + 1} of ${pages.length}`,
-            value: String(index),
-            description: page.split('\n')[0],
-          }));
-        },
-        onSelect: (option) => errorPage(Number(option.value)),
-      });
-    },
+      return catalogModels(response.data.providers);
+    });
+    const effects = Object.entries(preview.candidate.decisions)
+      .map(
+        ([path, decision]) =>
+          `${path}: ${JSON.stringify(decision.value)} ← ${decision.origin.source ?? decision.origin.kind}${decision.blockedComposer === undefined ? '' : ` (blocked Composer: ${JSON.stringify(decision.blockedComposer.value)})`}`,
+      )
+      .join('\n');
+    navigation.confirm({
+      title: 'Save profile selection?',
+      message: `Preview: ${preview.candidate.profile ?? 'none'}\nAll root groups remain active. Shared definitions: ${context.source.path}\nSelection for this worktree: ${context.runtime.location.root}\n\n${effects}`,
+      onConfirm: () => run(async () => offerApply(await saveSelectionGuarded(context, preview))),
+    });
   };
-  const menu = (title: string, options: Action[] | (() => Action[]), current?: string, root = false) => {
-    if (api.lifecycle.signal.aborted) {
-      return;
-    }
-    const choices = () => {
-      const items = typeof options === 'function' ? options() : options;
-      currentErrorScope();
-      return lastEditorError !== undefined && !items.includes(editorErrorAction)
-        ? [...items, { ...editorErrorAction, value: '\u0000last-editor-error' }]
-        : items;
-    };
+  const profiles = (context: EditorContext) =>
+    navigation.menu({
+      title: 'Profile',
+      options: [
+        {
+          title: 'Follow default',
+          value: 'default',
+          description: context.source.document.defaultProfile ?? 'No default profile',
+        },
+        { title: 'None', value: 'none', description: 'Apply root groups and root named settings' },
+        ...Object.entries(context.source.document.profiles).map(([name, profile]) => ({
+          title: name,
+          value: `profile:${name}`,
+          description: profile.description ?? 'Select this profile',
+        })),
+      ],
+      onSelect: (option) =>
+        run(() =>
+          choose(
+            context,
+            option.value === 'default' ? undefined : option.value === 'none' ? null : option.value.slice(8),
+          ),
+        ),
+    });
+  const open = async () => {
+    const context = await loadEditorContext(connection());
     navigation.menu(
       {
-        title,
-        placeholder: 'Search…',
-        current,
-        get options() {
-          return choices();
-        },
-        // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
-        onSelect: (option) =>
-          run(() =>
-            choices()
-              .find((item) => item.value === option.value)
-              ?.run(),
-          ),
-      },
-      root,
-    );
-  };
-  const confirm = (title: string, message: string, action: () => Promise<void>) => {
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
-    navigation.confirm({ title, message, onConfirm: () => run(action) });
-    api.ui.dialog.setSize('xlarge');
-  };
-  const connection = async (expectedRoot?: string) => {
-    const serverPath = api.state.path.config;
-    const root = await realpath(directory);
-    if (expectedRoot !== undefined && root !== expectedRoot) {
-      throw new SettingsError('The configuration directory changed. Reopen the settings editor.');
-    }
-    const serverDirectory = await realpath(serverPath).catch(() => undefined);
-    if (root !== serverDirectory) {
-      // V1 reports the global path even when it loads OPENCODE_CONFIG_DIR.
-      const custom = process.env.OPENCODE_CONFIG_DIR;
-      const customDirectory =
-        custom !== undefined && custom !== '' ? await realpath(custom).catch(() => undefined) : undefined;
-      const localGlobal = await realpath(globalDirectory).catch(() => undefined);
-      if (
-        serverDirectory === undefined ||
-        serverDirectory === '' ||
-        serverDirectory !== localGlobal ||
-        root !== customDirectory
-      ) {
-        throw new SettingsError(
-          "Install the editor in this server's global configuration directory or its local " +
-            'OPENCODE_CONFIG_DIR. Remote files are not supported.',
-        );
-      }
-    }
-    const client = await verifySharedFilesystem(api, root, root === serverDirectory ? serverPath : root);
-    const assertCurrent = () => {
-      if (api.client !== client || api.state.path.config !== serverPath || api.lifecycle.signal.aborted) {
-        throw new SettingsError('The server connection changed. Reopen the settings editor.');
-      }
-    };
-    assertCurrent();
-    return { root, client, assertCurrent };
-  };
-  const currentProject = (root: string) => {
-    const path = api.state.path as { worktree?: string; directory?: string };
-    return resolve(
-      typeof path.worktree === 'string' && path.worktree !== '' && path.worktree !== '/'
-        ? path.worktree
-        : (path.directory ?? root),
-    );
-  };
-  const authorizePlan = async (plan: FilePlan<SourceSnapshot>) => {
-    const { assertCurrent, client } = await connection(plan.snapshot.root);
-    const projectWrite =
-      plan.selection !== undefined ||
-      plan.edits.some((edit) => edit.file.writeRoot !== undefined && edit.file.writeRoot !== plan.snapshot.root);
-    const assertProject = () => {
-      assertCurrent();
-      if (projectWrite && currentProject(plan.snapshot.root) !== plan.snapshot.sourceContext.root) {
-        throw new SettingsError('The current project changed. Reopen the settings editor.');
-      }
-    };
-    assertProject();
-    if (projectWrite) {
-      const verified = await verifySharedFilesystem(api, plan.snapshot.scopeRoot, plan.snapshot.sourceContext.root);
-      if (verified !== client) {
-        throw new SettingsError('The server connection changed. Reopen the editor.');
-      }
-    }
-    if (plan.snapshot.nativeModels.selectionEnvironment !== undefined) {
-      await verifySelectionProof(plan.snapshot.nativeModels.selectionEnvironment);
-    }
-    assertProject();
-    return assertProject;
-  };
-  const load = async () => {
-    const { root } = await connection();
-    const path = api.state.path as { worktree?: string; directory?: string };
-    const project = currentProject(root);
-    const baseline = await readNative();
-    const snapshot = await loadSnapshot(
-      root,
-      project,
-      baseline,
-      path.directory ?? project,
-      typeof path.worktree === 'string' && path.worktree !== '' ? path.worktree : project,
-    );
-    native.set(snapshot, { model: snapshot.resolved.model, small_model: snapshot.resolved.small_model });
-    return snapshot;
-  };
-  const models = async () => {
-    const response: { error?: unknown; data?: { providers: unknown } | null } = await api.client.config.providers();
-    const failed = Boolean(response.error);
-    if (failed) {
-      throw new SettingsError('Could not load provider models. Check your connection and try again.');
-    }
-    const result = catalogModels(response.data?.providers);
-    if (result.length === 0) {
-      throw new SettingsError('No provider models are available. Connect a provider with /connect first.');
-    }
-    return result;
-  };
-  const resolvedLabel = (snapshot: Snapshot, choice: GroupChoice) => {
-    let suffix = '';
-    if (choice.modelRef?.startsWith('opencode:') === true) {
-      const field = choice.modelRef === 'opencode:model' ? 'model' : 'small_model';
-      if (context(snapshot).native?.[field] !== snapshot.config[field]) {
-        suffix = ' · running workspace differs from saved global';
-      }
-    }
-    return `${choice.modelRef !== undefined && choice.modelRef !== '' ? `${choice.modelRef} → ` : ''}${label(choice)}${suffix}`;
-  };
-  const describeGroup = (snapshot: Snapshot, choice: GroupChoice) => {
-    if ((choice.model ?? '') === '' && (choice.modelRef ?? '') === '') {
-      return `No group model default${(choice.variant ?? '') !== '' ? ` · variant ${choice.variant}` : ''}`;
-    }
-    try {
-      return resolvedLabel(snapshot, resolveGroup(choice, context(snapshot)));
-    } catch (error) {
-      if (!(error instanceof SettingsError)) {
-        throw error;
-      }
-      return `${choice.modelRef ?? 'Group'} → Invalid: ${error.message}`;
-    }
-  };
-  const describeAgent = (snapshot: Snapshot, agent: StoredAgent) => {
-    try {
-      const choice = snapshot.resolved.choices[agent.name] ?? {
-        model: agent.settings.model,
-        variant: agent.settings.variant,
-      };
-      return `${resolvedLabel(snapshot, choice)} · ${snapshot.resolved.selectedAgents.includes(agent.name) ? 'Active profile settings' : 'Native fallback'}`;
-    } catch (error) {
-      if (!(error instanceof SettingsError)) {
-        throw error;
-      }
-      return `Invalid: ${error.message}`;
-    }
-  };
-  const selectModel = async (
-    title: string,
-    current: ModelChoice,
-    selected: (choice: ModelChoice) => void | Promise<void>,
-    variants = true,
-    extra: Action[] = [],
-    inheritedVariant?: ModelChoice,
-  ) => {
-    const isCurrent = navigation.checkpoint();
-    const available = await models();
-    if (!isCurrent()) {
-      return;
-    }
-    menu(
-      title,
-      [
-        ...extra,
-        ...available.map((model: CatalogModel) => ({
-          title: model.name,
-          value: model.id,
-          description: model.id,
-          category: model.provider,
-          run: () => {
-            const names = Object.keys(model.variants);
-            if (!variants || names.length === 0) {
-              return selected({ model: model.id });
-            }
-            menu(
-              `${model.name}: variant`,
-              [
-                {
-                  title:
-                    inheritedVariant?.model === model.id && inheritedVariant.variant !== undefined
-                      ? `Inherit authored variant (${inheritedVariant.variant})`
-                      : 'Model default',
-                  value: '',
-                  run: () => selected({ model: model.id }),
-                },
-                ...names.map((variant) => ({
-                  title: variant,
-                  value: variant,
-                  run: () => selected({ model: model.id, variant }),
-                })),
-              ],
-              current.model === model.id ? (current.variant ?? '') : '',
-            );
-          },
-        })),
-      ],
-      current.model,
-    );
-  };
-  const prepareApply = async () => {
-    const snapshot = await load();
-    const response = await api.client.config.get();
-    if (Boolean(response.error) || response.data === undefined) {
-      throw new SettingsError('Could not read the applied revision. Saved changes are retained.');
-    }
-    const location = { root: snapshot.sourceContext.root, directory: snapshot.nativeDirectory };
-    const runtime = readRuntimeRevision(response.data, location, snapshot.root);
-    const { client, assertCurrent } = await connection(snapshot.root);
-    const assertInstance = () => {
-      assertCurrent();
-      const path = api.state.path as { directory?: string };
-      if (currentProject(snapshot.root) !== location.root || (path.directory ?? location.root) !== location.directory) {
-        throw new SettingsError('The current instance changed. Reopen the apply view. Saved changes are retained.');
-      }
-    };
-    assertInstance();
-    return { snapshot, location, runtime, client, assertInstance };
-  };
-  const reload = async (prepared: Awaited<ReturnType<typeof prepareApply>>) => {
-    const { snapshot, location, runtime, client, assertInstance } = prepared;
-    try {
-      assertInstance();
-      if (nativeSaveNeedsRestart) {
-        throw new SettingsError('Native settings were saved. Restart OpenCode to apply them.');
-      }
-      const verified = await connection(snapshot.root);
-      assertInstance();
-      if (verified.client !== client) {
-        throw new SettingsError('The server connection changed. Reopen the apply view.');
-      }
-      const revision = await applySavedComposition(snapshot, runtime, {
-        assertCurrent: assertInstance,
-        activity: async () => {
-          const result = await client.session.status({ directory: location.directory });
-          if (Boolean(result.error) || result.data === undefined) {
-            throw new SettingsError('Could not check running agents. Settings are saved; retry or restart when idle.');
-          }
-          return result.data;
-        },
-        dispose: async () => {
-          const result = await client.instance.dispose({ directory: location.directory });
-          if (Boolean(result.error) || result.data !== true) {
-            throw new SettingsError('Instance apply failed. Settings are saved; retry or restart OpenCode.');
-          }
-        },
-        refresh: async () => {
-          const config = await client.config.get({ directory: location.directory });
-          const [providers, agents] = await Promise.all([
-            client.config.providers({ directory: location.directory }),
-            client.app.agents({ directory: location.directory }),
-          ]);
-          if (
-            Boolean(config.error) ||
-            config.data === undefined ||
-            Boolean(providers.error) ||
-            providers.data === undefined ||
-            Boolean(agents.error) ||
-            agents.data === undefined
-          ) {
-            throw new SettingsError(
-              'Could not refresh configuration, providers and agents. Saved changes are retained; retry apply.',
-            );
-          }
-          return readRuntimeRevision(config.data, location, snapshot.root);
-        },
-      });
-      assertInstance();
-      // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Apply runs after all handlers initialize.
-      await shortcuts.refresh();
-      await referenceWarnings.refresh(true);
-      assertInstance();
-      lastFailure = undefined;
-      navigation.close();
-      api.ui.toast({
-        variant: 'warning',
-        title: 'Composer revision applied',
-        message: `Applied ${revision.sources.slice(0, 12)} to ${location.directory}. Uses the running native baseline; native JSON edits require restart. ${nativeSelectionNotice}`,
-        duration: 8000,
-      });
-    } catch (error) {
-      lastFailure = {
-        phase: 'apply-failed',
-        directory: location.directory,
-        message: error instanceof Error ? error.message : 'Apply failed',
-      };
-      throw error;
-    }
-  };
-  const offerReload = async (root = false) => {
-    if (nativeSaveNeedsRestart) {
-      menu(
-        'Native settings saved',
-        [
+        title: 'Compose configs',
+        options: [
           {
-            title: 'Restart OpenCode to apply native settings',
-            value: 'later',
-            description: 'Instance apply uses the running native baseline. Conversations remain saved.',
-            run: navigation.close,
+            title: 'Profile',
+            value: 'profile',
+            description: `${context.selection.choice === undefined ? 'Follow default' : (context.selection.choice ?? 'None')} · current worktree`,
           },
+          { title: 'Groups', value: 'groups', description: 'Always active · shared definition file' },
+          {
+            title: 'Effective',
+            value: 'effective',
+            description:
+              context.runtime.status === 'error'
+                ? context.runtime.diagnostic
+                : 'Applied fields, origins and blocked Composer settings',
+          },
+          { title: 'Apply saved selection', value: 'apply', description: 'Retry a saved pending selection' },
         ],
-        undefined,
-        root,
-      );
-      return;
-    }
-    const current = navigation.checkpoint();
-    const prepared = await prepareApply();
-    const { snapshot, location, runtime } = prepared;
-    if (!current()) {
-      return;
-    }
-    const saved = compositionRevision(snapshot.sources, snapshot.resolved, snapshot.files);
-    const status = () =>
-      nativeSaveNeedsRestart
-        ? 'Native settings saved; restart OpenCode to apply them'
-        : applyStatus(saved, runtime, lastFailure?.directory === location.directory ? lastFailure : undefined);
-    menu(
-      'Settings saved',
-      () => [
-        {
-          title: status(),
-          value: '+status',
-          description: `Instance: ${location.directory}; worktree: ${location.root}`,
-          run: () =>
+        onSelect: (option) => {
+          if (option.value === 'profile') {
+            profiles(context);
+          } else if (option.value === 'groups') {
             navigation.alert({
-              title: 'Composition revision',
-              message: `${status()}\nInstance: ${location.directory}\nWorktree: ${location.root}\nSaved: ${saved.sources}\nApplied: ${runtime.revision?.sources ?? 'none'}\nComposer revisions use the running native baseline. Native JSON edits require restart.`,
-            }),
-        },
-        {
-          title: 'Reload now…',
-          value: 'reload',
-          description: 'Apply saved composition to this instance; retain other instances and conversations',
-          run: () =>
-            confirm(
-              'Apply saved revision?',
-              `This reloads only this instance: ${location.directory}\nWorktree: ${location.root}\n\n` +
-                'Wait for its agents to finish. Saved changes remain pending if applying fails. Other opened instances retain their current revision.\n\n' +
-                `This applies Composer inputs against the running native baseline. Native JSON edits require restart. ${nativeSelectionNotice}`,
-              () => reload(prepared),
-            ),
-        },
-        { title: 'Apply on next restart', value: 'later', run: navigation.close },
-        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Mutually linked menu callbacks run after all handlers initialize.
-        { title: 'Agent groups', value: 'groups', run: () => groupsMenu(false) },
-        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- Mutually linked menu callbacks run after all handlers initialize.
-        { title: 'Agent models', value: 'models', run: () => modelsMenu(false) },
-      ],
-      undefined,
-      root,
-    );
-  };
-  const save = async (plan: FilePlan<SourceSnapshot>, action: () => Promise<void>) => {
-    try {
-      await action();
-      nativeSaveNeedsRestart ||= plan.edits.some(
-        (edit) =>
-          edit.file.path === plan.snapshot.configFile.path ||
-          plan.snapshot.nativeLayers.some((layer) => layer.file.path === edit.file.path),
-      );
-      lastFailure = undefined;
-    } catch (error) {
-      lastFailure = {
-        phase: 'save-failed',
-        directory: plan.snapshot.nativeDirectory,
-        message: error instanceof Error ? error.message : 'Save failed',
-      };
-      throw error;
-    }
-  };
-  const propose = async (snapshot: Snapshot, change: Change) => {
-    const isCurrent = navigation.checkpoint();
-    const plan = planChange(snapshot, change);
-    const preview = await plannedChoices(plan, context(snapshot).native);
-    if (!isCurrent()) {
-      return;
-    }
-    const affected = affectedGroups(snapshot, change);
-    const members = snapshot.agents.filter((agent) =>
-      memberships(snapshot, agent).some((group) => affected.includes(group)),
-    );
-    const pinned = members.filter(
-      (agent) => typeof agent.settings.model === 'string' && agent.settings.model !== '',
-    ).length;
-    const impact =
-      affected.length > 0
-        ? `\n${affected.length} linked or selected groups; ` +
-          `${members.length - pinned} agents use inherited settings; ${pinned} explicit model overrides are retained.`
-        : '';
-    const choiceLabel =
-      change.kind === 'group'
-        ? Object.keys(change.choice).length === 0
-          ? 'Clear this group’s model, reference, and variant defaults. Remaining layers and native defaults determine the effective model.'
-          : describeGroup(snapshot, change.choice)
-        : change.kind === 'global'
-          ? label({ model: change.model })
-          : change.kind === 'all' || change.kind === 'preset' || change.kind === 'override'
-            ? label(change.choice)
-            : '';
-    const scope =
-      change.kind === 'global' || change.kind === 'all'
-        ? '\nOther native fallback consumers can also change. Workspace overrides and session selections still apply.'
-        : '';
-    const modelsPreview = [
-      ...new Set(
-        preview.map(
-          (choice) =>
-            `${label(choice)}${choice.parameters === undefined ? '' : ` · parameters ${JSON.stringify(choice.parameters).slice(0, 1200)}`}`,
-        ),
-      ),
-    ].join(', ');
-    confirm(
-      'Save agent settings?',
-      `${plan.description}\n${choiceLabel}${impact}${scope}\nModels to validate: ${modelsPreview === '' ? 'Native fallback' : modelsPreview}\n\n` +
-        `${plan.edits.length} file(s) will change. Reload settings after saving to apply them.`,
-      async () => {
-        const validatePreview = async () => {
-          if (native.has(snapshot)) {
-            await refreshNative(snapshot);
-          }
-          const choices = await plannedChoices(plan, context(snapshot).native);
-          if (JSON.stringify(choices) !== JSON.stringify(preview)) {
-            throw new SettingsError(
-              'Effective model defaults changed while the dialog was open. Reopen it and review the new models.',
-            );
-          }
-          return choices;
-        };
-        const choices = await validatePreview();
-        if (choices.some((choice) => typeof choice.model === 'string' && choice.model !== '')) {
-          const available = await models();
-          for (const choice of choices) {
-            validateParameterChoice(choice, available);
-          }
-        }
-        if (api.lifecycle.signal.aborted) {
-          return;
-        }
-        await save(plan, () =>
-          saveFilePlan(
-            plan,
-            async () => {
-              await validatePreview();
-            },
-            () => authorizePlan(plan),
-          ),
-        );
-        await offerReload(true);
-      },
-    );
-  };
-  const selectReference = async (snapshot: Snapshot, name: string, modelRef: string) => {
-    const isCurrent = navigation.checkpoint();
-    if (modelRef.startsWith('opencode:') || native.has(snapshot)) {
-      await refreshNative(snapshot);
-    }
-    const resolved = resolveGroup({ modelRef }, context(snapshot));
-    const model = validateChoice({ model: resolved.model }, await models());
-    if (!isCurrent()) {
-      return;
-    }
-    if (model === undefined) {
-      throw new SettingsError('Select a concrete model for the group reference.');
-    }
-    const selected = (variant?: string) =>
-      propose(snapshot, {
-        kind: 'group',
-        name,
-        choice: { modelRef, ...(variant !== undefined && variant !== '' ? { variant } : {}) },
-      });
-    const variants = Object.keys(model.variants);
-    if (variants.length === 0) {
-      await selected();
-      return;
-    }
-    menu(
-      `${modelRef} → ${model.id}: variant`,
-      [
-        {
-          title: modelRef.startsWith('preset:')
-            ? `Inherit preset variant (${resolved.variant ?? 'model default'})`
-            : 'Model default',
-          value: '',
-          run: () => selected(),
-        },
-        ...variants.map((variant) => ({ title: variant, value: variant, run: () => selected(variant) })),
-      ],
-      Object.hasOwn(snapshot.groups, name) && snapshot.groups[name].modelRef === modelRef
-        ? (snapshot.groups[name].variant ?? '')
-        : '',
-    );
-  };
-  const selectGroup = (snapshot: Snapshot, name: string) =>
-    selectModel(
-      `Group: ${name} · model source`,
-      snapshot.groups[name] ?? {},
-      (choice) => propose(snapshot, { kind: 'group', name, choice }),
-      true,
-      [
-        {
-          title: 'Clear group model defaults',
-          value: '+fallback',
-          category: 'Model source',
-          description: "Clear this group's model, reference, and variant defaults",
-          run: () => propose(snapshot, { kind: 'group', name, choice: {} }),
-        },
-        {
-          title: 'Main default',
-          value: 'opencode:model',
-          category: 'Model source',
-          description: 'Follow the effective workspace model setting',
-          run: () => selectReference(snapshot, name, 'opencode:model'),
-        },
-        {
-          title: 'Small default',
-          value: 'opencode:small_model',
-          category: 'Model source',
-          description: 'Follow the effective workspace small_model setting',
-          run: () => selectReference(snapshot, name, 'opencode:small_model'),
-        },
-        ...Object.keys(snapshot.modelPresets)
-          .sort()
-          .map((preset) => ({
-            title: preset,
-            value: `preset:${preset}`,
-            category: 'Model presets',
-            description: label(snapshot.modelPresets[preset]),
-            run: () => selectReference(snapshot, name, `preset:${preset}`),
-          })),
-      ],
-    );
-  const newGroup = (snapshot: Snapshot, agent?: StoredAgent) => {
-    navigation.prompt({
-      title: 'New agent group',
-      placeholder: 'e.g. data-engineering',
-      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
-      onConfirm: (value) =>
-        run(() => {
-          const name = groupName(value.trim());
-          if (groupNames(snapshot).includes(name)) {
-            throw new SettingsError('That group already exists. Choose it from the group list.');
-          }
-          return propose(
-            snapshot,
-            agent !== undefined
-              ? { kind: 'membership', agent: agent.name, groups: [...memberships(snapshot, agent), name] }
-              : { kind: 'group', name, choice: {} },
-          );
-        }),
-    });
-  };
-  const presetMenu = (snapshot: Snapshot, name: string) =>
-    menu(`Model preset: ${name}`, [
-      {
-        title: 'Set model and variant',
-        value: 'model',
-        description: label(snapshot.modelPresets[name]),
-        run: () =>
-          selectModel(name, snapshot.modelPresets[name], (choice) =>
-            propose(snapshot, { kind: 'preset', name, choice }),
-          ),
-      },
-      {
-        title: 'Delete unused preset…',
-        value: 'delete',
-        description: 'Reassign dependent groups before deleting',
-        run: () => propose(snapshot, { kind: 'deletePreset', name }),
-      },
-    ]);
-  const presetsMenu = (snapshot: Snapshot) =>
-    menu('Model presets', [
-      ...Object.keys(snapshot.modelPresets)
-        .sort()
-        .map((name) => ({
-          title: name,
-          value: name,
-          description:
-            `${label(snapshot.modelPresets[name])} · ` +
-            `${Object.values(snapshot.groups).filter((choice) => choice.modelRef === `preset:${name}`).length} linked groups`,
-          run: () => presetMenu(snapshot, name),
-        })),
-      {
-        title: 'Create a model preset…',
-        value: '+',
-        run: () => {
-          navigation.prompt({
-            title: 'New model preset',
-            placeholder: 'e.g. balanced',
-            // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run handles rejection; return its Promise so callers can await completion.
-            onConfirm: (value) =>
-              run(async () => {
-                const name = presetName(value.trim());
-                if (Object.hasOwn(snapshot.modelPresets, name)) {
-                  throw new SettingsError('That model preset already exists.');
-                }
-                await selectModel(name, {}, (choice) => propose(snapshot, { kind: 'preset', name, choice }));
-              }),
-          });
-        },
-      },
-    ]);
-  const membershipMenu = (snapshot: Snapshot, agent: StoredAgent) => {
-    const pending = [...memberships(snapshot, agent)];
-    const options = () => {
-      return [
-        {
-          title: 'Save groups…',
-          value: '+save',
-          description: 'Membership uses active profile layer order; save to preview the effective models.',
-          run: () => propose(snapshot, { kind: 'membership', agent: agent.name, groups: [...pending] }),
-        },
-        ...pending.map((name, index) => ({
-          title: `${index + 1}. ${name}`,
-          value: name,
-          description: 'Active profile layer order controls precedence',
-          run: () =>
-            menu(`Membership: ${name}`, [
-              {
-                title: 'Remove group',
-                value: 'remove',
-                run: () => {
-                  pending.splice(index, 1);
-                  navigation.back();
-                },
-              },
-              ...(index > 0
-                ? [
-                    {
-                      title: 'Move earlier',
-                      value: 'earlier',
-                      run: () => {
-                        pending.splice(index, 1);
-                        pending.splice(index - 1, 0, name);
-                        navigation.back();
-                      },
-                    },
-                  ]
-                : []),
-              ...(index < pending.length - 1
-                ? [
-                    {
-                      title: 'Move later',
-                      value: 'later',
-                      run: () => {
-                        pending.splice(index, 1);
-                        pending.splice(index + 1, 0, name);
-                        navigation.back();
-                      },
-                    },
-                  ]
-                : []),
-            ]),
-        })),
-        {
-          title: 'Add group',
-          value: '+add',
-          run: () =>
-            menu(
-              'Choose a group',
-              groupNames(snapshot)
-                .filter((name) => !pending.includes(name))
-                .map((name) => ({
-                  title: name,
-                  value: name,
-                  run: () => {
-                    pending.push(name);
-                    navigation.back();
+              title: 'Groups · always active',
+              message: `Shared across projects: ${context.source.path}\n\n${context.source.document.groups.length === 0 ? 'No groups configured.' : context.source.document.groups.map((group) => `${group.name}: ${JSON.stringify(group.members)}${group.description !== undefined && group.description !== '' ? `\n${group.description}` : ''}`).join('\n')}\n\nEdit definitions directly in the JSONC file.`,
+            });
+          } else if (option.value === 'effective') {
+            run(() => {
+              const decisions = context.runtime.candidate?.decisions ?? {};
+              navigation.menu({
+                title: 'Effective configuration',
+                options: [
+                  {
+                    title: 'Runtime status',
+                    value: 'status',
+                    description: context.runtime.diagnostic ?? 'Composer applied',
                   },
-                })),
-            ),
-        },
-        {
-          title: 'Clear all groups',
-          value: '+clear',
-          run: () => {
-            pending.splice(0);
-            navigation.refresh();
-          },
-        },
-      ];
-    };
-    menu(`${agent.name}: groups`, options);
-  };
-  const agentMenu = (snapshot: Snapshot, agent: StoredAgent) => {
-    const groups = memberships(snapshot, agent);
-    menu(`${agent.name} · ${groups.length > 0 ? groups.join(' → ') : 'Ungrouped'}`, [
-      {
-        title: 'Manage groups',
-        value: 'group',
-        description: 'Keep any explicit model override',
-        run: () => membershipMenu(snapshot, agent),
-      },
-      {
-        title: 'Set model override',
-        value: 'override',
-        description: describeAgent(snapshot, agent),
-        run: () =>
-          selectModel(
-            agent.name,
-            snapshot.resolved.choices[agent.name] ?? agent.settings,
-            (choice) => propose(snapshot, { kind: 'override', agent: agent.name, choice }),
-            true,
-            [],
-            agent.component === true ? agent.settings : undefined,
-          ),
-      },
-      {
-        title: agent.component === true ? 'Use component source defaults' : 'Use group defaults',
-        value: 'inherit',
-        description:
-          agent.component === true
-            ? "Clear this component's JSONC model and variant overrides"
-            : "Clear this agent's model and variant overrides",
-        run: () => propose(snapshot, { kind: 'override', agent: agent.name, choice: {} }),
-      },
-    ]);
-  };
-  const members = (snapshot: Snapshot, group?: string) =>
-    snapshot.agents.filter((agent) =>
-      group === undefined ? memberships(snapshot, agent).length === 0 : memberships(snapshot, agent).includes(group),
-    );
-  const agentOptions = (snapshot: Snapshot, agents: StoredAgent[]): Action[] =>
-    agents.map((agent) => ({
-      title: agent.name,
-      value: agent.name,
-      description: describeAgent(snapshot, agent),
-      run: () => agentMenu(snapshot, agent),
-    }));
-  const groupMenu = (snapshot: Snapshot, name: string) =>
-    menu(`Group: ${name}`, [
-      {
-        title: 'Set default model or source',
-        value: '+model',
-        description: describeGroup(snapshot, snapshot.groups[name] ?? {}),
-        run: () => selectGroup(snapshot, name),
-      },
-      {
-        title: 'Clear group model defaults',
-        value: '+inherit',
-        description: "Clear this group's model, reference, and variant defaults",
-        run: () => propose(snapshot, { kind: 'group', name, choice: {} }),
-      },
-      {
-        title: 'Add an agent to group',
-        value: '+move',
-        run: () =>
-          menu(
-            'Choose an agent',
-            snapshot.agents
-              .filter((agent) => !memberships(snapshot, agent).includes(name))
-              .map((agent) => ({
-                title: agent.name,
-                value: agent.name,
-                description:
-                  memberships(snapshot, agent).length > 0 ? memberships(snapshot, agent).join(' → ') : 'Ungrouped',
-                run: () =>
-                  propose(snapshot, {
-                    kind: 'membership',
-                    agent: agent.name,
-                    groups: [...memberships(snapshot, agent), name],
-                  }),
-              })),
-          ),
-      },
-      ...agentOptions(snapshot, members(snapshot, name)).map((option) => ({ ...option, category: 'Members' })),
-    ]);
-  const groupsMenu = async (root = true) => {
-    const isCurrent = navigation.checkpoint();
-    const snapshot = await load();
-    if (!isCurrent()) {
-      return;
-    }
-    menu(
-      'Agent groups',
-      [
-        ...groupNames(snapshot).map((name) => ({
-          title: name,
-          value: name,
-          description: `${members(snapshot, name).length} agents · ${describeGroup(snapshot, snapshot.groups[name] ?? {})}`,
-          run: () => groupMenu(snapshot, name),
-        })),
-        {
-          title: 'Ungrouped',
-          value: '',
-          run: () => menu('Ungrouped agents', agentOptions(snapshot, members(snapshot))),
-        },
-        { title: 'Create a new group…', value: '+', run: () => newGroup(snapshot) },
-        { title: 'All agents', value: '+agents', run: () => menu('Agents', agentOptions(snapshot, snapshot.agents)) },
-      ],
-      undefined,
-      root,
-    );
-  };
-  const modelsMenu = async (root = true) => {
-    const isCurrent = navigation.checkpoint();
-    const snapshot = await load();
-    if (!isCurrent()) {
-      return;
-    }
-    menu(
-      'Agent models: scope',
-      [
-        {
-          title: 'Global defaults',
-          value: '+global',
-          run: () =>
-            menu(
-              'Global defaults',
-              (['model', 'small_model'] as const).map((field) => {
-                const saved = snapshot.config[field];
-                const model = typeof saved === 'string' ? saved : undefined;
-                return {
-                  title: field === 'model' ? 'Main model' : 'Small model',
-                  value: field,
-                  description: model ?? 'OpenCode fallback',
-                  run: () =>
-                    selectModel(
-                      field,
-                      { model },
-                      (choice) => {
-                        if (choice.model === undefined || choice.model === '') {
-                          throw new SettingsError('Select a concrete global model.');
-                        }
-                        return propose(snapshot, { kind: 'global', field, model: choice.model });
-                      },
-                      false,
-                    ),
-                };
-              }),
-            ),
-        },
-        {
-          title: 'Model presets',
-          value: '+presets',
-          description: 'Create and edit reusable model choices',
-          run: () => presetsMenu(snapshot),
-        },
-        {
-          title: 'All defaults',
-          value: '+all',
-          description: 'Main, small, presets, and every group; keep references and agent pins',
-          run: () => selectModel('All defaults', {}, (choice) => propose(snapshot, { kind: 'all', choice })),
-        },
-        ...groupNames(snapshot).map((name) => ({
-          title: name,
-          value: name,
-          category: 'Groups',
-          description: describeGroup(snapshot, snapshot.groups[name] ?? {}),
-          run: () => selectGroup(snapshot, name),
-        })),
-        {
-          title: 'Individual agent overrides',
-          value: '+agents',
-          run: () => menu('Agents', agentOptions(snapshot, snapshot.agents)),
-        },
-        { title: 'Reload saved settings…', value: '+reload', run: () => offerReload() },
-      ],
-      undefined,
-      root,
-    );
-  };
-  const proposeComposition = async (
-    snapshot: Snapshot,
-    plan: FilePlan,
-    change?: DefinitionChange,
-    review?: {
-      title: string;
-      details: string;
-      validate?: (preview: Awaited<ReturnType<typeof previewFilePlan>>) => Promise<void>;
-    },
-  ) => {
-    const isCurrent = navigation.checkpoint();
-    const preview = await previewFilePlan(plan);
-    if (!isCurrent()) {
-      return;
-    }
-    if (change?.registry === 'configurationPresets' && change.operation === 'create') {
-      const target = {
-        sourceId: change.sourceId,
-        path: ['configurationPresets', change.name],
-        label: `Preset: ${change.name}`,
-      };
-      const reviewPreset = async (value: typeof preview) => {
-        const bound =
-          editorSettings(value.sources, snapshot.nativeModels).modelPresets[change.name].model !== undefined;
-        return parameterReview(snapshot, target, value, bound ? await models() : []);
-      };
-      const details = await reviewPreset(preview);
-      if (!isCurrent()) {
-        return;
-      }
-      const previousReview = review;
-      review = {
-        title: previousReview?.title ?? 'Save composition definition?',
-        details: [previousReview?.details, details].filter((value) => value !== undefined).join('\n\n'),
-        validate: async (value) => {
-          await previousReview?.validate?.(value);
-          await reviewPreset(value);
-        },
-      };
-    }
-    const projection = (value: typeof preview) =>
-      JSON.stringify({
-        model: value.resolved.model,
-        small_model: value.resolved.small_model,
-        default_agent: value.resolved.default_agent,
-        choices: value.resolved.choices,
-        agent: value.resolved.agent,
-        permissions: value.resolved.permissions,
-        globalPermissions: value.resolved.globalPermissions,
-        permission: value.resolved.permission,
-        permissionWarnings: value.resolved.permissionWarnings,
-        skillPaths: value.resolved.skillPaths,
-        commands: value.resolved.commands,
-        profiles: value.sources.activeProfiles,
-      });
-    const changed = Object.entries(preview.resolved.choices).filter(([name, choice]) => {
-      const previous = Object.hasOwn(snapshot.resolved.choices, name) ? snapshot.resolved.choices[name] : undefined;
-      const agent = Object.hasOwn(snapshot.resolved.agent, name) ? snapshot.resolved.agent[name] : undefined;
-      return (
-        choice.model !== (previous?.model ?? agent?.model) ||
-        choice.variant !== (previous?.variant ?? agent?.variant) ||
-        JSON.stringify(choice.parameters) !== JSON.stringify(previous?.parameters)
-      );
-    });
-    const globals = (['model', 'small_model'] as const).flatMap((field) =>
-      preview.resolved[field] === snapshot.resolved[field] || preview.resolved[field] === undefined
-        ? []
-        : [{ field, model: preview.resolved[field] }],
-    );
-    const commands = Object.entries(preview.resolved.commands).flatMap(([name, command]) =>
-      command.model === undefined ||
-      (Object.hasOwn(snapshot.resolved.commands, name) && command.model === snapshot.resolved.commands[name].model)
-        ? []
-        : [{ name, model: command.model }],
-    );
-    const affected = [
-      ...new Set([...Object.keys(snapshot.resolved.agent), ...Object.keys(preview.resolved.agent)]),
-    ].filter((name) => JSON.stringify(snapshot.resolved.agent[name]) !== JSON.stringify(preview.resolved.agent[name]));
-    confirm(
-      review?.title ?? (change === undefined ? 'Save profile selection?' : 'Save composition definition?'),
-      permissionReview(preview.resolved.permissionWarnings) +
-        `${plan.description}\n\n${plan.selection === undefined ? plan.edits.map((edit) => edit.file.path).join('\n') : plan.snapshot.sources.selectionState?.path}\n\n` +
-        (review === undefined ? '' : `${review.details}\n\n`) +
-        `${affected.length} agent configuration previews change (including removal or native fallback).\n` +
-        `Changed global models: ${globals.length === 0 ? 'none' : globals.map(({ field, model }) => `${field}: ${model}`).join(', ')}.\n` +
-        `Changed command models: ${commands.length === 0 ? 'none' : commands.map(({ name, model }) => `${name}: ${model}`).join(', ')}.\n` +
-        `Commands: ${Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
-        `Active profiles: ${preview.sources.activeProfiles.join(' → ')}.\n` +
-        `Available workflow agents: ${Object.values(preview.resolved.agentAvailability).filter((agent) => agent.enabled && !agent.internal).length}. Native default: ${preview.resolved.default_agent ?? 'OpenCode fallback'}.\n` +
-        'Save preserves conversations. Reload saved settings to apply changes.',
-      async () => {
-        await refreshNative(snapshot);
-        const latest = await previewFilePlan(plan);
-        await review?.validate?.(latest);
-        if (projection(latest) !== projection(preview)) {
-          throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
-        }
-        const choices = [...changed.map(([, choice]) => choice), ...globals, ...commands];
-        if (
-          change?.registry === 'configurationPresets' &&
-          (change.operation === 'create' || change.operation === 'patch')
-        ) {
-          // Inactive presets have no affected agents, but their chosen model must still be available at save time.
-          choices.push(editorSettings(latest.sources, snapshot.nativeModels).modelPresets[change.name]);
-        }
-        if (choices.some((choice) => choice.model !== undefined)) {
-          const catalog = await models();
-          choices.forEach((choice) => validateParameterChoice(choice, catalog));
-        }
-        if (api.lifecycle.signal.aborted) {
-          return;
-        }
-        await save(plan, () =>
-          saveFilePlan(
-            plan,
-            async () => {
-              await refreshNative(snapshot);
-              const current = await previewFilePlan(plan);
-              await review?.validate?.(current);
-              if (projection(current) !== projection(preview)) {
-                throw new SettingsError('Effective defaults changed. Reopen the editor and review the new preview.');
-              }
-            },
-            () => authorizePlan(plan),
-          ),
-        );
-        await offerReload(true);
-      },
-    );
-  };
-  const proposeDefinition = (snapshot: Snapshot, change: DefinitionChange, details?: string) =>
-    proposeComposition(
-      snapshot,
-      planDefinition(snapshot, change),
-      change,
-      details === undefined ? undefined : { title: 'Save duplicate definition?', details },
-    );
-  const repairMenu = async () => {
-    const current = navigation.checkpoint();
-    const { root } = await connection();
-    const project = currentProject(root);
-    const path = api.state.path as { directory?: string; worktree?: string };
-    const baseline = await readNative();
-    const snapshot = await loadEditorSnapshot(
-      root,
-      project,
-      baseline,
-      path.directory ?? project,
-      path.worktree ?? project,
-    );
-    if (!current()) {
-      return;
-    }
-    if (!('diagnostic' in snapshot) && snapshot.resolved.diagnostics.length === 0) {
-      navigation.alert({
-        title: 'Saved membership is valid',
-        message: 'No active membership errors need repair. Use the regular composition editors for other changes.',
-      });
-      return;
-    }
-    const assertBaseline = async () => {
-      const current = await readNative();
-      if (!isDeepStrictEqual(current, baseline) || !sameNativePermissionOrder(current, baseline)) {
-        throw new SettingsError(
-          'Native server inputs changed. Reopen the repair editor and review the candidate again.',
-        );
-      }
-    };
-    openMembershipRepair(snapshot, {
-      menu,
-      back: navigation.back,
-      refresh: navigation.refresh,
-      alert: (title, message) => navigation.alert({ title, message }),
-      prompt: (title, value, confirmed) =>
-        navigation.prompt({
-          title,
-          value,
-          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run catches asynchronous failures.
-          onConfirm: (value) => run(() => confirmed(value)),
-        }),
-      review: async (draft) => {
-        const current = navigation.checkpoint();
-        const plan = planMembershipRepair(snapshot, draft);
-        if (plan.edits.length === 0 && plan.selection === undefined) {
-          throw new SettingsError('Choose membership repairs or a scoped profile selection before reviewing.');
-        }
-        const preview = await previewFilePlan(plan);
-        if (!current()) {
-          return;
-        }
-        const projection = JSON.stringify({ sources: preview.sources.activeProfiles, resolved: preview.resolved });
-        const validate = async () => {
-          await assertBaseline();
-          const next = await previewFilePlan(plan);
-          if (JSON.stringify({ sources: next.sources.activeProfiles, resolved: next.resolved }) !== projection) {
-            throw new SettingsError('The repair candidate changed. Reopen the editor and review it again.');
-          }
-          return next;
-        };
-        confirm(
-          'Save membership repair?',
-          permissionReview(preview.resolved.permissionWarnings) +
-            `${plan.description}\n\n${plan.selection === undefined ? plan.edits.map((edit) => edit.file.path).join('\n') : plan.snapshot.sources.selectionState?.path}\n\n` +
-            ('diagnostic' in snapshot
-              ? 'The previous saved configuration is invalid; no effective before-state is available.\n'
-              : 'Valid composition remains active; unresolved references are skipped.\n') +
-            preview.resolved.diagnostics.map(referenceDescription).join('\n') +
-            '\n' +
-            `Validated candidate profiles: ${preview.sources.activeProfiles.length === 0 ? 'none' : preview.sources.activeProfiles.join(' → ')}.\n` +
-            `Selected agents: ${preview.resolved.selectedAgents.length === 0 ? 'none' : preview.resolved.selectedAgents.join(', ')}.\n` +
-            `Commands: ${Object.keys(preview.resolved.commands).length === 0 ? 'none' : Object.keys(preview.resolved.commands).join(', ')}. Skill directories: ${preview.resolved.skillPaths.length}.\n` +
-            'Save preserves native files and conversations. Apply remains an explicit reload.',
-          async () => {
-            const next = await validate();
-            const choices = [
-              ...Object.values(next.resolved.choices),
-              ...(['model', 'small_model'] as const).flatMap((field) =>
-                next.resolved[field] === undefined ? [] : [{ model: next.resolved[field] }],
-              ),
-              ...Object.values(next.resolved.commands).flatMap((command) =>
-                command.model === undefined ? [] : [{ model: command.model }],
-              ),
-            ];
-            if (choices.some((choice) => choice.model !== undefined)) {
-              const catalog = await models();
-              choices.forEach((choice) => validateParameterChoice(choice, catalog));
-            }
-            if (api.lifecycle.signal.aborted) {
-              return;
-            }
-            await save(plan, () =>
-              saveFilePlan(
-                plan,
-                async () => {
-                  await validate();
-                },
-                () => authorizePlan(plan),
-              ),
-            );
-            await offerReload(true);
-          },
-        );
-      },
-    });
-  };
-  const shortcuts = profileShortcutRegistration(
-    api,
-    load,
-    (snapshot, name, validate) => {
-      navigation.reset();
-      const shortcut = snapshot.sources.registry.profileShortcuts?.[name];
-      if (shortcut === undefined) {
-        throw new SettingsError('The shortcut changed. Refresh shortcuts in Compose configs.');
-      }
-      const selection = shortcut.activeProfiles;
-      return proposeComposition(snapshot, planSelection(snapshot, [...selection]), undefined, {
-        title: `Save /${name} profile selection?`,
-        validate,
-        details: `Shortcut /${name}: ${selection.length === 0 ? 'none' : selection.join(' → ')}\nProject selection`,
-      });
-    },
-    run,
-    () => navigation.checkpoint(),
-  );
-  const runningInspector = async (refresh = false): Promise<void> => {
-    const isCurrent = navigation.checkpoint();
-    const inspection = await readRunningInspection(api, directory);
-    if (!isCurrent()) {
-      return;
-    }
-    if (refresh) {
-      navigation.back();
-    }
-    openRunning(inspection, navigation, () => {
-      return run(() => runningInspector(true));
-    });
-  };
-  const permissionEditor = (snapshot: Snapshot, target?: ConfigurationTarget) => {
-    const ask = (title: string, value: string, confirmed: (value: string) => void | Promise<void>) =>
-      navigation.prompt({
-        title,
-        value,
-        // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
-        onConfirm: (value) => run(() => confirmed(value)),
-      });
-    openPermissions(
-      snapshot,
-      {
-        menu,
-        prompt: ask,
-        back: navigation.back,
-        refresh: navigation.refresh,
-        create: (sourceId, name) =>
-          proposeDefinition(snapshot, {
-            operation: 'create',
-            registry: 'configurationPresets',
-            name,
-            sourceId,
-            value: { permissions: [] },
-          }),
-        propose: (target, rules) =>
-          proposeComposition(snapshot, planPermissions(snapshot, target, rules), undefined, {
-            title: 'Save configured permission rules?',
-            details: `${permissionStatus}\n\n${rules === undefined ? 'Remove local contributions.' : rules.map((rule, index) => `${index + 1}. ${rule.tool} ${rule.pattern ?? '*'} → ${rule.action}`).join('\n')}`,
-          }),
-        preview: async (target, rules) => {
-          const current = navigation.checkpoint();
-          const candidate = await previewFilePlan(planPermissions(snapshot, target, rules));
-          if (!current()) {
-            return;
-          }
-          const local = rules.map((rule, index) => ({
-            agent: 'local',
-            rule,
-            origin: {
-              sourceId: target.sourceId,
-              pointer: `/${[...target.path, 'permissions', String(index), 'action'].map((part) => part.replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`,
-              layer: 'selected definition',
-              operation: 'set' as const,
-              references: [],
-              overwritten: [],
-            },
-          }));
-          const testMatch = (agent: string, contributions: typeof candidate.resolved.permissions) =>
-            ask('Permission tool to test', 'bash', (tool) =>
-              ask('Permission input to test', '', (input) => {
-                const result = previewPermission(contributions, agent, tool, input);
-                navigation.alert({
-                  title: 'Configured permission match',
-                  message: `${permissionStatus}\n\n${result.fallback === 'native' ? 'No Composer rule matches. Defer to native globals/defaults; no native action is inferred.' : `${result.action}: ${result.matched.permission} ${result.matched.pattern}\n${result.origin?.sourceId ?? ''}#${result.origin?.pointer ?? ''}\nEarlier matching contributions: ${result.origin?.overwritten.map((origin) => `${origin.sourceId ?? ''}#${origin.pointer}`).join(', ') ?? 'none'}`}\n\n${candidate.resolved.permissionWarnings.map((warning) => warning.message).join('\n')}`,
-                });
-              }),
-            );
-          menu('Permission preview scope', [
-            {
-              title: 'This definition’s rules only',
-              value: '+local',
-              description: 'Excludes other layers and active selections',
-              run: () => testMatch('local', local),
-            },
-            {
-              title: 'Global configured rules',
-              value: '+global',
-              run: () =>
-                testMatch(
-                  'global',
-                  candidate.resolved.globalPermissions.map((item) => ({ ...item, agent: 'global' })),
-                ),
-            },
-            ...candidate.resolved.selectedAgents.map((agent) => ({
-              title: agent,
-              value: `agent:${agent}`,
-              description: 'All configured active contributions in replay order',
-              run: () =>
-                testMatch(agent, [
-                  ...candidate.resolved.globalPermissions.map((item) => ({ ...item, agent })),
-                  ...candidate.resolved.permissions,
-                ]),
-            })),
-          ]);
-        },
-      },
-      target,
-    );
-  };
-  const parameterEditor = (snapshot: Snapshot, target?: ConfigurationTarget) => {
-    openParameters(
-      snapshot,
-      {
-        menu,
-        prompt: (title, value, confirmed) =>
-          navigation.prompt({
-            title,
-            value,
-            // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
-            onConfirm: (value) => run(() => confirmed(value)),
-          }),
-        propose: async (target, field, text) => {
-          const current = navigation.checkpoint();
-          const plan = planParameter(snapshot, target, field, text);
-          const preview = await previewFilePlan(plan);
-          const details = parameterReview(snapshot, target, preview, await models());
-          if (!current()) {
-            return;
-          }
-          await proposeComposition(snapshot, plan, undefined, {
-            title: 'Save model parameters?',
-            details,
-            validate: async (candidate) => {
-              parameterReview(snapshot, target, candidate, await models());
-            },
-          });
-        },
-      },
-      target,
-    );
-  };
-  const composeMenu = async () => {
-    const current = navigation.checkpoint();
-    await referenceWarnings.refresh(false);
-    if (!current()) {
-      return;
-    }
-    const notices = referenceWarnings.current();
-    menu(
-      'Compose configs',
-      [
-        editorErrorAction,
-        ...(notices.diagnostics.length === 0 && notices.unavailable === undefined
-          ? []
-          : [
-              {
-                title: 'Reference notices',
-                value: 'reference-notices',
-                description: notices.unavailable ?? `${notices.diagnostics.length} skipped or unverified references`,
-                run: () =>
-                  navigation.alert({
-                    title: 'Reference notices',
-                    message: `${notices.unavailable ?? notices.diagnostics.map(referenceDescription).join('\n\n')}\n\nValid composition remains active. Correct the named source or restore the host component, then reload. These notices do not grant or restrict permissions.`,
-                  }),
-              },
-            ]),
-        {
-          title: 'Refresh profile shortcuts',
-          value: 'shortcuts',
-          description: 'Register saved profile actions for this instance',
-          run: shortcuts.refresh,
-        },
-        { title: 'Repair invalid memberships', value: 'repair', run: repairMenu },
-        { title: 'Component groups and memberships', value: 'groups', run: () => groupsMenu(false) },
-        { title: 'Models and configuration presets', value: 'models', run: () => modelsMenu(false) },
-        {
-          title: 'Ordered permission rules and configured previews',
-          value: 'permissions',
-          description: 'Ordered rules, native compilation, and scope-specific fallback warnings',
-          run: async () => {
-            const isCurrent = navigation.checkpoint();
-            const snapshot = await load();
-            if (!isCurrent()) {
-              return;
-            }
-            permissionEditor(snapshot);
-          },
-        },
-        {
-          title: 'Model parameters and provider options',
-          value: 'parameters',
-          run: async () => {
-            const isCurrent = navigation.checkpoint();
-            const snapshot = await load();
-            if (!isCurrent()) {
-              return;
-            }
-            parameterEditor(snapshot);
-          },
-        },
-        {
-          title: 'Profile activation and scope files',
-          value: 'activation',
-          run: async () => {
-            const isCurrent = navigation.checkpoint();
-            const snapshot = await load();
-            if (!isCurrent()) {
-              return;
-            }
-            openActivation(snapshot, {
-              menu,
-              back: navigation.back,
-              propose: (scope, change) =>
-                proposeComposition(
-                  snapshot,
-                  change.operation === 'selection'
-                    ? planSelection(snapshot, change.profiles)
-                    : planScope(snapshot, scope, change),
-                ),
-            });
-          },
-        },
-        {
-          title: 'Author groups, presets and profiles',
-          value: 'registry',
-          run: async () => {
-            const isCurrent = navigation.checkpoint();
-            const snapshot = await load();
-            if (!isCurrent()) {
-              return;
-            }
-            openAuthoring(snapshot, {
-              parameters: (target) => parameterEditor(snapshot, target),
-              permissions: (target) => permissionEditor(snapshot, target),
-              menu,
-              back: navigation.back,
-              refresh: navigation.refresh,
-              prompt: (title, value, confirmed) =>
-                navigation.prompt({
-                  title,
-                  value,
-                  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- run owns asynchronous prompt failures.
-                  onConfirm: (value) => run(() => confirmed(value)),
-                }),
-              propose: proposeDefinition,
-              groupModel: selectGroup,
-              createPreset: (selected) =>
-                selectModel('New configuration preset', {}, (choice) => {
-                  if (choice.model === undefined || choice.model === '') {
-                    throw new SettingsError('Choose a concrete model for the new preset.');
+                  {
+                    title: 'Retained session selection',
+                    value: 'session',
+                    description: 'Configured effects and current sessions can differ',
+                  },
+                  ...Object.entries(decisions).map(([path, value]) => ({
+                    title: path,
+                    value: path,
+                    description: `${JSON.stringify(value.value)} · ${value.origin.source ?? value.origin.kind}`,
+                  })),
+                ],
+                onSelect: (field) => {
+                  if (field.value === 'session') {
+                    run(async () =>
+                      navigation.alert({ title: 'Retained session selection', message: await retainedSession(api) }),
+                    );
+                  } else {
+                    navigation.alert({
+                      title: field.title,
+                      message:
+                        field.value === 'status'
+                          ? (context.runtime.diagnostic ??
+                            `Applied revision: ${context.runtime.revision?.sources}\nShared source: ${context.source.path}`)
+                          : JSON.stringify(decisions[field.value], null, 2),
+                    });
                   }
-                  return selected({
-                    model: choice.model,
-                    ...(choice.variant === undefined ? {} : { variant: choice.variant }),
-                  });
-                }),
-              presetModel: (snapshot, name) =>
-                selectModel(name, snapshot.modelPresets[name], (choice) =>
-                  propose(snapshot, { kind: 'preset', name, choice }),
-                ),
+                },
+              });
+              return Promise.resolve();
             });
-          },
+          } else {
+            run(() => apply(context));
+          }
         },
-        {
-          title: 'Running configuration inspector',
-          value: 'running',
-          description: 'Read running defaults, applied parameters and recorded conversation selections',
-          run: () => runningInspector(),
-        },
-        {
-          title: 'Effective configuration and sources',
-          value: 'effective',
-          description: 'Inspect saved profiles, layer order, field origins, and source files',
-          run: async () => {
-            const isCurrent = navigation.checkpoint();
-            const snapshot = await load();
-            if (isCurrent()) {
-              openEffective(snapshot, navigation);
-            }
-          },
-        },
-        { title: 'Reload saved settings…', value: 'reload', run: () => offerReload() },
-      ],
-      undefined,
+      },
       true,
     );
   };
@@ -1707,59 +240,16 @@ export function registerSettings(
         category: 'Config',
         namespace: 'palette',
         slashName: 'compose-configs',
-        run: () => {
-          navigation.reset();
-          return run(composeMenu);
-        },
-      },
-      {
-        name: 'config-composer.models',
-        title: 'Agent models',
-        category: 'Config',
-        namespace: 'palette',
-        slashName: 'agent-models',
-        run: () => {
-          navigation.reset();
-          return run(() => modelsMenu());
-        },
-      },
-      {
-        name: 'config-composer.reload',
-        title: 'Apply saved composition',
-        category: 'Config',
-        namespace: 'palette',
-        slashName: 'reload-configs',
-        run: () => {
-          navigation.reset();
-          return run(() => offerReload(true));
-        },
-      },
-      {
-        name: 'config-composer.membership',
-        title: 'Agent groups',
-        category: 'Config',
-        namespace: 'palette',
-        slashName: 'agent-groups',
-        run: () => {
-          navigation.reset();
-          return run(() => groupsMenu());
-        },
+        run: () => run(open),
       },
     ],
   });
-  api.lifecycle.onDispose(() => {
-    disposed = true;
-    clearEditorError();
-    stopErrorEvents.forEach((stop) => stop());
-    unregister();
-    shortcuts.dispose();
-  });
-  return { refreshShortcuts: shortcuts.refresh, refreshDiagnostics: () => referenceWarnings.refresh(true) };
+  api.lifecycle.onDispose(unregister);
 }
-
-const ConfigComposerTui: TuiPlugin = async (api) => {
-  const settings = registerSettings(api);
-  await settings.refreshShortcuts();
-  await settings.refreshDiagnostics();
-};
-export default { id: 'config-composer', tui: ConfigComposerTui } satisfies TuiPluginModule;
+export default {
+  id: 'config-composer',
+  tui: async (api) => {
+    registerSettings(api);
+    await Promise.resolve();
+  },
+} satisfies TuiPluginModule;

@@ -4,9 +4,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { SettingsError, record } from '../settings.ts';
-import { readCompositionDocument } from './document.ts';
+import type { Selection } from './document-types.ts';
 
-/** OpenCode 1.18.34 uses xdg-basedir on every platform, including Windows.
+/** OpenCode 1.19.0 uses xdg-basedir on every platform, including Windows.
  * /path requires completed plugin bootstrap, so it cannot be called during initialization.
  */
 export function selectionStateDirectory(environment: NodeJS.ProcessEnv = process.env): string {
@@ -21,7 +21,8 @@ export interface SelectionEnvironment {
 export interface SelectionSnapshot {
   path: string;
   text?: string;
-  profiles?: string[];
+  choice?: Selection;
+  identity?: string;
   revision: number;
 }
 
@@ -37,7 +38,7 @@ export function selectionLifetime(): string {
   return value;
 }
 
-async function canonical(path: string): Promise<string> {
+export async function canonical(path: string): Promise<string> {
   try {
     return await realpath(path);
   } catch (error) {
@@ -57,7 +58,7 @@ async function proofPath(environment: SelectionEnvironment): Promise<string> {
     throw new SettingsError('Invalid OpenCode selection state location.');
   }
   const root = await canonical(resolve(environment.stateDirectory));
-  const path = join(root, 'config-composer', 'v1', 'processes', environment.lifetime, 'proof');
+  const path = join(root, 'config-composer', 'v2', 'processes', environment.lifetime, 'proof');
   if ((await canonical(dirname(path))) !== dirname(path)) {
     throw new Error('Redirected state directory');
   }
@@ -112,6 +113,7 @@ export async function publishSelectionProof(environment: SelectionEnvironment): 
 
 async function observe(path: string): Promise<SelectionSnapshot> {
   let text: string;
+  let captured: string;
   try {
     if ((await canonical(dirname(path))) !== dirname(path)) {
       throw new Error('State directory changed identity');
@@ -120,6 +122,7 @@ async function observe(path: string): Promise<SelectionSnapshot> {
     if (!info.isFile() || info.isSymbolicLink() || info.size > 32_768) {
       throw new Error('Invalid state file');
     }
+    captured = `${info.dev}:${info.ino}:${info.mtimeMs}:${info.size}:${info.mode}`;
     text = await readFile(path, 'utf8');
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
@@ -131,7 +134,7 @@ async function observe(path: string): Promise<SelectionSnapshot> {
     const value: unknown = JSON.parse(text);
     if (
       !record(value) ||
-      value.version !== 1 ||
+      value.version !== 2 ||
       typeof value.revision !== 'number' ||
       !Number.isSafeInteger(value.revision) ||
       value.revision < 1 ||
@@ -141,23 +144,27 @@ async function observe(path: string): Promise<SelectionSnapshot> {
       throw new Error('Invalid state');
     }
     const selection = value.selection;
-    if (selection.mode !== 'defaults' && selection.mode !== 'override') {
+    if (
+      Object.keys(selection).some((key) => key !== 'choice') ||
+      (Object.hasOwn(selection, 'choice') && selection.choice !== null && typeof selection.choice !== 'string')
+    ) {
       throw new Error('Invalid selection');
     }
-    if (Object.keys(selection).some((key) => !['mode', 'profiles'].includes(key))) {
-      throw new Error('Invalid selection');
+    const info = await lstat(path);
+    if (
+      captured !== `${info.dev}:${info.ino}:${info.mtimeMs}:${info.size}:${info.mode}` ||
+      !info.isFile() ||
+      info.isSymbolicLink()
+    ) {
+      throw new Error('Selection changed while reading');
     }
-    if (selection.mode === 'defaults' && selection.profiles !== undefined) {
-      throw new Error('Invalid defaults');
-    }
-    if (selection.mode === 'override' && selection.profiles === undefined) {
-      throw new Error('Missing profiles');
-    }
-    const profiles =
-      selection.mode === 'override'
-        ? readCompositionDocument({ activeProfiles: selection.profiles }).activeProfiles
-        : undefined;
-    return { path, text, revision: value.revision, profiles };
+    return {
+      path,
+      text,
+      revision: value.revision,
+      choice: typeof selection.choice === 'string' || selection.choice === null ? selection.choice : undefined,
+      identity: captured,
+    };
   } catch {
     throw new SettingsError(
       `Invalid or unsupported selection state ${path}. Restore or remove this file before continuing.`,
@@ -168,7 +175,6 @@ async function observe(path: string): Promise<SelectionSnapshot> {
 export async function readSelection(
   environment: SelectionEnvironment,
   identity: { root: string; baseFile: string },
-  retainOnRestart: boolean,
 ): Promise<SelectionSnapshot> {
   if (!isAbsolute(environment.stateDirectory) || !/^[a-z0-9-]+$/i.test(environment.lifetime)) {
     throw new SettingsError('Invalid OpenCode selection state location.');
@@ -179,12 +185,13 @@ export async function readSelection(
     .update(JSON.stringify([root, base]))
     .digest('hex');
   const directory = await canonical(resolve(environment.stateDirectory));
-  const namespace = retainOnRestart ? 'projects' : join('processes', environment.lifetime);
-  return observe(join(directory, 'config-composer', 'v1', namespace, `${key}.json`));
+  const namespace = 'worktrees';
+  return observe(join(directory, 'config-composer', 'v2', namespace, `${key}.json`));
 }
 
 export async function verifySelection(snapshot: SelectionSnapshot): Promise<void> {
-  if ((await observe(snapshot.path)).text !== snapshot.text) {
+  const current = await observe(snapshot.path);
+  if (current.text !== snapshot.text || current.identity !== snapshot.identity) {
     throw changedInput('Profile selection changed. Reopen the editor.', snapshot.path, 'selection');
   }
 }
@@ -212,48 +219,34 @@ export async function withSelectionLock<T>(snapshot: SelectionSnapshot, operatio
   }
 }
 
-/** Prepare the state write before other edits; publish it as the final operation of their rollback boundary. */
-export async function withSelectionUpdate(
+/** Only selection state is writable in this editor. */
+export async function saveSelection(
   snapshot: SelectionSnapshot,
-  profiles: string[] | undefined,
-  operation: (commit: () => Promise<void>) => Promise<void>,
+  choice: Selection,
+  validate: () => Promise<void>,
 ): Promise<void> {
-  if (profiles !== undefined) {
-    readCompositionDocument({ activeProfiles: profiles });
-  }
   await withSelectionLock(snapshot, async () => {
+    await validate();
     const temporary = join(dirname(snapshot.path), `.selection-${randomUUID()}.tmp`);
-    const text =
-      JSON.stringify({
-        version: 1,
-        revision: snapshot.revision + 1,
-        selection: profiles === undefined ? { mode: 'defaults' } : { mode: 'override', profiles },
-      }) + '\n';
     try {
       const file = await open(temporary, 'wx', 0o600);
       try {
-        await file.writeFile(text, 'utf8');
+        await file.writeFile(
+          JSON.stringify({
+            version: 2,
+            revision: snapshot.revision + 1,
+            selection: choice === undefined ? {} : { choice },
+          }) + '\n',
+        );
         await file.sync();
       } finally {
         await file.close();
       }
-      await operation(async () => {
-        await verifySelection(snapshot);
-        await rename(temporary, snapshot.path);
-      });
+      await validate();
+      await verifySelection(snapshot);
+      await rename(temporary, snapshot.path);
     } finally {
       await unlink(temporary).catch(() => undefined);
     }
-  });
-}
-
-export async function saveSelection(
-  snapshot: SelectionSnapshot,
-  profiles: string[] | undefined,
-  validate?: () => Promise<void>,
-): Promise<void> {
-  await withSelectionUpdate(snapshot, profiles, async (commit) => {
-    await validate?.();
-    await commit();
   });
 }

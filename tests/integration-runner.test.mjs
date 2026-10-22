@@ -22,9 +22,8 @@ test('CI suites partition every portable integration file exactly once', async (
     'tests/npm-registration.native.ts',
     'tests/config-composer.native.ts',
     'tests/composition-profiles.native.ts',
-    'tests/canonical-permissions.native.ts',
-    'tests/native-command-references.native.ts',
-    'tests/native-component-references.native.ts',
+    'tests/review-programming.native.ts',
+    'tests/config-composer-tui.native.ts',
     ...(await readdir(new URL('./integration/', import.meta.url)))
       .filter((name) => /\.integration\.(?:ts|mjs)$/.test(name))
       .map((name) => `tests/integration/${name}`),
@@ -37,11 +36,6 @@ test('CI suites partition every portable integration file exactly once', async (
   assert.deepEqual(files.sort(), expected);
   assert.deepEqual(integrationFiles().sort(), expected);
   assert.throws(() => integrationFiles('missing'), /Unknown integration suite/);
-});
-
-test('running inspector and runtime terminal acceptance have separate bounded CI partitions', () => {
-  assert.deepEqual(integrationFiles('running-inspector'), ['tests/integration/running-inspector.integration.ts']);
-  assert.deepEqual(integrationFiles('runtime-terminal'), ['tests/integration/runtime-terminal.integration.ts']);
 });
 
 test('native ripgrep prerequisites use pinned platform binaries and release checksums', () => {
@@ -118,11 +112,3 @@ test(
     }
   },
 );
-
-test('native discovery has its own bounded CI partition instead of consuming the core suite budget', () => {
-  assert.deepEqual(integrationFiles('discovery'), [
-    'tests/native-command-references.native.ts',
-    'tests/native-component-references.native.ts',
-  ]);
-  assert.ok(integrationFiles('core').every((file) => !file.includes('-references.native.ts')));
-});

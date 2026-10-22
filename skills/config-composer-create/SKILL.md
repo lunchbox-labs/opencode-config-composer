@@ -1,31 +1,12 @@
 ---
 name: config-composer-create
-description: Use when a user wants a new OpenCode Config Composer profile, component group, reusable configuration preset, custom agent, command, or skill relationship.
+description: Create a shared Config Composer definition file for existing native agents and commands.
 ---
 
-# Create Composer configuration
+Read the current definition and native target names before editing. Use the packaged schema and [review example](examples/review.jsonc). Ask for the destination if it is not known. Do not create or rewrite native prompt bodies.
 
-Start from the installed [review example](examples/review.jsonc), then adapt the user's chosen settings.
-Read existing scope files and explicit imports first. Preserve native definitions, explicit model pins,
-JSONC comments, and unrelated keys. Use unique component/group/profile names and an explicit writable destination.
+Author one JSONC file with optional `groups`, `agent`, `command`, `model`, `small_model`, `profiles`, and `defaultProfile`. Group membership is centralized under `members.agent` and `members.command`. All groups always apply. Profile `groups` references root names and may override their agent or command patches without changing membership. One profile can be selected per worktree. Validate inactive profiles too.
 
-Define reusable components, a mixed `componentGroups` bundle, and reusable `configurationPresets` separately.
-A profile's ordered `layers` first selects a group, then assigns a preset to already selected agents or groups.
-`plan` and `explore` refer directly to native built-ins: no shadow agent files or invented native prompts are needed.
-Custom agents need an inline prompt or explicit Markdown file. Skill components need an explicit native
-`SKILL.md` path; an agent's `skills` relationship neither injects its body nor grants permission.
+Authored native agent frontmatter always overrides Composer settings, including literal empty values. Model and variant are independent. Options replace the entire field. Permission objects replace exact tool blocks; frontmatter permission replaces the whole policy. Never invent a command variant.
 
-The example's `opencode:model` requires an effective `model` value after global Composer contributions.
-If none exists, choose a real available
-model or omit that reference; retain the permission-only preset. Validate parameters against that model's
-capabilities. Keep permission rules ordered: a later matching allow can replace an earlier deny. Review any
-compiler warning and its potentially more permissive native fallback.
-
-Prepare a reviewable JSONC edit and inspect it with `/compose-configs`. The packaged example contains definitions only and is safe to import without activating a profile.
-Definitions stay inactive until explicitly selected. If activation was requested, establish the project and complete ordered list, then use the Compose configs selection editor. Live selection is external project state; never rewrite configuration to switch profiles. Configure startup defaults through `selection.defaultProfiles` only when requested; preserve legacy `activeProfiles` fallback fields otherwise. `[]` selects none. Save preserves conversations. Apply through explicit reload or restart;
-apply affects the current instance using its running native baseline. Native JSON or native-agent edits require restart. Current
-TUI sessions may retain a previous model and variant after apply. Select the destination/base model through
-`/models`, then its configured variant or `Default` through `/variants`; conversation history is preserved.
-
-Common mistakes: placing native configuration under Composer's `components`, assigning a preset before
-selecting its target, moving native built-ins into custom files, or silently overwriting an imported source.
+Use `/compose-configs` to choose a profile, preview, confirm selection, and apply while idle. This release's UI changes selection only; author definitions directly in the shared JSONC file. Existing session model/variant choices can remain retained. Native metadata changes require restarting OpenCode before review.

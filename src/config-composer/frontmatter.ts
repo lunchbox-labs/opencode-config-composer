@@ -312,7 +312,7 @@ async function existsDirectory(path: string): Promise<boolean> {
   }
 }
 
-function sourceRoots(context: NativeFrontmatterContext): string[] {
+export function nativeAgentSourceRoots(context: NativeFrontmatterContext): string[] {
   const environment = context.environment ?? process.env;
   const home = context.home ?? homedir();
   const xdg = environment.XDG_CONFIG_HOME;
@@ -375,7 +375,7 @@ export async function readNativeAgentFrontmatter(
   const agents = new Map<string, NativeAgentFrontmatter>();
   let activePath = context.directory;
   try {
-    for (const root of sourceRoots(context)) {
+    for (const root of nativeAgentSourceRoots(context)) {
       activePath = root;
       if (!(await existsDirectory(root))) {
         continue;

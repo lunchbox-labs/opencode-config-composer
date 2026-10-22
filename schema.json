@@ -1,627 +1,260 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "OpenCode Config Composer composition document",
-  "description": "Canonical config-composer.jsonc definitions and explicit JSON/JSONC imports. No legacy compatibility mode. Relative paths belong to the declaring document. Structural validation only: source assembly, reference validation, and native compilation are separate phases.",
+  "$id": "https://unpkg.com/@lunchbox-labs/opencode-config-composer/schema.json",
+  "title": "Config Composer",
+  "description": "One shared definition file, always-active ordered groups and one worktree profile.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "$schema": {
       "type": "string"
     },
-    "imports": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/import"
-      },
-      "maxItems": 64,
-      "uniqueItems": true,
-      "description": "Explicit local JSON/JSONC files, relative to the declaring document; no automatic directory discovery. Imported documents contribute definitions, never activation."
-    },
-    "components": {
-      "$ref": "#/$defs/components"
-    },
-    "componentGroups": {
-      "type": "object",
-      "propertyNames": {
-        "$ref": "#/$defs/name"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/componentGroup"
-      },
-      "maxProperties": 1024
-    },
-    "configurationPresets": {
-      "type": "object",
-      "propertyNames": {
-        "$ref": "#/$defs/name"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/configurationPreset"
-      },
-      "maxProperties": 1024
-    },
-    "profiles": {
-      "type": "object",
-      "propertyNames": {
-        "$ref": "#/$defs/name"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/profile"
-      },
-      "maxProperties": 1024
-    },
-    "defaults": {
-      "$ref": "#/$defs/defaults"
-    },
-    "overrides": {
-      "$ref": "#/$defs/overrides"
-    },
-    "activeProfiles": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/name"
-      },
-      "maxItems": 64,
-      "uniqueItems": true,
-      "description": "Legacy configured default profiles. Used only when selection.defaultProfiles is absent from all scopes; the last supplied scope replaces earlier lists. Switching profiles never rewrites this field."
-    },
-    "profileShortcuts": {
-      "type": "object",
-      "propertyNames": {
-        "$ref": "#/$defs/name"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/profileShortcut"
-      },
-      "maxProperties": 128,
-      "description": "Named TUI profile actions. Each invocation saves the current project selection in external state; declaration never activates profiles."
-    },
-    "selection": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "defaultProfiles": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/name"
-          },
-          "maxItems": 64,
-          "uniqueItems": true,
-          "description": "Ordered configuration profile defaults. External project selection never rewrites this list."
-        },
-        "retainOnRestart": {
-          "type": "boolean",
-          "description": "Retain external project selection across server restarts. When false, a fresh server process uses configured defaults; apply within the same process retains selection. New sessions do not reset configuration.",
-          "default": true
-        }
-      }
-    }
-  },
-  "$defs": {
-    "safeKey": {
-      "not": {
-        "enum": ["__proto__", "prototype", "constructor"]
-      }
-    },
-    "name": {
+    "defaultProfile": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 64,
-      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-      "$ref": "#/$defs/safeKey"
-    },
-    "componentName": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 256,
-      "pattern": "^[^\\s\\\\/]+(?:/[^\\s\\\\/]+)*$",
-      "not": {
-        "pattern": "(^|/)(\\.|\\.\\.|__proto__|constructor|prototype)(/|$)"
-      }
-    },
-    "path": {
-      "type": "string",
-      "minLength": 1,
-      "pattern": "\\S",
-      "allOf": [
-        {
-          "not": {
-            "pattern": "\\u0000"
-          }
-        },
-        {
-          "anyOf": [
-            {
-              "not": {
-                "pattern": "^[a-zA-Z][a-zA-Z0-9+.-]*:"
-              }
-            },
-            {
-              "pattern": "^[a-zA-Z]:[\\\\/](?![\\\\/])"
-            }
-          ]
-        }
-      ]
-    },
-    "import": {
-      "$ref": "#/$defs/path",
-      "pattern": "\\.jsonc?$",
-      "type": "string"
+      "pattern": "\\S"
     },
     "model": {
       "type": "string",
       "pattern": "^[^\\s/]+/\\S+$"
     },
-    "modelRef": {
+    "small_model": {
       "type": "string",
-      "anyOf": [
-        {
-          "enum": ["opencode:model", "opencode:small_model"]
-        },
-        {
-          "pattern": "^preset:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-          "maxLength": 71,
-          "not": {
-            "enum": ["preset:constructor", "preset:prototype"]
-          }
-        }
-      ]
+      "pattern": "^[^\\s/]+/\\S+$"
     },
-    "json": {
-      "anyOf": [
-        {
-          "type": ["null", "boolean", "string", "number"]
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/json"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/safeKey"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/json"
-          }
-        }
-      ]
+    "groups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/group"
+      },
+      "default": []
     },
-    "parameters": {
+    "agent": {
       "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "temperature": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 2
-        },
-        "topP": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "topK": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
-        },
-        "maxOutputTokens": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
-        },
-        "options": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/safeKey"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/json"
-          }
-        }
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/agent"
       }
     },
-    "permissionRule": {
+    "command": {
       "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "tool": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^\\S+$"
-        },
-        "pattern": {
-          "type": "string",
-          "minLength": 1
-        },
-        "action": {
-          "enum": ["allow", "ask", "deny"]
-        }
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
       },
-      "required": ["tool", "action"],
-      "description": "Ordered rule. Omitted pattern means *. Last matching Composer contribution wins, including a looser action. Only no Composer match falls back to native globals, then native defaults."
-    },
-    "configurationPreset": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "model": {
-          "$ref": "#/$defs/model"
-        },
-        "modelRef": {
-          "$ref": "#/$defs/modelRef"
-        },
-        "variant": {
-          "type": "string",
-          "pattern": "^[\\w.-]{1,64}$"
-        },
-        "parameters": {
-          "$ref": "#/$defs/parameters"
-        },
-        "permissions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/permissionRule"
-          },
-          "maxItems": 256
-        }
-      },
-      "not": {
-        "required": ["model", "modelRef"]
-      },
-      "minProperties": 1,
-      "description": "Reusable model and/or permission settings, independent of component membership. Partial variant/parameter contributions bind to the resolved model; catalog validation is separate."
-    },
-    "agentConfiguration": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "model": {
-          "$ref": "#/$defs/model"
-        },
-        "modelRef": {
-          "$ref": "#/$defs/modelRef"
-        },
-        "variant": {
-          "type": "string",
-          "pattern": "^[\\w.-]{1,64}$"
-        },
-        "parameters": {
-          "$ref": "#/$defs/parameters"
-        },
-        "permissions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/permissionRule"
-          },
-          "maxItems": 256
-        }
-      },
-      "not": {
-        "required": ["model", "modelRef"]
+      "additionalProperties": {
+        "$ref": "#/$defs/command"
       }
     },
+    "profiles": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/profile"
+      }
+    }
+  },
+  "$defs": {
     "agent": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "file": {
-          "$ref": "#/$defs/path"
+        "model": {
+          "type": "string",
+          "pattern": "^[^\\s/]+/\\S+$"
         },
-        "prompt": {
+        "variant": {
           "type": "string"
         },
-        "description": {
-          "type": "string"
+        "temperature": {
+          "type": "number"
+        },
+        "top_p": {
+          "type": "number"
+        },
+        "options": {
+          "type": "object"
         },
         "mode": {
           "enum": ["primary", "subagent", "all"]
         },
-        "disable": {
-          "type": "boolean"
-        },
-        "skills": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/componentName"
-          },
-          "maxItems": 256,
-          "uniqueItems": true
-        },
-        "configuration": {
-          "$ref": "#/$defs/agentConfiguration"
+        "permission": {
+          "anyOf": [
+            {
+              "enum": ["allow", "ask", "deny"]
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "enum": ["allow", "ask", "deny"]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "enum": ["allow", "ask", "deny"]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
         }
-      },
-      "oneOf": [
-        {
-          "required": ["file"]
-        },
-        {
-          "required": ["prompt"]
-        }
-      ],
-      "description": "Exactly one file or inline prompt. skills records intended on-demand relationships, without injecting bodies or granting exclusive access."
-    },
-    "skill": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "file": {
-          "$ref": "#/$defs/path"
-        }
-      },
-      "required": ["file"]
+      }
     },
     "command": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "file": {
-          "$ref": "#/$defs/path"
-        },
-        "template": {
-          "type": "string"
-        },
         "agent": {
-          "$ref": "#/$defs/componentName"
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
         },
-        "description": {
-          "type": "string"
+        "model": {
+          "type": "string",
+          "pattern": "^[^\\s/]+/\\S+$"
         },
         "subtask": {
           "type": "boolean"
         }
-      },
-      "oneOf": [
-        {
-          "required": ["file"]
-        },
-        {
-          "required": ["template"]
-        }
-      ]
-    },
-    "components": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "agents": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/componentName"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/agent"
-          },
-          "maxProperties": 1024
-        },
-        "skills": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/componentName"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/skill"
-          },
-          "maxProperties": 1024
-        },
-        "commands": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/componentName"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/command"
-          },
-          "maxProperties": 1024
-        }
       }
     },
-    "componentGroup": {
+    "group": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "agents": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/componentName"
-          },
-          "maxItems": 256,
-          "uniqueItems": true,
-          "description": "Available native or custom agent names. Built-in agents need no components.agents declaration. Union with custom frontmatter groups; preserve native fields unless explicitly overridden."
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
         },
-        "skills": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/componentName"
-          },
-          "maxItems": 256,
-          "uniqueItems": true
+        "agent": {
+          "$ref": "#/$defs/agent"
         },
-        "commands": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/componentName"
-          },
-          "maxItems": 256,
-          "uniqueItems": true
-        },
-        "configuration": {
-          "$ref": "#/$defs/agentConfiguration"
+        "command": {
+          "$ref": "#/$defs/command"
         },
         "description": {
-          "$ref": "#/$defs/definitionDescription"
-        }
-      },
-      "description": "Any subset of component kinds. Configuration contributes to member agents only."
-    },
-    "target": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "agents": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/componentName"
-          },
-          "maxItems": 256,
-          "uniqueItems": true,
-          "minItems": 1
+          "type": "string"
         },
-        "componentGroups": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/name"
-          },
-          "maxItems": 256,
-          "uniqueItems": true,
-          "minItems": 1
-        }
-      },
-      "minProperties": 1,
-      "description": "Explicit selected agents or selected groups, resolved against available native and custom agents. Group targets expand to their agent members at this layer. Targets never select or synthesize components implicitly."
-    },
-    "layer": {
-      "oneOf": [
-        {
+        "members": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "componentGroup": {
-              "$ref": "#/$defs/name"
-            }
-          },
-          "required": ["componentGroup"]
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "configurationPreset": {
-              "$ref": "#/$defs/name"
+            "agent": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "uniqueItems": true
             },
-            "target": {
-              "$ref": "#/$defs/target"
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "uniqueItems": true
             }
           },
-          "required": ["configurationPreset", "target"]
+          "anyOf": [
+            {
+              "required": ["agent"],
+              "properties": {
+                "agent": {
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "required": ["command"],
+              "properties": {
+                "command": {
+                  "minItems": 1
+                }
+              }
+            }
+          ]
         }
-      ]
+      },
+      "required": ["name", "members"]
     },
-    "defaults": {
+    "groupPatch": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "model": {
-          "$ref": "#/$defs/model"
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
         },
-        "small_model": {
-          "$ref": "#/$defs/model"
+        "agent": {
+          "$ref": "#/$defs/agent"
         },
-        "agents": {
-          "$ref": "#/$defs/agentConfiguration"
-        },
-        "permissions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/permissionRule"
-          },
-          "maxItems": 1024
+        "command": {
+          "$ref": "#/$defs/command"
         }
       },
-      "description": "Native runtime model defaults plus settings applied to all selected agents before profile contributions."
-    },
-    "overrides": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "model": {
-          "$ref": "#/$defs/model"
-        },
-        "small_model": {
-          "$ref": "#/$defs/model"
-        },
-        "agents": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/componentName"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/agentConfiguration"
-          },
-          "maxProperties": 1024
-        },
-        "permissions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/permissionRule"
-          },
-          "maxItems": 1024
-        }
-      },
-      "description": "Runtime model defaults and settings keyed by selected agent. Applied after profile layers; document project overrides precede local overrides."
+      "required": ["name"]
     },
     "profile": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "agentAvailability": {
+        "description": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^[^\\s/]+/\\S+$"
+        },
+        "small_model": {
+          "type": "string",
+          "pattern": "^[^\\s/]+/\\S+$"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/groupPatch"
+          }
+        },
+        "agent": {
           "type": "object",
           "propertyNames": {
-            "$ref": "#/$defs/componentName"
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
           },
           "additionalProperties": {
-            "type": "boolean"
+            "$ref": "#/$defs/agent"
+          }
+        },
+        "command": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
           },
-          "maxProperties": 256,
-          "description": "Enable or disable named workflow agents without deleting definitions. Later profile occurrences win; internal title, summary and compaction agents cannot be toggled."
-        },
-        "extends": {
-          "$ref": "#/$defs/name"
-        },
-        "layers": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/layer"
-          },
-          "maxItems": 256
-        },
-        "overrides": {
-          "$ref": "#/$defs/overrides"
-        },
-        "description": {
-          "$ref": "#/$defs/definitionDescription"
-        }
-      },
-      "description": "Single named parent. Replay the full parent chain, then child layers and overrides, for each active profile in order."
-    },
-    "profileShortcut": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["activeProfiles"],
-      "properties": {
-        "activeProfiles": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/name"
-          },
-          "maxItems": 64,
-          "uniqueItems": true
-        },
-        "description": {
-          "type": "string",
-          "maxLength": 256
+          "additionalProperties": {
+            "$ref": "#/$defs/command"
+          }
         }
       }
-    },
-    "definitionDescription": {
-      "type": "string",
-      "maxLength": 160,
-      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*$",
-      "description": "Optional single-line plain text for this choice, up to 160 characters. Metadata only; not inherited or applied as configuration."
     }
   }
 }

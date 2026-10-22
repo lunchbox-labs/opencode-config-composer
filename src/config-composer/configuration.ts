@@ -1,23 +1,15 @@
 import { constants } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { type Node as JsonNode, type ParseError, parse, parseTree, printParseErrorCode } from 'jsonc-parser';
-import { type GroupOptions, SettingsError, readSettings, record } from './settings.ts';
-import type { SourceDocument } from './composition/types.ts';
+import { type Node as JsonNode, type ParseError, getNodeValue, parseTree, printParseErrorCode } from 'jsonc-parser';
+import { SettingsError, record } from './settings.ts';
 
 export interface ConfigurationFile {
   path: string;
   text: string;
   mode: number;
 }
-export interface LoadedConfiguration {
-  settings: GroupOptions;
-  file: ConfigurationFile;
-  source: SourceDocument;
-}
-
 export const MAX_CONFIGURATION_BYTES = 1024 * 1024;
 
 export function configurationDirectory(environment: NodeJS.ProcessEnv = process.env): string {
@@ -69,14 +61,15 @@ function uniqueKeys(node: JsonNode | undefined, text: string, source: string): v
 export function parseConfiguration(text: string, sourceId?: string): Record<string, unknown> {
   const source = sourceId === undefined ? '' : `${sourceId}: `;
   const errors: ParseError[] = [];
-  const value: unknown = parse(text, errors, { allowTrailingComma: true });
+  const tree = parseTree(text, errors, { allowTrailingComma: true });
+  const value: unknown = tree === undefined ? undefined : getNodeValue(tree);
   if (errors.length !== 0 || !record(value)) {
     const first = errors.at(0);
     const detail =
       first === undefined ? '' : ` ${printParseErrorCode(first.error)} at ${location(text, first.offset)}.`;
     throw new SettingsError(`${source}Fix the invalid Config Composer JSONC configuration.${detail}`);
   }
-  uniqueKeys(parseTree(text), text, source);
+  uniqueKeys(tree, text, source);
   return value;
 }
 
@@ -114,41 +107,4 @@ export async function configurationFile(path: string): Promise<ConfigurationFile
       'Could not read the Config Composer configuration. Check that configFile names a readable UTF-8 regular file.',
     );
   }
-}
-
-export async function loadConfiguration(
-  options: unknown,
-  directory = configurationDirectory(),
-): Promise<LoadedConfiguration> {
-  if (options === undefined) {
-    options = {};
-  }
-  if (
-    !record(options) ||
-    Object.keys(options).some((key) => !['configFile', 'reloadToken'].includes(key)) ||
-    (Object.hasOwn(options, 'configFile') && typeof options.configFile !== 'string') ||
-    (options.reloadToken !== undefined && typeof options.reloadToken !== 'string')
-  ) {
-    throw new SettingsError(
-      'Config Composer plugin options support only configFile and an optional reloadToken. Put settings in config-composer.jsonc or the selected file.',
-    );
-  }
-  const file = await configurationFile(
-    configurationPath(typeof options.configFile === 'string' ? options.configFile : 'config-composer.jsonc', directory),
-  );
-  const value = parseConfiguration(file.text, file.path);
-  const settings = readSettings(value);
-  return {
-    settings,
-    file,
-    source: {
-      id: file.path,
-      path: file.path,
-      text: file.text,
-      fingerprint: createHash('sha256').update(file.text).digest('hex'),
-      // Advisory only: storage must still check identity, permissions and mode on save.
-      writable: (file.mode & 0o222) !== 0,
-      value,
-    },
-  };
 }

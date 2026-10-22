@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
-import { readRuntimeBaseline } from '../src/config-composer/composition/runtime-baseline.ts';
+import { readRuntimeContext } from '../src/config-composer/composition/runtime-baseline.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { reloadFromTerminal } from './integration/terminal-editor.ts';
 
 type Fixture = Parameters<typeof reloadFromTerminal>[0];
 type Terminal = Parameters<typeof reloadFromTerminal>[1];
 type Runtime = Awaited<ReturnType<Fixture['editor']['runtime']>>;
-const previous = { baseline: { model: 'fixture/base' }, applied: { id: 'old' } } as Runtime;
-const current = { ...previous, applied: { ...previous.applied, id: 'new' } };
+const previous = { native: { model: 'fixture/base' }, id: 'old' } as Runtime;
+const current = { ...previous, id: 'new' };
 
 function missingBaseline(): never {
-  readRuntimeBaseline({ plugin: [packageName] }, { root: '/fixture', directory: '/fixture' });
+  readRuntimeContext({ plugin: [packageName] }, { root: '/fixture', directory: '/fixture' });
   assert.fail('An unpublished registration must fail strict baseline reading');
 }
 
@@ -58,7 +58,7 @@ test('terminal reload propagates host and configuration errors without retrying'
 });
 
 test('terminal reload still rejects a changed native baseline after registration', async () => {
-  const f = fixture([() => previous, () => ({ ...current, baseline: { model: 'fixture/changed' } })]);
+  const f = fixture([() => previous, () => ({ ...current, native: { model: 'fixture/changed' } })]);
   await assert.rejects(f.run(), /scoped apply retains the native baseline/);
 });
 
@@ -74,7 +74,7 @@ test(
         assert.ok(error instanceof Error);
         assert.match(error.message, /did not publish a new native registration/);
         assert.ok(error.cause instanceof Error);
-        assert.match(error.cause.message, /server did not provide a readable editor snapshot/);
+        assert.match(error.cause.message, /Unreadable runtime marker/);
         return true;
       })
       .finally(() => {
