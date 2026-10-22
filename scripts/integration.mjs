@@ -22,7 +22,11 @@ export function nativePackage(platform = process.platform, arch = process.arch) 
 
 const suites = {
   registration: ['tests/npm-registration.native.ts'],
-  core: ['tests/config-composer.native.ts', 'tests/review-programming.native.ts'],
+  core: [
+    'tests/config-composer.native.ts',
+    'tests/review-programming.native.ts',
+    'tests/integration/prompt-coexistence.integration.ts',
+  ],
   profile: ['tests/composition-profiles.native.ts'],
   permissions: ['tests/integration/permission-runtime.integration.ts'],
   inspector: ['tests/integration/running-inspector.integration.ts'],
