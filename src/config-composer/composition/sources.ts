@@ -1,4 +1,4 @@
-import type { Stats } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
 import {
   MAX_CONFIGURATION_BYTES,
@@ -11,12 +11,10 @@ import { SettingsError, record } from '../settings.ts';
 import { canonical } from './selection-state.ts';
 import { readCompositionDocument } from './document.ts';
 import type { CompositionDocument } from './document-types.ts';
-export interface Source {
+export interface LoadedSource {
   path: string;
   canonicalPath: string;
-  text?: string;
-  mode?: number;
-  identity?: string;
+  fingerprint: string;
   document: CompositionDocument;
   explicit: boolean;
 }
@@ -36,13 +34,10 @@ export function parseSourceDocument(text: string, path?: string): CompositionDoc
   }
   return readCompositionDocument(parseConfiguration(text, path));
 }
-function sourceIdentity(info: Stats, link: Stats): string {
-  return `${info.dev}:${info.ino}:${info.mtimeMs}:${info.size}:${info.mode}:${link.dev}:${link.ino}:${link.mtimeMs}`;
-}
 export async function loadSource(
   options: { configFile?: string } = {},
   directory = configurationDirectory(),
-): Promise<Source> {
+): Promise<LoadedSource> {
   const path = configurationPath(options.configFile ?? 'config-composer.jsonc', directory);
   const canonicalPath = await canonical(path);
   const explicit = Object.hasOwn(options, 'configFile');
@@ -56,7 +51,13 @@ export async function loadSource(
     if (explicit) {
       throw new SettingsError(`Explicit Config Composer source does not exist: ${path}`);
     }
-    return { path, canonicalPath, explicit, document: readCompositionDocument({}) };
+    return {
+      path,
+      canonicalPath,
+      explicit,
+      fingerprint: createHash('sha256').update('null').digest('hex'),
+      document: readCompositionDocument({}),
+    };
   }
   const link = await lstat(path);
   const file = await configurationFile(canonicalPath);
@@ -81,9 +82,7 @@ export async function loadSource(
     path,
     canonicalPath,
     explicit,
-    text: file.text,
-    mode: file.mode,
-    identity: sourceIdentity(info, link),
+    fingerprint: createHash('sha256').update(JSON.stringify(file.text)).digest('hex'),
     document: parseSourceDocument(file.text, path),
   };
 }

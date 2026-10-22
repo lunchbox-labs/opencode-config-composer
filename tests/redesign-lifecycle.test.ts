@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
 import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import descriptor from '../src/config-composer/server.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import {
@@ -18,9 +18,15 @@ import { applySavedComposition } from '../src/config-composer/composition/apply.
 import { readSelection, saveSelection } from '../src/config-composer/composition/selection-state.ts';
 import { observeNative } from '../src/config-composer/composition/revision.ts';
 import type { PluginInput } from '@opencode-ai/plugin';
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, sourceAlias = false) {
   const root = await mkdtemp(join(tmpdir(), 'composer-redesign-'));
-  const source = join(root, 'config-composer.jsonc');
+  const sourceDirectory = sourceAlias ? join(root, 'definition-alias') : root;
+  if (sourceAlias) {
+    const original = join(root, 'original-definitions');
+    await mkdir(original);
+    await symlink(original, sourceDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  const source = join(sourceDirectory, 'config-composer.jsonc');
   const keys = ['OPENCODE_CONFIG_DIR', 'OPENCODE_TEST_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME'];
   const before = keys.map((key) => process.env[key]);
   keys.forEach((key) => (process.env[key] = root));
@@ -46,7 +52,12 @@ async function fixture(t: TestContext) {
     },
   };
   await writeFile(source, JSON.stringify(document));
-  const hook = (await descriptor.server({ directory: root, worktree: root } as PluginInput)).config!;
+  const hook = (
+    await descriptor.server(
+      { directory: root, worktree: root } as PluginInput,
+      sourceAlias ? { configFile: source } : {},
+    )
+  ).config!;
   const base = () => ({
     plugin: [packageName],
     agent: { worker: { model: 'p/native', prompt: 'OPAQUE' } },
@@ -81,17 +92,67 @@ async function fixture(t: TestContext) {
     },
   };
 }
-test('default selection without a state file publishes JSON-safe success and error attestations', async (t) => {
+for (const mutation of ['edit', 'invalid', 'delete', 'retarget'] as const) {
+  test(`startup definition and selection identity survive Composer ${mutation} and rebootstrap`, async (t) => {
+    const f = await fixture(t, mutation === 'retarget');
+    const initial = await loadConfigurationContext(f.connection);
+    if (mutation === 'delete') {
+      await unlink(f.source);
+    } else if (mutation === 'retarget') {
+      const other = join(f.root, 'other-definitions');
+      await mkdir(other);
+      await writeFile(
+        join(other, 'config-composer.jsonc'),
+        JSON.stringify({ profiles: { replacement: {} }, defaultProfile: 'replacement' }),
+      );
+      await rm(dirname(f.source), { recursive: true });
+      await symlink(other, dirname(f.source), process.platform === 'win32' ? 'junction' : 'dir');
+    } else {
+      await writeFile(
+        f.source,
+        mutation === 'invalid' ? '{ invalid' : JSON.stringify({ profiles: { replacement: {} } }),
+      );
+    }
+    for (const choice of ['b', 'a', null, undefined] as const) {
+      const context = await loadConfigurationContext(f.connection);
+      assert.deepEqual(context.source, initial.source);
+      assert.equal(context.selection.path, initial.selection.path);
+      const committed = await saveSelectionGuarded(context, await previewSelection(context, choice));
+      await applySavedComposition(committed, committed.runtime, {
+        assertCurrent: f.connection.assertCurrent,
+        activity: async () => ({}),
+        dispose: async () => {},
+        refresh: async () => {
+          const hooks = await descriptor.server({ directory: f.root, worktree: f.root } as PluginInput, {
+            configFile: 'ignored.jsonc',
+          });
+          f.config = f.base();
+          await hooks.config!(f.config);
+          return readRuntimeContext(f.config, f.connection.location);
+        },
+      });
+      assert.equal(f.config.agent.worker.model, choice === 'b' ? 'p/b' : choice === null ? 'p/native' : 'p/a');
+      const current = await loadConfigurationContext(f.connection);
+      assert.deepEqual(current.source, initial.source);
+      assert.deepEqual(current.runtime.options, initial.runtime.options);
+      assert.equal(current.selection.path, initial.selection.path);
+      assert.notEqual(current.runtime.id, initial.runtime.id);
+    }
+  });
+}
+test('inspection uses loaded native attestation despite malformed files and does not prove the project filesystem', async (t) => {
   const f = await fixture(t);
-  const success = readRuntimeContext(f.config, f.connection.location);
-  assert.deepEqual(JSON.parse(JSON.stringify(success)), success);
-  assert.equal(success.selection?.choice, undefined);
-  assert.equal(success.selection?.identity, undefined);
-  await writeFile(f.source, '{"invalid":true}');
-  await assert.rejects(f.hook(f.config), /Unknown key/);
-  const failure = readRuntimeContext(f.config, f.connection.location);
-  assert.deepEqual(JSON.parse(JSON.stringify(failure)), failure);
-  assert.equal(failure.status, 'error');
+  const initial = await loadConfigurationContext(f.connection);
+  await mkdir(join(f.root, 'agents'));
+  await writeFile(join(f.root, 'agents/worker.md'), '---\nmode: wrong\n---\nopaque');
+  await writeFile(f.source, '{ invalid');
+  f.connection.proveFilesystem = async () => {
+    throw new Error('project proof called');
+  };
+  const inspected = await loadConfigurationContext(f.connection);
+  assert.deepEqual(inspected.runtime, initial.runtime);
+  assert.deepEqual(inspected.source, initial.source);
+  await assert.rejects(previewSelection(inspected, 'b'), /project proof called/);
 });
 test('selection A B A none default restores native fields for fresh and reused objects', async (t) => {
   const f = await fixture(t);
@@ -182,20 +243,19 @@ test('native enumeration order permits guarded recomposition without changing so
     reverse = !reverse;
   }
 });
-test('deleted saved profile publishes recoverable failure without successful revision or partial mutation', async (t) => {
+test('unknown saved profile publishes recoverable failure without successful revision or partial mutation', async (t) => {
   const f = await fixture(t);
   const context = await loadConfigurationContext(f.connection);
-  await saveSelectionGuarded(context, await previewSelection(context, 'b'));
-  await writeFile(f.source, JSON.stringify({ ...f.document, profiles: { a: f.document.profiles.a } }));
+  await saveSelection(context.selection, 'deleted', async () => {});
   f.config = f.base();
-  await assert.rejects(f.hook(f.config), /Saved profile b/);
+  await assert.rejects(f.hook(f.config), /Saved profile deleted/);
   const runtime = readRuntimeContext(f.config, f.connection.location);
   assert.equal(runtime.status, 'error');
   assert.equal(runtime.revision, undefined);
   assert.match(runtime.diagnostic!, /Composer not applied/);
   assert.equal(f.config.agent.worker.model, 'p/native');
   const recovery = await loadConfigurationContext(f.connection);
-  assert.equal(recovery.selection.choice, 'b');
+  assert.equal(recovery.selection.choice, 'deleted');
   const committed = await saveSelectionGuarded(recovery, await previewSelection(recovery, null));
   await applySavedComposition(committed, recovery.runtime, {
     assertCurrent: () => {},
@@ -211,23 +271,21 @@ test('deleted saved profile publishes recoverable failure without successful rev
 });
 test('every composition failure replaces old marker and does not claim native fallback', async (t) => {
   const f = await fixture(t);
-  await writeFile(f.source, '{"invalid":true}');
-  await assert.rejects(f.hook(f.config), /Unknown key/);
+  const context = await loadConfigurationContext(f.connection);
+  await saveSelection(context.selection, 'missing', async () => {});
+  await assert.rejects(f.hook(f.config), /Saved profile missing/);
   const marker = readRuntimeContext(f.config, f.connection.location);
   assert.equal(marker.status, 'error');
   assert.equal(marker.revision, undefined);
   assert.equal(f.config.agent.worker.model, 'p/a');
   assert.doesNotMatch(marker.diagnostic!, /fallback/);
 });
-for (const mutation of ['source', 'state', 'metadata', 'json', 'connection'] as const) {
+for (const mutation of ['state', 'metadata', 'json', 'connection'] as const) {
   test(`review guards reject ${mutation} changes across catalog await before writes`, async (t) => {
     const f = await fixture(t);
     const context = await loadConfigurationContext(f.connection);
     await assert.rejects(
       previewSelection(context, 'b', async () => {
-        if (mutation === 'source') {
-          await writeFile(f.source, JSON.stringify(f.document) + '\n');
-        }
         if (mutation === 'state') {
           const other = await loadConfigurationContext(f.connection);
           await saveSelectionGuarded(other, await previewSelection(other, null));
@@ -355,7 +413,7 @@ test('runtime replacement during idle check rejects before disposal and preview 
 });
 
 for (const boundary of ['save', 'dispose'] as const) {
-  for (const mutation of ['source', 'metadata', 'json'] as const) {
+  for (const mutation of ['metadata', 'json'] as const) {
     test(`${boundary} rejects ${mutation} changes during the final runtime-config await`, async (t) => {
       const f = await fixture(t);
       const context = await loadConfigurationContext(f.connection);
@@ -364,9 +422,7 @@ for (const boundary of ['save', 'dispose'] as const) {
       let calls = 0;
       f.connection.config = async () => {
         if (++calls === 2) {
-          if (mutation === 'source') {
-            await writeFile(f.source, JSON.stringify({ profiles: { b: f.document.profiles.b } }));
-          } else if (mutation === 'metadata') {
+          if (mutation === 'metadata') {
             await mkdir(join(f.root, 'agents'));
             await writeFile(join(f.root, 'agents/worker.md'), '---\n---\nnew native body');
           } else {
@@ -376,11 +432,7 @@ for (const boundary of ['save', 'dispose'] as const) {
         return f.config;
       };
       const diagnostic =
-        mutation === 'source'
-          ? /Composition source changed/
-          : mutation === 'metadata'
-            ? /Native agent metadata changed/
-            : /Native JSON configuration changed/;
+        mutation === 'metadata' ? /Native agent metadata changed/ : /Native JSON configuration changed/;
       if (committed === undefined) {
         await assert.rejects(saveSelectionGuarded(context, preview), diagnostic);
         await assert.rejects(readFile(context.selection.path), /ENOENT/);
@@ -406,7 +458,7 @@ for (const boundary of ['save', 'dispose'] as const) {
   }
 }
 
-test("committed reload never adopts another normal writer's selection", async (t) => {
+test("committed reread never adopts another normal writer's selection", async (t) => {
   const f = await fixture(t);
   const context = await loadConfigurationContext(f.connection);
   const preview = await previewSelection(context, 'a');
@@ -431,7 +483,7 @@ test("committed reload never adopts another normal writer's selection", async (t
   assert.equal(f.config.agent.worker.model, 'p/a', 'the other selection was never applied by this editor');
 });
 
-test('committed reload preserves the reviewed source instead of adopting a changed definition', async (t) => {
+test('committed reread preserves the reviewed source instead of adopting a changed definition', async (t) => {
   const f = await fixture(t);
   const context = await loadConfigurationContext(f.connection);
   const preview = await previewSelection(context, 'a');
@@ -442,43 +494,43 @@ test('committed reload preserves the reviewed source instead of adopting a chang
     }
     return f.config;
   };
-  await assert.rejects(saveSelectionGuarded(context, preview), /Selection saved and pending.*changed/);
+  const committed = await saveSelectionGuarded(context, preview);
+  assert.deepEqual(committed.source, context.source);
   const current = await readSelection(context.runtime.selectionEnvironment, { root: f.root, baseFile: f.source });
   assert.equal(current.choice, 'a');
   assert.equal(current.revision, 1);
   assert.equal(f.config.agent.worker.model, 'p/a');
 });
 
-test('external native edits reload from a fresh baseline without writing their bytes', async (t) => {
+test('native edits refuse profile application before disposal while inspection remains loaded', async (t) => {
   const f = await fixture(t);
-  const { reloadSavedConfiguration } = await import('../src/config-composer/composition/apply.ts');
-  await writeFile(join(f.root, 'opencode.json'), '{"small_model":"p/new"}');
   const context = await loadConfigurationContext(f.connection);
-  const previous = context.runtime.id;
-  const revision = await reloadSavedConfiguration(context, {
-    assertCurrent: f.connection.assertCurrent,
-    activity: async () => ({}),
-    dispose: async () => {},
-    refresh: async () => {
-      f.config = Object.assign(f.base(), { small_model: 'p/new' });
-      await f.hook(f.config);
-      return readRuntimeContext(f.config, f.connection.location);
-    },
-  });
-  assert.notEqual(readRuntimeContext(f.config, f.connection.location).id, previous);
-  assert.deepEqual(revision, readRuntimeContext(f.config, f.connection.location).revision);
-  assert.equal(await readFile(join(f.root, 'opencode.json'), 'utf8'), '{"small_model":"p/new"}');
+  await writeFile(join(f.root, 'opencode.json'), '{"small_model":"p/new"}');
+  const inspected = await loadConfigurationContext(f.connection);
+  assert.deepEqual(inspected.runtime, context.runtime);
+  let disposed = 0;
+  await assert.rejects(
+    applySavedComposition(context, context.runtime, {
+      assertCurrent: f.connection.assertCurrent,
+      activity: async () => ({}),
+      dispose: async () => {
+        disposed++;
+      },
+      refresh: async () => context.runtime,
+    }),
+    /Restart the OpenCode server process/,
+  );
+  assert.equal(disposed, 0);
 });
-test('global JSON change refuses reload with zero disposal even after another native rebootstrap', async (t) => {
+test('global JSON change refuses apply with zero disposal even after another native rebootstrap', async (t) => {
   const f = await fixture(t);
-  const { reloadSavedConfiguration } = await import('../src/config-composer/composition/apply.ts');
   await mkdir(join(f.root, 'opencode'), { recursive: true });
   await writeFile(join(f.root, 'opencode/opencode.json'), '{}');
   await f.hook(f.config);
   const context = await loadConfigurationContext(f.connection);
   let disposed = 0;
   await assert.rejects(
-    reloadSavedConfiguration(context, {
+    applySavedComposition(context, context.runtime, {
       assertCurrent: f.connection.assertCurrent,
       activity: async () => ({}),
       dispose: async () => {
@@ -490,19 +542,15 @@ test('global JSON change refuses reload with zero disposal even after another na
   );
   assert.equal(disposed, 0);
 });
-for (const mutation of ['source', 'state', 'native', 'connection', 'busy'] as const) {
-  test(`reload rejects ${mutation} during activity await before disposal`, async (t) => {
+for (const mutation of ['state', 'native', 'connection', 'busy'] as const) {
+  test(`profile apply rejects ${mutation} during activity await before disposal`, async (t) => {
     const f = await fixture(t);
-    const { reloadSavedConfiguration } = await import('../src/config-composer/composition/apply.ts');
     const context = await loadConfigurationContext(f.connection);
     let disposed = 0;
     await assert.rejects(
-      reloadSavedConfiguration(context, {
+      applySavedComposition(context, context.runtime, {
         assertCurrent: f.connection.assertCurrent,
         activity: async (): Promise<Record<string, { type: string }>> => {
-          if (mutation === 'source') {
-            await writeFile(f.source, '{}');
-          }
           if (mutation === 'state') {
             await saveSelection(context.selection, null, async () => {});
           }
@@ -531,22 +579,18 @@ test('profile apply also refuses a cached-global mismatch after rebootstrap', as
   const context = await loadConfigurationContext(f.connection);
   await assert.rejects(previewSelection(context, 'b'), /Restart the OpenCode server/);
 });
-for (const mutation of ['source', 'state', 'native', 'connection'] as const) {
-  test(`reload refuses ${mutation} changes after new registration`, async (t) => {
+for (const mutation of ['state', 'native', 'connection'] as const) {
+  test(`profile apply refuses ${mutation} changes after new registration`, async (t) => {
     const f = await fixture(t);
-    const { reloadSavedConfiguration } = await import('../src/config-composer/composition/apply.ts');
     const context = await loadConfigurationContext(f.connection);
     await assert.rejects(
-      reloadSavedConfiguration(context, {
+      applySavedComposition(context, context.runtime, {
         assertCurrent: f.connection.assertCurrent,
         activity: async () => ({}),
         dispose: async () => {},
         refresh: async () => {
           await f.hook(f.config);
           const marker = readRuntimeContext(f.config, f.connection.location);
-          if (mutation === 'source') {
-            await writeFile(f.source, '{}');
-          }
           if (mutation === 'state') {
             await writeFile(context.selection.path, '{}');
           }
@@ -563,9 +607,8 @@ for (const mutation of ['source', 'state', 'native', 'connection'] as const) {
     );
   });
 }
-test('reload waits through old and missing markers but propagates actual host errors', async (t) => {
+test('profile apply waits through old and missing markers but propagates actual host errors', async (t) => {
   const f = await fixture(t);
-  const { reloadSavedConfiguration } = await import('../src/config-composer/composition/apply.ts');
   const { SettingsError } = await import('../src/config-composer/settings.ts');
   const context = await loadConfigurationContext(f.connection);
   let calls = 0;
@@ -584,11 +627,11 @@ test('reload waits through old and missing markers but propagates actual host er
       return readRuntimeContext(f.config, f.connection.location);
     },
   };
-  await reloadSavedConfiguration(context, port);
+  await applySavedComposition(context, context.runtime, port);
   assert.equal(calls, 3);
   const next = await loadConfigurationContext(f.connection);
   await assert.rejects(
-    reloadSavedConfiguration(next, {
+    applySavedComposition(next, next.runtime, {
       ...port,
       refresh: async () => {
         throw new Error('actual host read error');
@@ -616,15 +659,13 @@ test('saved selection apply waits for bootstrap instead of rejecting an old regi
   });
   assert.equal(samples, 2);
 });
-test('native host normalization after reload remains unconfirmed and preserves changed bytes', async (t) => {
+test('native host normalization after apply remains unconfirmed and preserves changed bytes', async (t) => {
   const f = await fixture(t);
-  const { reloadSavedConfiguration } = await import('../src/config-composer/composition/apply.ts');
   const path = join(f.root, 'opencode.json');
-  await writeFile(path, '{}');
   const context = await loadConfigurationContext(f.connection);
   const normalized = '{"$schema":"https://opencode.ai/config.json"}';
   await assert.rejects(
-    reloadSavedConfiguration(context, {
+    applySavedComposition(context, context.runtime, {
       assertCurrent: f.connection.assertCurrent,
       activity: async () => ({}),
       dispose: async () => {},
@@ -634,18 +675,16 @@ test('native host normalization after reload remains unconfirmed and preserves c
         return readRuntimeContext(f.config, f.connection.location);
       },
     }),
-    /Native inputs changed during reload/,
+    /Native JSON configuration changed/,
   );
   assert.equal(await readFile(path, 'utf8'), normalized);
 });
 test('global cache change during idle check remains restart-required with zero disposal', async (t) => {
   const f = await fixture(t);
-  const { reloadSavedConfiguration } = await import('../src/config-composer/composition/apply.ts');
-  const { RestartRequiredError } = await import('../src/config-composer/settings.ts');
   const context = await loadConfigurationContext(f.connection);
   let disposed = 0;
   await assert.rejects(
-    reloadSavedConfiguration(context, {
+    applySavedComposition(context, context.runtime, {
       assertCurrent: f.connection.assertCurrent,
       activity: async () => {
         await writeFile(join(f.root, 'opencode/opencode.json'), '{}');
@@ -656,10 +695,43 @@ test('global cache change during idle check remains restart-required with zero d
       },
       refresh: async () => context.runtime,
     }),
-    (error: unknown) =>
-      typeof RestartRequiredError === 'function' &&
-      error instanceof RestartRequiredError &&
-      error.message.includes('Restart the OpenCode server'),
+    /Restart the OpenCode server/,
   );
   assert.equal(disposed, 0);
 });
+
+for (const field of ['definitionId', 'selectionLocator', 'selection'] as const) {
+  test(`profile application rejects a replacement ${field} after disposal`, async (t) => {
+    const f = await fixture(t);
+    const context = await loadConfigurationContext(f.connection);
+    const saved = await saveSelectionGuarded(context, await previewSelection(context, 'b'));
+    const { publishRuntime } = await import('../src/config-composer/composition/runtime-baseline.ts');
+    await assert.rejects(
+      applySavedComposition(saved, saved.runtime, {
+        assertCurrent: f.connection.assertCurrent,
+        activity: async () => ({}),
+        dispose: async () => {},
+        refresh: async () => {
+          await f.hook(f.config);
+          const marker = readRuntimeContext(f.config, f.connection.location);
+          if (field === 'definitionId') {
+            marker.definitionId = 'replacement';
+          }
+          if (field === 'selectionLocator') {
+            marker.selectionLocator.root = join(f.root, 'other');
+          }
+          if (field === 'selection') {
+            marker.selection = { ...marker.selection!, choice: 'a' };
+          }
+          publishRuntime(f.config, {}, marker);
+          return readRuntimeContext(f.config, f.connection.location);
+        },
+      }),
+      /did not confirm/,
+    );
+    assert.equal(
+      (await readSelection(saved.runtime.selectionEnvironment, { root: f.root, baseFile: f.source })).choice,
+      'b',
+    );
+  });
+}

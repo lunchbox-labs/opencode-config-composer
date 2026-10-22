@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { type NativeFrontmatterContext, nativeAgentSourceRoots, readNativeAgentFrontmatter } from '../frontmatter.ts';
 import type { NativeAuthority, ResolvedCandidate } from './document-types.ts';
-import type { Source } from './sources.ts';
+import type { LoadedSource } from './sources.ts';
 import type { SelectionSnapshot } from './selection-state.ts';
 export interface CompositionRevision {
   sources: string;
@@ -144,12 +144,12 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
   };
 }
 export function compositionRevision(
-  source: Source,
+  source: LoadedSource,
   state: SelectionSnapshot,
   candidate: ResolvedCandidate,
 ): CompositionRevision {
   return {
-    sources: digest([source.path, source.canonicalPath, source.text, state.text ?? null]),
+    sources: digest([source.path, source.canonicalPath, source.fingerprint, state.text ?? null]),
     effective: digest({
       ...candidate,
       agent: Object.fromEntries(

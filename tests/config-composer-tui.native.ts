@@ -18,7 +18,7 @@ test(
       'Configuration',
       'Shared groups',
       'Profile definitions',
-      'Reload configurations',
+      'Runtime status and sources',
     );
     await terminal.choose('Retained session selection', 'Existing sessions can retain', '/models', '/variants');
     assert.equal(f.host.requests.length, 0);

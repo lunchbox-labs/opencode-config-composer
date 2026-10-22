@@ -24,8 +24,10 @@ assert.equal(server.id, 'config-composer');
 assert.equal(tui.id, server.id);
 assert.equal(server.tui, undefined);
 assert.equal(tui.server, undefined);
-for (const options of [{ groups: {} }, { modelPresets: {} }]) {
-  await assert.rejects(server.server({}, options), /only configFile/);
+for (const [index, options] of [{ groups: {} }, { modelPresets: {} }].entries()) {
+  const location = join(process.cwd(), `invalid-options-${index}`);
+  const hooks = await server.server({ directory: location, worktree: location }, options);
+  await assert.rejects(hooks.config({}), /only configFile/);
 }
 for (const path of [
   'settings',
@@ -57,7 +59,6 @@ await hooks.config(config);
 assert.equal(config.agent.worker.model, 'fixture/model');
 assert.equal(config.agent.worker.temperature, 0);
 assert.equal(config.agent.worker.prompt, 'PACKAGED_NATIVE_BODY');
-await assert.rejects(server.server({}, { reloadToken: 'removed' }), /only configFile/);
 
 const commands = [];
 let dispose;
@@ -81,7 +82,7 @@ await tui.tui({
 });
 assert.deepEqual(
   commands.map((command) => command.slashName),
-  ['profiles', 'view-configs', 'reload-configs'],
+  ['profiles', 'view-configs'],
 );
 assert.ok(commands.every((command) => !command.slashAliases?.includes('compose')));
 assert.equal(typeof dispose, 'function');

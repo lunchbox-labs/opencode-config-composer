@@ -171,7 +171,7 @@ for (const order of ['config-first', 'prompt-first']) {
       let previous = await verify('a');
       for (const choice of ['a', 'b', 'a', null, undefined] as const) {
         const saved = await f.editor.select(choice);
-        const revision = await f.editor.reload(saved);
+        const revision = await f.editor.applySelection(saved);
         assert.deepEqual((await f.editor.runtime()).revision, revision);
         const ids = await verify(choice === undefined ? 'a' : choice);
         assert.notEqual(ids.config, previous.config);

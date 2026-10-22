@@ -1,23 +1,15 @@
-import { dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { type CatalogModel, SettingsError, validateChoice } from './settings.ts';
-import { type Source, loadSource } from './composition/sources.ts';
+import type { LoadedSource } from './composition/sources.ts';
 import {
   type SelectionSnapshot,
-  readSelection,
+  readSelectionAt,
   saveSelection,
-  verifySelection,
   verifySelectionProof,
   withSelectionLock,
 } from './composition/selection-state.ts';
 import { type AttestedRuntime, type RuntimeLocation, readRuntimeContext } from './composition/runtime-baseline.ts';
-import {
-  type CompositionRevision,
-  type NativeObservation,
-  compositionRevision,
-  digest,
-  observeNative,
-} from './composition/revision.ts';
+import { type CompositionRevision, compositionRevision, digest, observeNative } from './composition/revision.ts';
 import { resolveComposition } from './composition/runtime.ts';
 import type { ResolvedCandidate, Selection } from './composition/document-types.ts';
 export interface ConfigurationConnection {
@@ -29,51 +21,39 @@ export interface ConfigurationConnection {
 export interface ConfigurationContext {
   connection: ConfigurationConnection;
   runtime: AttestedRuntime;
-  source: Source;
+  source: LoadedSource;
   selection: SelectionSnapshot;
-  disk: NativeObservation;
 }
 export interface Preview {
   choice: Selection;
   candidate: ResolvedCandidate;
   context: ConfigurationContext;
 }
-export const metadataChanged = 'Native agent metadata changed. Use /reload-configs, then review again.';
-export const jsonChanged =
-  'Native JSON configuration changed. Use /reload-configs, then review again. Global native JSON changes require a server restart.';
+export const metadataChanged = 'Native agent metadata changed. Restart the OpenCode server process, then review again.';
+export const jsonChanged = 'Native JSON configuration changed. Restart the OpenCode server process, then review again.';
 export async function loadConfigurationContext(connection: ConfigurationConnection): Promise<ConfigurationContext> {
   connection.assertCurrent();
-  await connection.proveFilesystem();
   const runtime = readRuntimeContext(await connection.config(), connection.location);
   await verifySelectionProof(runtime.selectionEnvironment);
-  const source = await loadSource(runtime.options, runtime.configurationDirectory);
-  const selection = await readSelection(runtime.selectionEnvironment, {
-    root: runtime.location.root,
-    baseFile: source.canonicalPath,
-  });
-  const disk = await observeNative(runtime.observation.context);
+  const source = runtime.source;
+  const selection = await readSelectionAt(runtime.selectionEnvironment, runtime.selectionLocator);
   connection.assertCurrent();
-  return { connection, runtime, source, selection, disk };
+  return { connection, runtime, source, selection };
 }
-export async function verifySavedInputs(context: ConfigurationContext): Promise<void> {
-  const { connection, runtime, source, selection } = context;
+async function verifySavedInputs(context: ConfigurationContext): Promise<void> {
+  const { connection, runtime, selection } = context;
   connection.assertCurrent();
   await verifySelectionProof(runtime.selectionEnvironment);
-  const current = await loadSource(source.explicit ? { configFile: source.path } : {}, dirname(source.path));
-  if (
-    current.canonicalPath !== source.canonicalPath ||
-    current.identity !== source.identity ||
-    current.text !== source.text ||
-    digest(current.document) !== digest(source.document)
-  ) {
-    throw new SettingsError('Composition source changed. Reopen Config Composer.');
+  const current = await readSelectionAt(runtime.selectionEnvironment, runtime.selectionLocator);
+  if (!isDeepStrictEqual(current, selection)) {
+    throw new SettingsError('Profile selection changed. Reopen Config Composer.');
   }
-  await verifySelection(selection);
   connection.assertCurrent();
 }
 async function verifyInputs(context: ConfigurationContext): Promise<void> {
   await verifySavedInputs(context);
   const { connection, runtime } = context;
+  await connection.proveFilesystem();
   let observed;
   try {
     observed = await observeNative(runtime.observation.context);
@@ -90,7 +70,7 @@ async function verifyInputs(context: ConfigurationContext): Promise<void> {
     throw new SettingsError(jsonChanged);
   }
   if (observed.commands !== runtime.observation.commands) {
-    throw new SettingsError('Native command Markdown changed. Use /reload-configs, then review again.');
+    throw new SettingsError('Native command Markdown changed. Restart the OpenCode server process, then review again.');
   }
   connection.assertCurrent();
 }
@@ -101,6 +81,9 @@ export async function verifyContext(context: ConfigurationContext, checkRuntime 
     const currentRuntime = readRuntimeContext(await connection.config(), connection.location);
     if (
       currentRuntime.id !== runtime.id ||
+      currentRuntime.definitionId !== runtime.definitionId ||
+      !isDeepStrictEqual(currentRuntime.source, runtime.source) ||
+      !isDeepStrictEqual(currentRuntime.selectionLocator, runtime.selectionLocator) ||
       digest(currentRuntime.native) !== digest(runtime.native) ||
       digest(currentRuntime.observation) !== digest(runtime.observation)
     ) {
@@ -169,7 +152,8 @@ export async function saveSelectionGuarded(
     const committed = await loadConfigurationContext(context.connection);
     if (
       !isDeepStrictEqual(committed.selection, persisted) ||
-      !isDeepStrictEqual(committed.source, context.source) ||
+      committed.runtime.definitionId !== context.runtime.definitionId ||
+      !isDeepStrictEqual(committed.runtime.selectionLocator, context.runtime.selectionLocator) ||
       !isDeepStrictEqual(committed.runtime, context.runtime)
     ) {
       throw new SettingsError('Saved selection or reviewed inputs changed. Review again.');
@@ -178,7 +162,7 @@ export async function saveSelectionGuarded(
     return committed;
   } catch (error) {
     throw new SettingsError(
-      `Selection saved and pending. Could not reload committed context: ${error instanceof Error ? error.message : 'Reopen Config Composer.'}`,
+      `Selection saved and pending. Could not confirm committed context: ${error instanceof Error ? error.message : 'Reopen Config Composer.'}`,
       { cause: error },
     );
   }

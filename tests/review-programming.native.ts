@@ -15,7 +15,7 @@ test(
       ),
     );
     await f.host.start();
-    await f.editor.reload(await f.editor.select('review'));
+    await f.editor.applySelection(await f.editor.select('review'));
     const config = await f.host.api<{ agent: { plan: { temperature: number }; explore: { temperature: number } } }>(
       '/config',
     );
@@ -110,13 +110,14 @@ test('all shipped examples select and reset settings on existing native agents',
   await f.host.start();
   const nativeNames = new Set((await f.host.api<{ name: string }[]>('/agent')).map((agent) => agent.name));
   for (const example of examples) {
-    await f.editor.reload(await f.editor.select(null));
+    await f.editor.applySelection(await f.editor.select(null));
     const text = await readFile(new URL(example.path, import.meta.url), 'utf8');
     parseConfiguration(text);
     await writeFile(f.paths.shared, text);
-    await f.host.api('/instance/dispose', {});
+    await f.host.stop();
+    await f.host.start();
     for (const choice of [undefined, ...Object.keys(example.profiles), null]) {
-      await f.editor.reload(await f.editor.select(choice));
+      await f.editor.applySelection(await f.editor.select(choice));
       const selected = choice === undefined ? (example.defaultProfile ?? null) : choice;
       assert.equal((await f.editor.runtime()).candidate?.profile, selected);
       const expected = selected === null ? example.shared : example.profiles[selected];

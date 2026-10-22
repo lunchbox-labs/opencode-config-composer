@@ -48,7 +48,7 @@ export async function installedEditor(host: Awaited<ReturnType<typeof nativeHarn
     const conn = await connection();
     return baseline.readRuntimeContext(await conn.config(), conn.location);
   };
-  const reload = async (saved?: Storage.ConfigurationContext, overrides: Partial<Apply.ApplyPort> = {}) => {
+  const applySelection = async (saved?: Storage.ConfigurationContext, overrides: Partial<Apply.ApplyPort> = {}) => {
     const committed = saved ?? (await context());
     return apply.applySavedComposition(committed, committed.runtime, {
       assertCurrent: () => committed.connection.assertCurrent(),
@@ -62,28 +62,10 @@ export async function installedEditor(host: Awaited<ReturnType<typeof nativeHarn
       ...overrides,
     });
   };
-  const reloadConfiguration = async (
-    saved?: Storage.ConfigurationContext,
-    overrides: Partial<Apply.ApplyPort> = {},
-  ) => {
-    saved ??= await context();
-    const reviewed = saved;
-    return apply.reloadSavedConfiguration(reviewed, {
-      assertCurrent: () => reviewed.connection.assertCurrent(),
-      activity: () => host.api('/session/status'),
-      dispose: async () => assert.equal(await host.api('/instance/dispose', {}), true),
-      refresh: async () => {
-        const config = await host.api('/config');
-        await Promise.all([host.api('/config/providers'), host.api('/agent'), host.api('/command')]);
-        return baseline.readRuntimeContext(config, reviewed.connection.location);
-      },
-      ...overrides,
-    });
-  };
   const select = async (choice: Selection) => {
     const current = await context();
     const preview = await storage.previewSelection(current, choice);
     return storage.saveSelectionGuarded(current, preview);
   };
-  return { storage, context, runtime, reload, reloadConfiguration, select };
+  return { storage, context, runtime, applySelection, select };
 }

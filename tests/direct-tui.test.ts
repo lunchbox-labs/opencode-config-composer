@@ -229,11 +229,11 @@ async function fixture(t: TestContext, pin = '', common: Record<string, unknown>
     read: () => readFile(source, 'utf8'),
   };
 }
-test('only profiles, view-configs and reload-configs commands register; profiles open directly', async (t) => {
+test('only profiles and view-configs commands register; profiles open directly', async (t) => {
   const f = await fixture(t);
   assert.deepEqual(
     f.commands.map((item) => item.slashName),
-    ['profiles', 'view-configs', 'reload-configs'],
+    ['profiles', 'view-configs'],
   );
   assert.deepEqual(
     f.current?.options?.map((item) => item.title),
@@ -253,6 +253,15 @@ test('profile preview confirms selection and writes no definition bytes', async 
   assert.equal(f.config.agent.worker.model, 'p/a');
   assert.equal(await f.read(), before);
 });
+test('inspection opens untouched builtins and explains native inheritance', async (t) => {
+  const f = await fixture(t);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent build', 'agent build');
+  assert.equal(f.current?.options?.find((option) => option.title === 'model')?.description, 'Inherit');
+  await f.choose('model', 'agent build · model');
+  assert.match(await f.detailText(), /No authored value at this level\. Native inheritance remains host-owned\./);
+  assert.equal(f.disposed, 0);
+});
 test('inspection exposes shared groups and inactive profiles without edit actions', async (t) => {
   const f = await fixture(t);
   const before = await f.read();
@@ -268,17 +277,17 @@ test('inspection exposes shared groups and inactive profiles without edit action
   assert.equal(await f.read(), before);
   assert.equal(f.disposed, 0);
 });
-test('stale native pins are shown as on-disk pending without predicting effective values', async (t) => {
+test('inspection keeps loaded raw pins after native file edits', async (t) => {
   const f = await fixture(t, 'model: p/native');
   await writeFile(join(f.root, 'agents/worker.md'), '---\nmodel: p/b\n---\nNEW BODY');
   await f.open('view-configs', 'Configuration');
   await f.choose('agent worker', 'agent worker');
   await f.choose('model', 'agent worker · model');
   const details = await f.detailText();
-  assert.match(details, /awaiting reload/);
-  assert.match(details, /p\/b/);
+  assert.match(details, /Pinned by frontmatter/);
+  assert.doesNotMatch(details, /p\/b|awaiting reload/);
   assert.match(details, /Verified applied instance: "p\/native"/);
-  assert.doesNotMatch(f.current?.message ?? '', /Configured\nmodel:/);
+  assert.match(details, /Configured\nmodel:/);
 });
 for (const pin of [
   'model: p/native',
@@ -337,101 +346,61 @@ test('deleted saved profile can be recovered through Shared only', async (t) => 
   await f.confirm('Composer revision applied');
   assert.equal(readRuntimeContext(f.config, { root: f.root, directory: f.root }).selection?.choice, null);
 });
-test('malformed source reports its error and corrected external source reopens inspection', async (t) => {
+test('inspection and profile switching retain loaded definitions after malformed source edits', async (t) => {
   const f = await fixture(t);
-  const before = await f.read();
   await writeFile(f.source, '{"profiles":');
-  await f.open('view-configs', 'Config Composer');
-  assert.match(f.current?.message ?? '', /config-composer.jsonc|configuration|JSON/);
-  assert.equal(f.disposed, 0);
-  await writeFile(f.source, before);
   await f.open('view-configs', 'Configuration');
-  assert.equal(f.disposed, 0);
+  assert.notEqual(
+    f.current?.options?.some((option) => /reload/i.test(option.title)),
+    true,
+  );
+  await f.choose('Profile definitions', 'Profile definitions');
+  await f.choose('a', 'Profile a');
+  assert.match(f.current?.message ?? '', /workers/);
+  await f.reopen();
+  await f.choose('○ a', 'Apply profile selection?');
+  await f.confirm('Composer revision applied');
+  assert.equal(f.config.agent.worker.model, 'p/a');
+  assert.equal(await f.read(), '{"profiles":');
 });
-test('inspection marks source-only changes pending even when effective values are equal', async (t) => {
+test('inspection ignores source-only edits without pending notices', async (t) => {
   const f = await fixture(t);
   await writeFile(f.source, (await f.read()) + '\n');
   await f.open('view-configs', 'Configuration');
   await f.choose('Runtime status and sources', 'Runtime status and sources');
-  assert.match(await f.detailText(), /Saved configuration pending/);
+  assert.match(await f.detailText(), /Saved selection matches verified applied instance/);
+  assert.equal(f.toasts.length, 0);
 });
-test('inspection reload menu applies external source without changing its bytes', async (t) => {
+test('requested profile switch rejects native edits without disposal or proactive warnings', async (t) => {
   const f = await fixture(t);
-  const document = JSON.parse(await f.read()) as { agent?: object };
-  document.agent = { helper: { top_p: 0.75 } };
-  const text = JSON.stringify(document);
-  await writeFile(f.source, text);
+  await writeFile(join(f.root, 'opencode/opencode.json'), '{}');
   await f.open('view-configs', 'Configuration');
-  await f.choose('Reload configurations', 'Configuration reloaded');
-  assert.equal(f.disposed, 1);
-  assert.equal(await f.read(), text);
-});
-for (const entry of ['command', 'inspection'] as const) {
-  test(`restart-required global JSON edit warns from ${entry} without disposal or success`, async (t) => {
-    const f = await fixture(t);
-    await writeFile(join(f.root, 'opencode/opencode.json'), '{}');
-    if (entry === 'command') {
-      await f.open('reload-configs', 'Config Composer');
-    } else {
-      await f.open('view-configs', 'Configuration');
-      await f.choose('Reload configurations', 'Config Composer');
-    }
-    assert.deepEqual(f.toasts, [
-      { variant: 'warning', title: 'Config Composer', message: 'Restart OpenCode to apply these changes.' },
-    ]);
-    assert.match(f.current?.message ?? '', /Native global JSON.*Restart the OpenCode server process/);
-    assert.equal(f.disposed, 0);
-    assert.notEqual(f.current?.title, 'Configuration reloaded');
-  });
-}
-test('missing global cache baseline warns without disposal', async (t) => {
-  const f = await fixture(t);
-  const { readRuntimeContext, publishRuntime } = await import('../src/config-composer/composition/runtime-baseline.ts');
-  const runtime = readRuntimeContext(f.config, { root: f.root, directory: f.root });
-  delete runtime.globalJsonBaseline;
-  publishRuntime(f.config, {}, runtime);
-  await f.open('reload-configs', 'Config Composer');
-  assert.equal(f.toasts[0]?.variant, 'warning');
-  assert.match(f.toasts[0]?.message ?? '', /Restart OpenCode/);
-  assert.match(f.current?.message ?? '', /baseline is unavailable/);
+  assert.equal(f.toasts.length, 0);
+  await f.reopen();
+  await f.choose('○ a', 'Config Composer');
+  assert.match(f.current?.message ?? '', /Native global JSON.*Restart the OpenCode server process/);
+  assert.equal(f.toasts.length, 0);
   assert.equal(f.disposed, 0);
 });
-for (const failure of ['busy', 'invalid', 'not-confirmed'] as const) {
-  test(`${failure} reload keeps its detailed classification without a restart toast or success`, async (t) => {
-    const f = await fixture(t);
-    if (failure === 'busy') {
-      f.setBusy();
-    }
-    if (failure === 'invalid') {
-      await writeFile(f.source, '{"invalid":true}');
-    }
-    if (failure === 'not-confirmed') {
-      const original = f.api.client.instance.dispose.bind(f.api.client.instance);
-      t.mock.method(f.api.client.instance, 'dispose', async (...args: Parameters<typeof original>) => {
-        const result = await original(...args);
-        const { readRuntimeContext, publishRuntime } =
-          await import('../src/config-composer/composition/runtime-baseline.ts');
-        const runtime = readRuntimeContext(f.config, { root: f.root, directory: f.root });
-        publishRuntime(
-          f.config,
-          {},
-          { ...runtime, revision: { sources: runtime.revision!.sources, effective: '0'.repeat(64) } },
-        );
-        return result;
-      });
-    }
-    await f.open('reload-configs', 'Config Composer');
-    assert.equal(f.toasts.length, 0);
-    assert.notEqual(f.current?.title, 'Configuration reloaded');
-    assert.match(
-      f.current?.message ?? '',
-      failure === 'busy' ? /still running/ : failure === 'invalid' ? /Unknown key/ : /Reload is not confirmed/,
-    );
-    assert.equal(f.disposed, failure === 'not-confirmed' ? 1 : 0);
+test('unconfirmed profile application remains saved pending', async (t) => {
+  const f = await fixture(t);
+  const original = f.api.client.instance.dispose.bind(f.api.client.instance);
+  t.mock.method(f.api.client.instance, 'dispose', async (...args: Parameters<typeof original>) => {
+    const result = await original(...args);
+    const { readRuntimeContext, publishRuntime } =
+      await import('../src/config-composer/composition/runtime-baseline.ts');
+    const runtime = readRuntimeContext(f.config, { root: f.root, directory: f.root });
+    publishRuntime(f.config, {}, { ...runtime, definitionId: 'replacement' });
+    return result;
   });
-}
+  await f.choose('○ a', 'Apply profile selection?');
+  await f.confirm('Saved; not applied');
+  await f.choose('Reason', 'Saved; not applied');
+  assert.match(await f.detailText(), /did not confirm/);
+  assert.equal(f.disposed, 1);
+});
 for (const replacement of ['route', 'client', 'lifecycle'] as const) {
-  test(`restart warning cannot appear after ${replacement} replacement`, async (t) => {
+  test(`stale inspection cannot appear after ${replacement} replacement`, async (t) => {
     const f = await fixture(t);
     const { readRuntimeContext, publishRuntime } =
       await import('../src/config-composer/composition/runtime-baseline.ts');
@@ -447,7 +416,7 @@ for (const replacement of ['route', 'client', 'lifecycle'] as const) {
       return original(...args);
     });
     f.api.ui.dialog.clear();
-    f.commands.find((command) => command.slashName === 'reload-configs')!.run();
+    f.commands.find((command) => command.slashName === 'view-configs')!.run();
     await started.promise;
     if (replacement === 'route') {
       Object.assign(f.api.route, { current: { name: 'home' } });
@@ -465,7 +434,7 @@ for (const replacement of ['route', 'client', 'lifecycle'] as const) {
     assert.equal(f.disposed, 0);
   });
 }
-test('successful explicit reload only reports applied after the new registration is attested', async (t) => {
+test('profile apply only reports applied after the new registration is attested', async (t) => {
   const f = await fixture(t);
   const original = f.api.client.instance.dispose.bind(f.api.client.instance);
   const gate = Promise.withResolvers<undefined>();
@@ -475,13 +444,13 @@ test('successful explicit reload only reports applied after the new registration
     await gate.promise;
     return original(...args);
   });
-  f.api.ui.dialog.clear();
-  f.commands.find((command) => command.slashName === 'reload-configs')!.run();
+  await f.choose('○ a', 'Apply profile selection?');
+  const confirmed = f.confirm('Composer revision applied');
   await started.promise;
-  assert.equal(f.current, undefined);
+  assert.notEqual(f.current?.title, 'Composer revision applied');
   assert.equal(f.toasts.length, 0);
   gate.resolve(undefined);
-  await f.wait('Configuration reloaded');
+  await confirmed;
   assert.equal(f.disposed, 1);
   assert.equal(f.toasts.length, 0);
 });

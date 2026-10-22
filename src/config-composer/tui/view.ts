@@ -12,14 +12,13 @@ export interface ConfigurationView {
   catalog(): Promise<CatalogModel[]>;
   choose(choice: Selection): Promise<void>;
   details(title: string, text: string): void;
-  reload(): Promise<void>;
 }
 export function roster(view: ConfigurationView, kind: 'agent' | 'command'): string[] {
   return [
     ...new Set([
       ...(kind === 'agent' ? Object.keys(builtins) : []),
       ...Object.keys(view.context.runtime.native[kind] ?? {}),
-      ...(kind === 'agent' ? Object.keys(view.context.disk.authority) : []),
+      ...(kind === 'agent' ? Object.keys(view.context.runtime.observation.authority) : []),
     ]),
   ].sort();
 }

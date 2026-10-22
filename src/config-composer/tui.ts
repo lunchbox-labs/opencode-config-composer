@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
 import { dialogNavigation } from '../tui/navigation.ts';
 import { verifySharedFilesystem } from './connection.ts';
-import { RestartRequiredError, SettingsError, catalogModels } from './settings.ts';
+import { SettingsError, catalogModels } from './settings.ts';
 import {
   type ConfigurationConnection,
   type ConfigurationContext,
@@ -14,7 +14,7 @@ import {
   verifyContext,
 } from './storage.ts';
 import { readRuntimeContext } from './composition/runtime-baseline.ts';
-import { type ApplyPort, applySavedComposition, reloadSavedConfiguration } from './composition/apply.ts';
+import { type ApplyPort, applySavedComposition } from './composition/apply.ts';
 import { sessionNotice } from './tui/running.ts';
 import { configurationErrorText, diagnosticPages, inspectionText } from './tui/configuration-error.ts';
 import { openProfiles, selectionLabel } from './tui/profile.ts';
@@ -44,13 +44,6 @@ export function registerConfiguration(api: TuiPluginApi): void {
           client === api.client &&
           route === JSON.stringify(api.route.current)
         ) {
-          if (error instanceof RestartRequiredError) {
-            api.ui.toast({
-              variant: 'warning',
-              title: 'Config Composer',
-              message: 'Restart OpenCode to apply these changes.',
-            });
-          }
           nav.alert({ title: 'Config Composer', message: configurationErrorText(error) });
         }
       })
@@ -65,6 +58,7 @@ export function registerConfiguration(api: TuiPluginApi): void {
     const worktree = api.state.path.worktree;
     const route = JSON.stringify(api.route.current);
     const root = resolve(worktree !== '' && worktree !== '/' ? worktree : directory);
+    let filesystemProof: ReturnType<typeof verifySharedFilesystem> | undefined;
     const assertCurrent = () => {
       if (
         api.client !== client ||
@@ -87,7 +81,8 @@ export function registerConfiguration(api: TuiPluginApi): void {
         return response.data;
       },
       proveFilesystem: async () => {
-        await verifySharedFilesystem(api, root, root);
+        filesystemProof ??= verifySharedFilesystem(api, root, root);
+        await filesystemProof;
         assertCurrent();
       },
     };
@@ -145,9 +140,11 @@ export function registerConfiguration(api: TuiPluginApi): void {
       },
     };
   };
-  const reloadSaved = async (context: ConfigurationContext) => {
+  const revalidateSaved = async (context: ConfigurationContext) => {
     const current = await loadConfigurationContext(context.connection);
     if (
+      current.runtime.definitionId !== context.runtime.definitionId ||
+      !isDeepStrictEqual(current.runtime.selectionLocator, context.runtime.selectionLocator) ||
       !isDeepStrictEqual(current.source, context.source) ||
       !isDeepStrictEqual(current.selection, context.selection) ||
       !isDeepStrictEqual(current.runtime.native, context.runtime.native) ||
@@ -177,7 +174,7 @@ export function registerConfiguration(api: TuiPluginApi): void {
           {
             title: 'Retry apply',
             value: 'retry',
-            description: 'Uses the saved source and choice; review external edits with /view-configs',
+            description: 'Uses the loaded definitions and saved choice',
           },
           { title: 'Close', value: 'close' },
         ],
@@ -187,7 +184,7 @@ export function registerConfiguration(api: TuiPluginApi): void {
           } else if (option.value === 'retry') {
             run(async () => {
               const current = nav.checkpoint();
-              await finish(await reloadSaved(context), current);
+              await finish(await revalidateSaved(context), current);
             });
           } else {
             nav.close();
@@ -196,7 +193,7 @@ export function registerConfiguration(api: TuiPluginApi): void {
       });
     }
   };
-  const open = async (mode: 'profiles' | 'inspect' | 'reload') => {
+  const open = async (mode: 'profiles' | 'inspect') => {
     const context = await loadConfigurationContext(connection());
     const confirm = (view: ConfigurationView, preview: Preview, title: string, destination: string) => {
       api.ui.dialog.setSize('xlarge');
@@ -292,21 +289,11 @@ export function registerConfiguration(api: TuiPluginApi): void {
           confirm(view, preview, 'Apply profile selection?', 'Profile selection');
         }
       },
-      reload: async () => {
-        const checkpoint = nav.checkpoint();
-        await reloadSavedConfiguration(context, port(context));
-        if (checkpoint()) {
-          nav.reset();
-          nav.alert({ title: 'Configuration reloaded', message: sessionNotice });
-        }
-      },
     };
     if (mode === 'profiles') {
       openProfiles(view);
-    } else if (mode === 'inspect') {
-      openEffective(view);
     } else {
-      await view.reload();
+      openEffective(view);
     }
   };
   const unregister = api.keymap.registerLayer({
@@ -326,14 +313,6 @@ export function registerConfiguration(api: TuiPluginApi): void {
         namespace: 'palette',
         slashName: 'view-configs',
         run: () => run(() => open('inspect')),
-      },
-      {
-        name: 'config-composer.reload',
-        title: 'Reload configuration',
-        category: 'Config',
-        namespace: 'palette',
-        slashName: 'reload-configs',
-        run: () => run(() => open('reload')),
       },
     ],
   });

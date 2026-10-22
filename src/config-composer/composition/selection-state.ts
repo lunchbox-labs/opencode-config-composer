@@ -172,21 +172,53 @@ async function observe(path: string): Promise<SelectionSnapshot> {
   }
 }
 
+export interface SelectionLocator {
+  root: string;
+  baseFile: string;
+  path: string;
+}
+function selectionPath(directory: string, identity: { root: string; baseFile: string }): string {
+  const key = createHash('sha256')
+    .update(JSON.stringify([identity.root, identity.baseFile]))
+    .digest('hex');
+  return join(directory, 'config-composer', 'v2', 'worktrees', `${key}.json`);
+}
+export async function selectionLocator(
+  environment: SelectionEnvironment,
+  identity: { root: string; baseFile: string },
+): Promise<SelectionLocator> {
+  const root = await canonical(resolve(identity.root));
+  const baseFile = identity.baseFile;
+  const directory = await canonical(resolve(environment.stateDirectory));
+  return { root, baseFile, path: selectionPath(directory, { root, baseFile }) };
+}
+/** The source/worktree binding is captured at startup; only the state filesystem stays live. */
+export async function readSelectionAt(
+  environment: SelectionEnvironment,
+  locator: SelectionLocator,
+): Promise<SelectionSnapshot> {
+  if (
+    !isAbsolute(environment.stateDirectory) ||
+    !/^[a-z0-9-]+$/i.test(environment.lifetime) ||
+    !isAbsolute(locator.root) ||
+    !isAbsolute(locator.baseFile)
+  ) {
+    throw new SettingsError('Invalid OpenCode selection state location.');
+  }
+  const directory = await canonical(resolve(environment.stateDirectory));
+  if (selectionPath(directory, locator) !== locator.path) {
+    throw new SettingsError('Selection state directory changed identity. Reopen Config Composer.');
+  }
+  return observe(locator.path);
+}
 export async function readSelection(
   environment: SelectionEnvironment,
   identity: { root: string; baseFile: string },
 ): Promise<SelectionSnapshot> {
-  if (!isAbsolute(environment.stateDirectory) || !/^[a-z0-9-]+$/i.test(environment.lifetime)) {
-    throw new SettingsError('Invalid OpenCode selection state location.');
-  }
-  const root = await canonical(resolve(identity.root));
-  const base = await canonical(resolve(identity.baseFile));
-  const key = createHash('sha256')
-    .update(JSON.stringify([root, base]))
-    .digest('hex');
-  const directory = await canonical(resolve(environment.stateDirectory));
-  const namespace = 'worktrees';
-  return observe(join(directory, 'config-composer', 'v2', namespace, `${key}.json`));
+  return readSelectionAt(
+    environment,
+    await selectionLocator(environment, { ...identity, baseFile: await canonical(resolve(identity.baseFile)) }),
+  );
 }
 
 export async function verifySelection(snapshot: SelectionSnapshot): Promise<void> {
@@ -219,7 +251,7 @@ export async function withSelectionLock<T>(snapshot: SelectionSnapshot, operatio
   }
 }
 
-/** Caller must hold withSelectionLock; used by a document rename of its selected profile. */
+/** Caller must hold withSelectionLock. */
 export async function writeSelectionLocked(
   snapshot: SelectionSnapshot,
   choice: Selection,
