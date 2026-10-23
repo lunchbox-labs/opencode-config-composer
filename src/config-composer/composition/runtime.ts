@@ -96,6 +96,41 @@ export function resolveComposition(
     origin: Origin,
     authored = false,
   ) => {
+    let bindingOrigin: Origin | undefined;
+    let bindingVariant = false;
+    if (
+      kind === 'agent' &&
+      origin.kind !== 'native' &&
+      origin.kind !== 'frontmatter' &&
+      typeof patch.modelRef === 'string'
+    ) {
+      const { modelRef, variant, ...concrete } = patch;
+      const selectedModels = profile === null ? undefined : document.profiles[profile].models;
+      const selected = Object.hasOwn(selectedModels ?? {}, modelRef);
+      const bindings = selected ? selectedModels : document.models;
+      const binding = Object.hasOwn(bindings ?? {}, modelRef) ? bindings?.[modelRef] : undefined;
+      const referencePointer = `${origin.pointer ?? ''}/modelRef`;
+      if (binding === undefined && profile !== null) {
+        throw new SettingsError(
+          `${referencePointer}: Model alias ${JSON.stringify(modelRef)} has no binding in profile ${JSON.stringify(profile)} or root models.`,
+        );
+      }
+      bindingVariant = !Object.hasOwn(patch, 'variant');
+      patch =
+        binding === undefined
+          ? concrete
+          : { ...concrete, model: binding.model, variant: variant ?? binding.variant ?? '' };
+      if (binding !== undefined) {
+        bindingOrigin = {
+          ...origin,
+          pointer: referencePointer,
+          modelBinding: {
+            name: modelRef,
+            pointer: `${selected && profile !== null ? `/profiles/${pointer(profile)}` : ''}/models/${pointer(modelRef)}`,
+          },
+        };
+      }
+    }
     const entries = result[kind];
     if (!Object.hasOwn(entries, name)) {
       Object.defineProperty(entries, name, { value: {}, enumerable: true, writable: true, configurable: true });
@@ -113,7 +148,11 @@ export function resolveComposition(
         continue;
       }
       const fieldOrigin =
-        origin.pointer === undefined ? origin : { ...origin, pointer: `${origin.pointer}/${pointer(field)}` };
+        bindingOrigin !== undefined && (field === 'model' || (field === 'variant' && bindingVariant))
+          ? bindingOrigin
+          : origin.pointer === undefined
+            ? origin
+            : { ...origin, pointer: `${origin.pointer}/${pointer(field)}` };
       const allowed: readonly string[] = kind === 'agent' ? agentFields : commandFields;
       const managed = allowed.includes(field);
       if (!managed) {

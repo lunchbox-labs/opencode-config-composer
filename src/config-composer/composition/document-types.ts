@@ -4,6 +4,7 @@ export type Action = 'allow' | 'ask' | 'deny';
 export type Permission = Action | Record<string, Action | Record<string, Action>>;
 export interface AgentPatch extends Record<string, unknown> {
   model?: string;
+  modelRef?: string;
   variant?: string;
   temperature?: number;
   top_p?: number;
@@ -26,6 +27,7 @@ export interface Profile {
   description?: string;
   model?: string;
   small_model?: string;
+  models?: Record<string, ModelBinding>;
   groups?: Record<string, GroupPatch>;
   agent?: Record<string, AgentPatch>;
   command?: Record<string, CommandPatch>;
@@ -35,10 +37,15 @@ export interface CompositionDocument {
   defaultProfile?: string;
   model?: string;
   small_model?: string;
+  models?: Record<string, ModelBinding>;
   groups: Record<string, Group>;
   agent?: Record<string, AgentPatch>;
   command?: Record<string, CommandPatch>;
   profiles: Record<string, Profile>;
+}
+export interface ModelBinding {
+  model: string;
+  variant?: string;
 }
 export interface NativeBaseline extends Record<string, unknown> {
   model?: string;
@@ -53,6 +60,7 @@ export interface Origin {
   kind: 'group' | 'native' | 'root' | 'profile-group' | 'profile' | 'frontmatter';
   pointer?: string;
   source?: string;
+  modelBinding?: { name: string; pointer: string };
 }
 export interface FieldDecision {
   value: unknown;

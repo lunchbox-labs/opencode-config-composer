@@ -1,39 +1,20 @@
 {
   "groups": {
-    "coding": {},
+    "coding": { "agent": { "modelRef": "coding" } },
   },
   "profiles": {
     "anthropic": {
-      "groups": {
-        "coding": {
-          "agent": {
-            "model": "anthropic/claude-sonnet-4-5",
-          },
-        },
-      },
+      "models": { "coding": { "model": "anthropic/claude-sonnet-4-5" } },
     },
     "openai": {
-      "groups": {
-        "coding": {
-          "agent": {
-            "model": "openai/gpt-5",
-          },
-        },
-      },
+      "models": { "coding": { "model": "openai/gpt-5" } },
     },
     "mixed": {
-      "groups": {
-        "coding": {
-          "agent": {
-            "model": "anthropic/claude-sonnet-4-5",
-          },
-        },
+      "models": {
+        "coding": { "model": "anthropic/claude-sonnet-4-5" },
+        "reasoning": { "model": "openai/gpt-5" },
       },
-      "agent": {
-        "build": {
-          "model": "openai/gpt-5",
-        },
-      },
+      "agent": { "build": { "modelRef": "reasoning" } },
     },
   },
   "defaultProfile": "anthropic",

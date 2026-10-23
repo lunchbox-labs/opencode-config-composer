@@ -69,6 +69,9 @@
       "additionalProperties": {
         "$ref": "#/$defs/profile"
       }
+    },
+    "models": {
+      "$ref": "#/$defs/models"
     }
   },
   "$defs": {
@@ -137,7 +140,18 @@
               }
             }
           ]
+        },
+        "modelRef": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "not": {
+            "pattern": "\\u0000"
+          }
         }
+      },
+      "not": {
+        "required": ["model", "modelRef"]
       }
     },
     "command": {
@@ -229,6 +243,37 @@
           "additionalProperties": {
             "$ref": "#/$defs/command"
           }
+        },
+        "models": {
+          "$ref": "#/$defs/models"
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S",
+        "not": {
+          "pattern": "\\u0000"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/modelBinding"
+      }
+    },
+    "modelBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": {
+          "type": "string",
+          "pattern": "^[^\\s/]+/\\S+$"
+        },
+        "variant": {
+          "type": "string"
         }
       }
     }

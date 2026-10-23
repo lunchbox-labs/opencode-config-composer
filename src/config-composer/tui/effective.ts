@@ -181,7 +181,7 @@ export function openEffective(view: InspectionView): void {
             } else if (option.value === '\0globals') {
               view.details(
                 'Global models and shared exceptions',
-                `Current loaded configuration\n${JSON.stringify({ model: config.model, small_model: config.small_model, default_agent: config.default_agent, permission: config.permission }, null, 2)}\n\nLoaded Composer definitions\n${document === undefined ? 'Unavailable' : JSON.stringify({ model: document.model, small_model: document.small_model, agent: document.agent, command: document.command }, null, 2)}`,
+                `Current loaded configuration\n${JSON.stringify({ model: config.model, small_model: config.small_model, default_agent: config.default_agent, permission: config.permission }, null, 2)}\n\nLoaded Composer definitions\n${document === undefined ? 'Unavailable' : JSON.stringify({ model: document.model, small_model: document.small_model, models: document.models, agent: document.agent, command: document.command }, null, 2)}`,
               );
             } else if (option.value === '\0status') {
               view.details(
