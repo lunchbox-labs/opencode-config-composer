@@ -57,10 +57,53 @@ function models(value: unknown, path: string, aliases: Set<string>): void {
   for (const [key, binding] of Object.entries(value)) {
     const at = `${path}/${pointer(key)}`;
     name(key, at);
-    object(binding, ['model', 'variant'], at);
+    object(binding, ['model', 'variant', 'temperature', 'top_p', 'topK', 'maxOutputTokens', 'options'], at);
     model(binding.model, `${at}/model`);
     if (Object.hasOwn(binding, 'variant') && typeof binding.variant !== 'string') {
       fail(`${at}/variant`, 'Expected a variant string.');
+    }
+    for (const field of ['temperature', 'top_p', 'topK', 'maxOutputTokens'] as const) {
+      if (!Object.hasOwn(binding, field)) {
+        continue;
+      }
+      const number = binding[field];
+      const valid =
+        typeof number === 'number' &&
+        Number.isFinite(number) &&
+        (field === 'temperature' || field === 'top_p'
+          ? number >= 0 && number <= (field === 'temperature' ? 2 : 1)
+          : Number.isSafeInteger(number) && number > 0);
+      if (!valid) {
+        fail(
+          `${at}/${field}`,
+          field === 'temperature' || field === 'top_p'
+            ? `Expected a number from 0 to ${field === 'temperature' ? 2 : 1}.`
+            : 'Expected a positive safe integer.',
+        );
+      }
+    }
+    if (Object.hasOwn(binding, 'options')) {
+      if (!record(binding.options)) {
+        fail(`${at}/options`, 'Expected an options object.');
+      }
+      if (Object.hasOwn(binding.options, 'groups')) {
+        fail(`${at}/options/groups`, 'Group membership belongs on the native agent, not in options.');
+      }
+      // Raw adapter controls can override protected native sampling fields on the wire.
+      for (const key of [
+        'temperature',
+        'top_p',
+        'topP',
+        'topK',
+        'top_k',
+        'maxOutputTokens',
+        'max_tokens',
+        'max_completion_tokens',
+      ]) {
+        if (Object.hasOwn(binding.options, key)) {
+          fail(`${at}/options/${key}`, 'Use the binding sampling/output fields instead of raw provider controls.');
+        }
+      }
     }
     aliases.add(key);
   }

@@ -277,6 +277,44 @@
         },
         "variant": {
           "type": "string"
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "topK": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "options": {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "temperature",
+                "top_p",
+                "topP",
+                "topK",
+                "top_k",
+                "maxOutputTokens",
+                "max_tokens",
+                "max_completion_tokens",
+                "groups"
+              ]
+            }
+          }
         }
       }
     }

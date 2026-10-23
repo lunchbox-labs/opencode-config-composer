@@ -37,7 +37,7 @@ Define those groups in `config-composer.jsonc` in OpenCode's configuration direc
 
 Later entries in an agent's `groups` array win overlaps. Permission patterns combine: updated tool blocks move last with their retained rules, and later matching patterns win within each tool. `profiles.<name>.permission` sets profile-wide defaults below group and named-agent rules. Each group's selected profile patch applies with that group. Explicit native agent frontmatter always wins, including model pins. Built-in and JSON-defined agents declare the same array at `agent.<name>.groups` in `opencode.jsonc`.
 
-`models` names reusable model/variant choices. A profile replaces each matching root binding as a whole; an omitted binding variant uses the native default. Group and named agent patches use either `modelRef` or a concrete `model`. An explicit patch `variant` overrides the binding. See the [configuration contract](skills/config-composer-explain/references/schema.md) for profile-only aliases and precedence.
+`models` names reusable model/variant choices and optional model-bound sampling, output limits and provider options. A profile replaces each matching root binding as a whole; an omitted binding variant uses the native default. Group and named agent patches use either `modelRef` or a concrete `model`. An explicit patch `variant` overrides the binding. See the [configuration contract](skills/config-composer-explain/references/schema.md) for profile-only aliases and precedence.
 
 Definitions are shared across projects using this file; profile choices persist separately per worktree. **Shared only** skips profile settings. **Follow configured default** follows `defaultProfile` again. Profile changes have a preview and Apply confirmation.
 

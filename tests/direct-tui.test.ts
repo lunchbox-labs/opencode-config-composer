@@ -18,6 +18,7 @@ async function fixture(
   pin = '',
   common: Record<string, unknown> = { temperature: 0.2 },
   extraAgents: Record<string, Record<string, unknown>> = {},
+  sourceDocument?: Record<string, unknown>,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'composer-direct-tui-'));
   const keys = ['OPENCODE_CONFIG_DIR', 'OPENCODE_TEST_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME'];
@@ -34,13 +35,15 @@ async function fixture(
     await rm(root, { recursive: true, force: true });
   });
   const source = join(root, 'config-composer.jsonc');
-  const text = JSON.stringify({
-    groups: { workers: { agent: common } },
-    profiles: {
-      a: { groups: { workers: { agent: { model: 'p/a' } } } },
-      b: { agent: { worker: { model: 'p/b' } } },
+  const text = JSON.stringify(
+    sourceDocument ?? {
+      groups: { workers: { agent: common } },
+      profiles: {
+        a: { groups: { workers: { agent: { model: 'p/a' } } } },
+        b: { agent: { worker: { model: 'p/b' } } },
+      },
     },
-  });
+  );
   await writeFile(source, text);
   if (pin !== '') {
     await mkdir(join(root, 'agents'));
@@ -316,6 +319,37 @@ test('profile preview confirms selection and writes no definition bytes', async 
   assert.equal(f.disposed, 1);
   assert.equal(f.config.agent.worker.model, 'p/a');
   assert.equal(await f.read(), before);
+});
+
+test('profile confirmation includes changed and removed model parameter defaults', async (t) => {
+  const f = await fixture(
+    t,
+    'temperature: 0\noptions: {}',
+    {},
+    {},
+    {
+      models: { coding: { model: 'p/a', maxOutputTokens: 10 } },
+      groups: { workers: { agent: { modelRef: 'coding' } } },
+      profiles: {
+        a: {
+          models: {
+            coding: { model: 'p/a', temperature: 0.9, maxOutputTokens: 100, options: { reasoningEffort: 'low' } },
+          },
+        },
+        b: { models: { coding: { model: 'p/a' } } },
+      },
+    },
+  );
+  await f.choose('○ a', 'Apply profile selection?');
+  const changed = await f.preview();
+  assert.match(changed, /Model-bound parameter changes/);
+  assert.match(changed, /"maxOutputTokens": 100/);
+  assert.match(changed, /temperature: 0 takes priority \(frontmatter\)/);
+  assert.match(changed, /Alias options blocked by authored frontmatter/);
+  await f.confirm('Composer revision applied');
+  await f.reopen();
+  await f.choose('○ b', 'Apply profile selection?');
+  assert.match(await f.preview(), /Removed model-bound defaults/);
 });
 test('inspection opens untouched builtins and explains native inheritance', async (t) => {
   const f = await fixture(t);

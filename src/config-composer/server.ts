@@ -8,6 +8,7 @@ import { SettingsError, record } from './settings.ts';
 import { nativeAgentSettings } from './membership.ts';
 import { type LoadedSource, loadSource, pluginOptions } from './composition/sources.ts';
 import { resolveComposition } from './composition/runtime.ts';
+import { applyModelParameters } from './composition/model-parameters.ts';
 import { type RuntimeMarker, configFields, metadata, publishRuntime } from './composition/runtime-baseline.ts';
 import {
   type NativeObservation,
@@ -26,7 +27,7 @@ import {
   selectionStateDirectory,
   verifySelection,
 } from './composition/selection-state.ts';
-import type { NativeBaseline } from './composition/document-types.ts';
+import type { NativeAuthority, NativeBaseline, ResolvedCandidate } from './composition/document-types.ts';
 interface Previous {
   native: Record<string, unknown>;
   applied: Record<string, unknown>;
@@ -119,8 +120,14 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
   const { selectionEnvironment } = loaded;
   await publishSelectionProof(selectionEnvironment);
   await validateBundledSkills();
+  let parameters: { candidate: ResolvedCandidate; authority: NativeAuthority } | undefined;
   return {
+    'chat.params': (request, output) => {
+      applyModelParameters(parameters?.candidate, parameters?.authority ?? {}, request, output);
+      return Promise.resolve();
+    },
     config: async (config) => {
+      parameters = undefined;
       const target = config as Record<string, unknown>;
       // Package help remains available when a composition needs repair.
       const skills = record(target.skills) ? target.skills : {};
@@ -236,6 +243,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           revision,
           candidate: { ...candidate, ...metadata(candidate) },
         });
+        parameters = { candidate, authority: observation.authority };
       } catch (error) {
         // Native may continue after a failed config hook. Strip membership on
         // fresh copies, and retain its original authority for repeated hooks.

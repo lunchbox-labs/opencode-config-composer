@@ -44,7 +44,14 @@ export interface CompositionDocument {
   command?: Record<string, CommandPatch>;
   profiles: Record<string, Profile>;
 }
-export interface ModelBinding {
+export interface ModelParameters {
+  temperature?: number;
+  top_p?: number;
+  topK?: number;
+  maxOutputTokens?: number;
+  options?: Record<string, unknown>;
+}
+export interface ModelBinding extends ModelParameters {
   model: string;
   variant?: string;
 }
@@ -73,6 +80,7 @@ export interface GroupMembership {
   origin: Origin;
 }
 export interface ResolvedCandidate extends NativeBaseline {
+  modelParameters?: Partial<Record<string, { model: string; parameters: ModelParameters; origin: Origin }>>;
   memberships: Partial<Record<string, GroupMembership>>;
   profile: string | null;
   agent: Record<string, Record<string, unknown>>;
