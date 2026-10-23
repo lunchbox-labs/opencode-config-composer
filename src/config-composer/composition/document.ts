@@ -182,7 +182,10 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
   for (const [key, profile] of Object.entries(profiles)) {
     const at = `/profiles/${pointer(key)}`;
     name(key, at);
-    object(profile, ['description', 'model', 'small_model', 'models', 'groups', 'agent', 'command'], at);
+    object(profile, ['description', 'permission', 'model', 'small_model', 'models', 'groups', 'agent', 'command'], at);
+    if (Object.hasOwn(profile, 'permission')) {
+      permission(profile.permission, `${at}/permission`);
+    }
     if (Object.hasOwn(profile, 'models')) {
       models(profile.models, `${at}/models`, aliases);
     }

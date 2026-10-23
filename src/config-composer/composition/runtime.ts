@@ -19,8 +19,11 @@ export const builtins: Readonly<Record<string, { mode: string; hidden?: boolean 
   summary: { mode: 'primary', hidden: true },
 } as const;
 export function mergePermission(previous: unknown, incoming: unknown): unknown {
+  if (incoming === undefined) {
+    return structuredClone(previous);
+  }
   if (typeof incoming === 'string') {
-    return { '*': incoming };
+    incoming = { '*': incoming };
   }
   if (!record(incoming)) {
     return structuredClone(incoming);
@@ -34,9 +37,28 @@ export function mergePermission(previous: unknown, incoming: unknown): unknown {
       ? { '*': previous }
       : {};
   for (const [key, value] of Object.entries(incoming)) {
+    const prior = Object.hasOwn(result, key) ? result[key] : undefined;
+    let policy = value;
+    if (record(prior) || record(value)) {
+      const patterns: Record<string, unknown> = record(prior)
+        ? structuredClone(prior)
+        : typeof prior === 'string'
+          ? { '*': prior }
+          : {};
+      for (const [pattern, action] of Object.entries(record(value) ? value : { '*': value })) {
+        Reflect.deleteProperty(patterns, pattern);
+        Object.defineProperty(patterns, pattern, {
+          value: action,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+      policy = patterns;
+    }
     Reflect.deleteProperty(result, key);
     Object.defineProperty(result, key, {
-      value: structuredClone(value),
+      value: structuredClone(policy),
       enumerable: true,
       writable: true,
       configurable: true,
@@ -138,13 +160,7 @@ export function resolveComposition(
     for (const [field, value] of Object.entries(patch)) {
       const key = `/${kind}/${pointer(name)}/${pointer(field)}`;
       const previous = composer.get(key);
-      if (
-        field === 'permission' &&
-        origin.kind !== 'native' &&
-        !authored &&
-        record(value) &&
-        Object.keys(value).length === 0
-      ) {
+      if (field === 'permission' && origin.kind !== 'native' && record(value) && Object.keys(value).length === 0) {
         continue;
       }
       const fieldOrigin =
@@ -166,11 +182,12 @@ export function resolveComposition(
       }
       const final =
         field === 'permission'
-          ? authored
-            ? typeof value === 'string'
-              ? { '*': value }
-              : structuredClone(value)
-            : mergePermission(entries[name][field], value)
+          ? mergePermission(
+              origin.kind !== 'native' && !composer.has(key)
+                ? mergePermission(native.permission, entries[name][field])
+                : entries[name][field],
+              value,
+            )
           : structuredClone(value);
       Object.defineProperty(entries[name], field, {
         value: final,
@@ -194,6 +211,17 @@ export function resolveComposition(
     for (const [name, value] of Object.entries(native[kind] ?? {})) {
       const patch = kind === 'agent' ? nativeAgentSettings(value) : value;
       assign(kind, name, patch, { kind: 'native' });
+    }
+  }
+  const profilePermission = profile === null ? undefined : document.profiles[profile].permission;
+  if (profile !== null && profilePermission !== undefined) {
+    for (const name of targets.agent) {
+      assign(
+        'agent',
+        name,
+        { permission: profilePermission },
+        { kind: 'profile', pointer: `/profiles/${pointer(profile)}` },
+      );
     }
   }
   const profileGroups = profile === null ? {} : (document.profiles[profile].groups ?? {});

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { compositionFixture } from './composition-fixture.ts';
 import { installSkill, nativeSkill } from './permission-fixture.ts';
 test(
-  'native permission evaluation follows whole exact blocks and final authored policy with actual ask replies',
+  'native permission evaluation combines patterns and final authored rules with actual ask replies',
   { timeout: 240000 },
   async (t) => {
     const f = await compositionFixture(t, 'permission-runtime');
@@ -40,6 +40,7 @@ test(
     const candidate = await f.editor.storage.previewSelection(context, null);
     assert.deepEqual(Object.keys(candidate.candidate.agent.worker.permission as object), ['edit', 'skill', 'bash']);
     assert.deepEqual((candidate.candidate.agent.worker.permission as Record<string, unknown>).skill, {
+      '*': 'deny',
       'included-skill': 'ask',
     });
     const initial = await f.host.api<{ agent: { scalar: { permission: unknown } } }>('/config');
@@ -53,7 +54,7 @@ test(
       if (choice === 'whole') {
         assert.deepEqual(
           (await f.host.api<{ agent: { worker: { permission: unknown } } }>('/config')).agent.worker.permission,
-          { '*': 'allow' },
+          { edit: 'ask', skill: { '*': 'deny', 'included-skill': 'ask' }, bash: 'deny', '*': 'allow' },
         );
       }
       await nativeSkill(f.host, 'worker', choice === 'whole' ? 'allow' : choice);

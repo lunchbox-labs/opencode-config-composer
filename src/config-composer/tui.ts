@@ -224,7 +224,7 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
       const pinned = describe(changes.filter(([, decision]) => decision?.origin.kind === 'frontmatter'));
       const effects = [
         effective === '' ? '' : `Effective changes:\n${effective}`,
-        pinned === '' ? '' : `Pinned members retain frontmatter:\n${pinned}`,
+        pinned === '' ? '' : `Final frontmatter contributions:\n${pinned}`,
       ]
         .filter(Boolean)
         .join('\n\n');

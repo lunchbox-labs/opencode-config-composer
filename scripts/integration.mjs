@@ -26,7 +26,7 @@ const suites = {
   examples: ['tests/review-programming.native.ts'],
   coexistence: ['tests/integration/prompt-coexistence.integration.ts'],
   profile: ['tests/composition-profiles.native.ts', 'tests/model-aliases.native.ts'],
-  permissions: ['tests/integration/permission-runtime.integration.ts'],
+  permissions: ['tests/integration/permission-runtime.integration.ts', 'tests/permission-combinations.native.ts'],
   inspector: ['tests/integration/running-inspector.integration.ts'],
   apply: ['tests/integration/scoped-apply.integration.ts'],
   terminal: ['tests/config-composer-tui.native.ts', 'tests/integration/terminal.integration.ts'],

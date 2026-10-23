@@ -23,6 +23,7 @@ test('CI suites partition every portable integration file exactly once', async (
     'tests/config-composer.native.ts',
     'tests/composition-profiles.native.ts',
     'tests/model-aliases.native.ts',
+    'tests/permission-combinations.native.ts',
     'tests/review-programming.native.ts',
     'tests/config-composer-tui.native.ts',
     ...(await readdir(new URL('./integration/', import.meta.url)))

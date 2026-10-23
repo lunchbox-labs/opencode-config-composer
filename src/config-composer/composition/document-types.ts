@@ -25,6 +25,7 @@ export interface Group extends GroupPatch {
 }
 export interface Profile {
   description?: string;
+  permission?: Permission;
   model?: string;
   small_model?: string;
   models?: Record<string, ModelBinding>;

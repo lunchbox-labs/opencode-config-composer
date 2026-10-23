@@ -399,10 +399,18 @@ for (const pin of [
     await f.choose('agent worker', 'agent worker');
     await f.choose(field, `agent worker · ${field}`);
     const details = await f.detailText();
-    assert.match(details, /Pinned by frontmatter/);
+    if (pin === 'permission: {}') {
+      assert.match(details, /frontmatter permission has no rules/);
+      assert.match(details, /"edit":"ask"/);
+    } else if (field === 'permission') {
+      assert.match(details, /Frontmatter permission rules applied last/);
+      assert.match(details, /Composer contribution before frontmatter:/);
+    } else {
+      assert.match(details, /Pinned by frontmatter/);
+      assert.match(details, /Blocked Composer value:/);
+    }
     assert.match(details, /worker\.md/);
     assert.match(details, /Raw authored fields:/);
-    assert.match(details, /Blocked Composer value:/);
     if (field === 'permission') {
       assert.match(details, /inheritance remains host-owned/);
     }

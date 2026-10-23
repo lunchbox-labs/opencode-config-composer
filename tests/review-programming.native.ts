@@ -87,8 +87,8 @@ test('all shipped examples select and reset settings on existing native agents',
       profiles: {
         cautious: {
           plan: { permission: reviewPermission },
-          build: { permission: { bash: 'ask' } },
-          general: { permission: { bash: 'ask' } },
+          build: { permission: { bash: { 'git *': 'allow', 'npm *': 'ask', '*': 'ask' } } },
+          general: { permission: { bash: { 'git *': 'allow', 'npm *': 'ask', '*': 'ask' } } },
         },
       },
     },

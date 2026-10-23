@@ -246,6 +246,9 @@
         },
         "models": {
           "$ref": "#/$defs/models"
+        },
+        "permission": {
+          "$ref": "#/$defs/agent/properties/permission"
         }
       }
     },
