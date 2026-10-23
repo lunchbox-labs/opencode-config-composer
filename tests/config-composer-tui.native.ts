@@ -25,19 +25,12 @@ test(
     await terminal.command('/view-configs', 'Configuration');
     await terminal.choose('agent worker', 'agent worker', '↑↓ select');
     assert.doesNotMatch(terminal.text(), /modelRef/);
-    await terminal.chooseFixed(
-      'model',
-      'agent worker · model',
-      'Model alias "coding" binding',
-      '/profiles/a/models/coding',
-    );
+    await terminal.chooseFixed('model', 'agent worker · model', 'Model alias "coding" binding');
+    // Long native configuration paths can wrap the binding pointer across visual lines.
+    assert.match(terminal.text().replace(/\s/g, ''), /\/profiles\/a\/models\/coding/);
     await terminal.press('\x1b', 'agent worker', '↑↓ select');
-    await terminal.chooseFixed(
-      'variant',
-      'agent worker · variant',
-      'Native default variant',
-      '/profiles/a/models/coding',
-    );
+    await terminal.chooseFixed('variant', 'agent worker · variant', 'Native default variant');
+    assert.match(terminal.text().replace(/\s/g, ''), /\/profiles\/a\/models\/coding/);
     assert.equal(f.host.requests.length, 0);
   },
 );
