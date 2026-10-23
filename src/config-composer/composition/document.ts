@@ -46,8 +46,30 @@ function permission(value: unknown, path: string): void {
     }
   }
 }
-function patch(value: unknown, kind: 'agent' | 'command', path: string) {
-  object(value, kind === 'agent' ? agentFields : commandFields, path);
+interface ModelReference {
+  alias: string;
+  path: string;
+}
+function models(value: unknown, path: string, aliases: Set<string>): void {
+  if (!record(value)) {
+    fail(path, 'Expected a model binding map.');
+  }
+  for (const [key, binding] of Object.entries(value)) {
+    const at = `${path}/${pointer(key)}`;
+    name(key, at);
+    object(binding, ['model', 'variant'], at);
+    model(binding.model, `${at}/model`);
+    if (Object.hasOwn(binding, 'variant') && typeof binding.variant !== 'string') {
+      fail(`${at}/variant`, 'Expected a variant string.');
+    }
+    aliases.add(key);
+  }
+}
+function patch(value: unknown, kind: 'agent' | 'command', path: string, references: ModelReference[]) {
+  object(value, kind === 'agent' ? [...agentFields, 'modelRef'] : commandFields, path);
+  if (Object.hasOwn(value, 'model') && Object.hasOwn(value, 'modelRef')) {
+    fail(`${path}/modelRef`, 'model and modelRef are mutually exclusive.');
+  }
   for (const [key, v] of Object.entries(value)) {
     const at = `${path}/${pointer(key)}`;
     if (key === 'model') {
@@ -56,6 +78,9 @@ function patch(value: unknown, kind: 'agent' | 'command', path: string) {
       if (typeof v !== 'string') {
         fail(at, 'Expected a variant string.');
       }
+    } else if (key === 'modelRef') {
+      name(v, at);
+      references.push({ alias: v, path: at });
     } else if (key === 'agent') {
       name(v, at);
     } else if (key === 'subtask') {
@@ -82,13 +107,13 @@ function patch(value: unknown, kind: 'agent' | 'command', path: string) {
     }
   }
 }
-function named(value: unknown, kind: 'agent' | 'command', path: string) {
+function named(value: unknown, kind: 'agent' | 'command', path: string, references: ModelReference[]) {
   if (!record(value)) {
     fail(path, 'Expected a named patch map.');
   }
   for (const [key, v] of Object.entries(value)) {
     name(key, path);
-    patch(v, kind, `${path}/${pointer(key)}`);
+    patch(v, kind, `${path}/${pointer(key)}`, references);
   }
 }
 function jsonValue(value: unknown, path: string, parents = new Set<unknown>()): void {
@@ -112,7 +137,16 @@ function jsonValue(value: unknown, path: string, parents = new Set<unknown>()): 
 }
 export function readCompositionDocument(value: unknown): CompositionDocument {
   jsonValue(value, '');
-  object(value, ['$schema', 'defaultProfile', 'model', 'small_model', 'groups', 'agent', 'command', 'profiles'], '');
+  object(
+    value,
+    ['$schema', 'defaultProfile', 'model', 'small_model', 'models', 'groups', 'agent', 'command', 'profiles'],
+    '',
+  );
+  const aliases = new Set<string>();
+  const references: ModelReference[] = [];
+  if (Object.hasOwn(value, 'models')) {
+    models(value.models, '/models', aliases);
+  }
   if (Object.hasOwn(value, '$schema') && typeof value.$schema !== 'string') {
     fail('/$schema', 'Expected a string.');
   }
@@ -123,7 +157,7 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
   }
   for (const kind of ['agent', 'command'] as const) {
     if (Object.hasOwn(value, kind)) {
-      named(value[kind], kind, `/${kind}`);
+      named(value[kind], kind, `/${kind}`, references);
     }
   }
   const groups = Object.hasOwn(value, 'groups') ? value.groups : {};
@@ -138,7 +172,7 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
       fail(at, 'Expected description string.');
     }
     if (Object.hasOwn(group, 'agent')) {
-      patch(group.agent, 'agent', `${at}/agent`);
+      patch(group.agent, 'agent', `${at}/agent`, references);
     }
   }
   const profiles = Object.hasOwn(value, 'profiles') ? value.profiles : {};
@@ -148,7 +182,10 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
   for (const [key, profile] of Object.entries(profiles)) {
     const at = `/profiles/${pointer(key)}`;
     name(key, at);
-    object(profile, ['description', 'model', 'small_model', 'groups', 'agent', 'command'], at);
+    object(profile, ['description', 'model', 'small_model', 'models', 'groups', 'agent', 'command'], at);
+    if (Object.hasOwn(profile, 'models')) {
+      models(profile.models, `${at}/models`, aliases);
+    }
     if (Object.hasOwn(profile, 'description') && typeof profile.description !== 'string') {
       fail(at, 'Expected description string.');
     }
@@ -159,7 +196,7 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
     }
     for (const k of ['agent', 'command'] as const) {
       if (Object.hasOwn(profile, k)) {
-        named(profile[k], k, `${at}/${k}`);
+        named(profile[k], k, `${at}/${k}`, references);
       }
     }
     if (Object.hasOwn(profile, 'groups')) {
@@ -174,9 +211,14 @@ export function readCompositionDocument(value: unknown): CompositionDocument {
           fail(path, 'Unknown group.');
         }
         if (Object.hasOwn(group, 'agent')) {
-          patch(group.agent, 'agent', `${path}/agent`);
+          patch(group.agent, 'agent', `${path}/agent`, references);
         }
       }
+    }
+  }
+  for (const { alias, path } of references) {
+    if (!aliases.has(alias)) {
+      fail(path, `Unknown model alias ${JSON.stringify(alias)}.`);
     }
   }
   if (Object.hasOwn(value, 'defaultProfile')) {

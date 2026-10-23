@@ -35,12 +35,20 @@ export function fieldDetail(
             : {},
         ).find(([key]) => key === field)?.[1]
       : undefined;
-  const origin = (value: FieldDecision['origin']) =>
-    value.kind === 'native'
-      ? 'Native supplied configuration'
-      : `${value.source ?? view.context.source.path} · ${value.pointer ?? field}`;
+  const origin = (value: FieldDecision['origin']) => {
+    const source =
+      value.kind === 'native'
+        ? 'Native supplied configuration'
+        : `${value.source ?? view.context.source.path} · ${value.pointer ?? field}`;
+    return value.modelBinding === undefined
+      ? source
+      : `${source}\nModel alias ${JSON.stringify(value.modelBinding.name)} binding: ${view.context.source.path} · ${value.modelBinding.pointer}`;
+  };
   return [
     `${field}: ${JSON.stringify(decision.value)}`,
+    field === 'variant' && decision.value === '' && decision.origin.modelBinding !== undefined
+      ? 'Native default variant (the model binding supplies no named variant).'
+      : '',
     decision.origin.kind === 'frontmatter'
       ? `Pinned by frontmatter\n${origin(decision.origin)}\nRaw authored fields: ${JSON.stringify(raw?.authored)}`
       : origin(decision.origin),

@@ -18,12 +18,16 @@ Define those groups in `config-composer.jsonc` in OpenCode's configuration direc
 
 ```jsonc
 {
+  "models": {
+    "coding": { "model": "openai/gpt-5", "variant": "high" },
+  },
   "groups": {
-    "coding": { "agent": { "permission": { "edit": "ask" } } },
+    "coding": { "agent": { "modelRef": "coding", "permission": { "edit": "ask" } } },
     "cautious": { "agent": { "permission": { "edit": "deny" } } },
   },
   "profiles": {
     "review": {
+      "models": { "coding": { "model": "anthropic/claude-sonnet-4-5" } },
       "groups": { "coding": { "agent": { "temperature": 0 } } },
     },
   },
@@ -32,6 +36,8 @@ Define those groups in `config-composer.jsonc` in OpenCode's configuration direc
 ```
 
 Later entries in an agent's `groups` array win overlaps. Each group's selected profile patch applies with that group. Explicit native agent frontmatter always wins, including model pins. Built-in and JSON-defined agents declare the same array at `agent.<name>.groups` in `opencode.jsonc`.
+
+`models` names reusable model/variant choices. A profile replaces each matching root binding as a whole; an omitted binding variant uses the native default. Group and named agent patches use either `modelRef` or a concrete `model`. An explicit patch `variant` overrides the binding. See the [configuration contract](skills/config-composer-explain/references/schema.md) for profile-only aliases and precedence.
 
 Definitions are shared across projects using this file; profile choices persist separately per worktree. **Shared only** skips profile settings. **Follow configured default** follows `defaultProfile` again. Profile changes have a preview and Apply confirmation.
 
