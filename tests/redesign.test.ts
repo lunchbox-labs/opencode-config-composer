@@ -71,7 +71,8 @@ test('final raw frontmatter pins block Composer including empty fields and scala
   assert.equal(result.agent.worker.variant, '');
   assert.equal(result.agent.worker.temperature, 0);
   assert.deepEqual(result.agent.worker.options, {});
-  assert.deepEqual(result.agent.worker.permission, { '*': 'deny' });
+  assert.deepEqual(result.agent.worker.permission, { read: 'allow', '*': 'deny' });
+  assert.deepEqual(Object.keys(result.agent.worker.permission as object), ['read', '*']);
   assert.deepEqual(result.decisions['/agent/worker/model'].blockedComposer?.value, 'p/composer');
   assert.equal(result.decisions['/agent/worker/model'].origin.source, '/native/worker.md');
 });
@@ -113,7 +114,7 @@ test('each Composer contribution reports its blocked values beneath final author
     top_p: 0,
     options: { flag: false },
     mode: 'primary',
-    permission: {},
+    permission: { '*': 'deny' },
   };
   const source = { path: '/native/worker.md', canonicalPath: '/native/worker.md', fingerprint: 'x' };
   const fields = Object.fromEntries(
@@ -154,7 +155,7 @@ test('each Composer contribution reports its blocked values beneath final author
     assert.equal(result.agent.worker.prompt, 'OPAQUE_BODY');
   }
 });
-test('permission exact blocks replace and move to incoming order; options are atomic', () => {
+test('permission blocks combine patterns and move to incoming order; options are atomic', () => {
   const doc = read({
     agent: { worker: { options: { new: false }, permission: { read: { '*.md': 'ask' }, bash: 'deny' } } },
   });
@@ -168,7 +169,7 @@ test('permission exact blocks replace and move to incoming order; options are at
     {},
   );
   assert.deepEqual(Object.keys(result.agent.worker.permission as object), ['edit', 'read', 'bash']);
-  assert.deepEqual(result.agent.worker.permission, { edit: 'ask', read: { '*.md': 'ask' }, bash: 'deny' });
+  assert.deepEqual(result.agent.worker.permission, { edit: 'ask', read: { '*': 'deny', '*.md': 'ask' }, bash: 'deny' });
   assert.deepEqual(result.agent.worker.options, { new: false });
 });
 test('unknown inactive targets, disabled command targets and no visible primary fail atomically', () => {
@@ -235,7 +236,7 @@ test('direct numeric fields match native finite values and JSON-safe options rej
   assert.equal(resolveComposition(document, undefined, {}, {}).profile, '__proto__');
 });
 
-test('Composer scalar policies normalize before hook output and replace the whole map', () => {
+test('Composer scalar policies append wildcard rules before native hook output', () => {
   const base = { agent: { worker: { permission: { read: 'deny', bash: 'ask' } } } };
   const scalar = resolveComposition(
     read({
@@ -246,7 +247,11 @@ test('Composer scalar policies normalize before hook output and replace the whol
     base,
     {},
   );
-  assert.deepEqual(scalar.agent.worker.permission, { '*': 'allow' });
+  assert.deepEqual(Object.entries(scalar.agent.worker.permission as object), [
+    ['read', 'deny'],
+    ['bash', 'ask'],
+    ['*', 'allow'],
+  ]);
   const mapped = resolveComposition(
     read({
       agent: { worker: { permission: 'allow' } },
@@ -256,7 +261,11 @@ test('Composer scalar policies normalize before hook output and replace the whol
     base,
     {},
   );
-  assert.deepEqual(mapped.agent.worker.permission, { '*': 'allow', read: 'deny' });
+  assert.deepEqual(Object.entries(mapped.agent.worker.permission as object), [
+    ['bash', 'ask'],
+    ['*', 'allow'],
+    ['read', 'deny'],
+  ]);
   const group = resolveComposition(
     read({ groups: { workers: { agent: { permission: 'ask' } } } }),
     null,

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { compositionFixture } from './integration/composition-fixture.ts';
 test(
-  'installed native authority preserves actual pins above every Composer layer and later JSON',
+  'installed native authority preserves field pins and appends authored permission rules last',
   { timeout: 240000 },
   async (t) => {
     const f = await compositionFixture(t, 'native-authority');
@@ -60,12 +60,12 @@ test(
     assert.equal(config.agent.worker.temperature, 0);
     assert.equal(config.agent.worker.top_p, 0);
     assert.deepEqual(config.agent.worker.options, { last: false });
-    assert.deepEqual(config.agent.worker.permission, {});
+    assert.deepEqual(config.agent.worker.permission, { read: 'allow', '*': 'deny' });
     assert.equal((await f.editor.runtime()).observation.authority.worker.fields.model?.value, 'fixture/beta');
     assert.equal(config.agent.empty.model, '');
     assert.equal(config.agent.empty.variant, '');
     assert.deepEqual(config.agent.empty.options, {});
-    assert.deepEqual(config.agent.empty.permission, {});
+    assert.deepEqual(config.agent.empty.permission, { '*': 'allow', read: 'allow' });
     assert.equal(config.agent.legacy.mode, 'primary');
     assert.equal(config.agent.omitted.mode, 'subagent');
     assert.deepEqual(config.agent.scalar.permission, { '*': 'deny' });
@@ -74,7 +74,7 @@ test(
     assert.equal(agents.find((agent) => agent.name === 'worker')?.model?.modelID, 'beta');
     assert.ok(
       agents.find((agent) => agent.name === 'empty')!.permission.length > 0,
-      'native /agent inherits builtin/global policies after an empty final config policy',
+      'empty authored permission maps retain composed and native rules',
     );
     const runtime = await f.editor.runtime();
     const decision = runtime.candidate!.decisions['/agent/worker/model'];
@@ -141,7 +141,7 @@ test(
 );
 
 test(
-  'native agent membership order owns profile conflicts and never reaches provider options',
+  'native agent membership order combines permission patterns and never reaches provider options',
   { timeout: 240000 },
   async (t) => {
     const f = await compositionFixture(t, 'native-membership-order');
@@ -178,11 +178,11 @@ test(
       const config = await f.host.api<{ agent: Record<string, Record<string, unknown>> }>('/config');
       assert.equal(config.agent.worker.temperature, 0.2, 'later shared group wins over an earlier profile patch');
       assert.equal(config.agent.helper.temperature, choice === 'a' ? 0.9 : choice === 'b' ? 0.7 : 0.1);
-      assert.deepEqual(config.agent.worker.permission, lastPolicy);
+      assert.deepEqual(config.agent.worker.permission, { bash: { '*': 'ask', 'git *': 'deny' } });
       assert.deepEqual(config.agent.helper.permission, firstPolicy);
       assert.equal(config.agent.pinned.temperature, 0);
       assert.equal(config.agent.pinned.model, 'fixture/alpha');
-      assert.deepEqual(config.agent.pinned.permission, { '*': 'deny' });
+      assert.deepEqual(config.agent.pinned.permission, { bash: { '*': 'ask', 'git *': 'deny' }, '*': 'deny' });
       assert.deepEqual(config.agent.worker.options, { retained: false });
       assert.deepEqual(config.agent.pinned.options, { retained: false });
       for (const name of ['worker', 'helper', 'pinned']) {

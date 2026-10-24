@@ -34,7 +34,12 @@ test('agent order owns shared and profile precedence independently of definition
   const result = resolveComposition(document(), 'a', native, {});
   assert.equal(result.agent.forward.model, 'p/last');
   assert.equal(result.agent.reverse.model, 'p/profile');
-  assert.deepEqual(result.agent.forward.permission, { read: 'ask', bash: { '*': 'ask' }, edit: 'deny' });
+  assert.deepEqual(result.agent.forward.permission, {
+    read: 'ask',
+    bash: { 'git *': 'allow', '*': 'ask' },
+    edit: 'deny',
+  });
+  assert.deepEqual(Object.keys(result.agent.forward.permission.bash), ['git *', '*']);
   assert.deepEqual(Object.keys(result.agent.reverse.permission as object), ['edit', 'read', 'bash']);
   assert.equal(result.decisions['/agent/forward/model'].origin.pointer, '/groups/last/agent/model');
   assert.equal(result.decisions['/agent/reverse/model'].origin.pointer, '/profiles/a/groups/first/agent/model');

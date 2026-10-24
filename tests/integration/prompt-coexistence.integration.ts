@@ -105,7 +105,7 @@ for (const order of ['config-first', 'prompt-first']) {
         assert.equal(config.agent.worker.model, 'fixture/alpha');
         assert.equal(config.agent.worker.temperature, 0);
         assert.deepEqual(config.agent.worker.options, { opaque: false });
-        assert.deepEqual(config.agent.worker.permission, { edit: 'deny' });
+        assert.deepEqual(config.agent.worker.permission, { read: 'ask', edit: 'deny' });
         assert.equal(config.agent.worker.description, 'Opaque worker metadata');
         assert.equal(config.agent.worker.color, '#112233');
         assert.equal(config.agent.helper.description, 'Opaque helper metadata');

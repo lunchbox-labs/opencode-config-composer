@@ -14,7 +14,7 @@ export interface ConfigurationView {
   details(title: string, text: string): void;
 }
 export const permissionNotice =
-  'Agent-level permission contribution. Global and built-in inheritance remains host-owned.\nOmitted rules do not mean no enforcement.';
+  'Agent-level permission contribution. Native fallback is included when composing permissions; built-in inheritance remains host-owned.\nLater layers move touched tool blocks last, including retained patterns. Within a tool, later matching patterns win.';
 export function fieldDetail(
   view: { context: { runtime: AttestedRuntime; source: { path: string } } },
   key: string,
@@ -50,11 +50,14 @@ export function fieldDetail(
       ? 'Native default variant (the model binding supplies no named variant).'
       : '',
     decision.origin.kind === 'frontmatter'
-      ? `Pinned by frontmatter\n${origin(decision.origin)}\nRaw authored fields: ${JSON.stringify(raw?.authored)}`
+      ? `${field === 'permission' ? 'Frontmatter permission rules applied last' : 'Pinned by frontmatter'}\n${origin(decision.origin)}\nRaw authored fields: ${JSON.stringify(raw?.authored)}`
       : origin(decision.origin),
+    field === 'permission' && raw !== undefined && decision.origin.kind !== 'frontmatter'
+      ? `Authored frontmatter permission has no rules; inherited contributions remain.\n${raw.source.path}\nRaw authored fields: ${JSON.stringify(raw.authored)}`
+      : '',
     decision.blockedComposer === undefined
       ? ''
-      : `Blocked Composer value: ${JSON.stringify(decision.blockedComposer.value)}\n${origin(decision.blockedComposer.origin)}`,
+      : `${field === 'permission' ? 'Composer contribution before frontmatter' : 'Blocked Composer value'}: ${JSON.stringify(decision.blockedComposer.value)}\n${origin(decision.blockedComposer.origin)}`,
     field === 'permission' ? permissionNotice : '',
   ]
     .filter(Boolean)
