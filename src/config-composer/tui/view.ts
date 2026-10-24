@@ -3,7 +3,7 @@ import type { dialogNavigation } from '../../tui/navigation.ts';
 import type { AttestedRuntime } from '../composition/runtime-baseline.ts';
 import type { ConfigurationContext } from '../storage.ts';
 import type { CatalogModel } from '../settings.ts';
-import type { FieldDecision, Selection } from '../composition/document-types.ts';
+import type { FieldDecision, NativeAuthority, ResolvedCandidate, Selection } from '../composition/document-types.ts';
 export interface ConfigurationView {
   api: TuiPluginApi;
   nav: ReturnType<typeof dialogNavigation>;
@@ -15,6 +15,34 @@ export interface ConfigurationView {
 }
 export const permissionNotice =
   'Agent-level permission contribution. Native fallback is included when composing permissions; built-in inheritance remains host-owned.\nLater layers move touched tool blocks last, including retained patterns. Within a tool, later matching patterns win.';
+export function modelParameterDetail(
+  candidate: ResolvedCandidate,
+  authority: NativeAuthority,
+  name: string,
+  source: string,
+): string {
+  const bindings = candidate.modelParameters;
+  const binding = Object.hasOwn(bindings ?? {}, name) ? bindings?.[name] : undefined;
+  if (binding === undefined) {
+    return 'No model-bound parameter defaults.';
+  }
+  const fields = Object.hasOwn(authority, name) ? authority[name].fields : {};
+  const agent = candidate.agent[name] ?? {};
+  return [
+    `Request defaults for ${binding.model} only:\n${JSON.stringify(binding.parameters, null, 2)}`,
+    `Reference: ${source} · ${binding.origin.pointer ?? ''}\nBinding: ${source} · ${binding.origin.modelBinding?.pointer ?? ''}`,
+    ...(['temperature', 'top_p'] as const)
+      .filter((field) => Object.hasOwn(agent, field))
+      .map(
+        (field) =>
+          `Explicit agent ${field}: ${JSON.stringify(agent[field])} takes priority${Object.hasOwn(fields, field) ? ' (frontmatter)' : ''}.`,
+      ),
+    Object.hasOwn(fields, 'options')
+      ? `Alias options blocked by authored frontmatter: ${JSON.stringify(fields.options?.value)}`
+      : 'Explicit agent and selected native variant options take priority over alias option defaults.',
+    'These defaults apply only when the actual request uses the bound model. Native session choices may differ.',
+  ].join('\n\n');
+}
 export function fieldDetail(
   view: { context: { runtime: AttestedRuntime; source: { path: string } } },
   key: string,

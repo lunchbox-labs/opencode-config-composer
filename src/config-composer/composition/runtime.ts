@@ -120,6 +120,12 @@ export function resolveComposition(
   ) => {
     let bindingOrigin: Origin | undefined;
     let bindingVariant = false;
+    if (kind === 'agent' && Object.hasOwn(patch, 'model') && result.modelParameters !== undefined) {
+      const previous = Object.hasOwn(result.modelParameters, name) ? result.modelParameters[name] : undefined;
+      if (origin.kind !== 'frontmatter' || previous?.model !== patch.model) {
+        Reflect.deleteProperty(result.modelParameters, name);
+      }
+    }
     if (
       kind === 'agent' &&
       origin.kind !== 'native' &&
@@ -151,6 +157,17 @@ export function resolveComposition(
             pointer: `${selected && profile !== null ? `/profiles/${pointer(profile)}` : ''}/models/${pointer(modelRef)}`,
           },
         };
+        const { model, variant: _variant, ...parameters } = binding;
+        result.modelParameters ??= {};
+        Reflect.deleteProperty(result.modelParameters, name);
+        if (Object.keys(parameters).length > 0) {
+          Object.defineProperty(result.modelParameters, name, {
+            value: { model, parameters: structuredClone(parameters), origin: bindingOrigin },
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+        }
       }
     }
     const entries = result[kind];

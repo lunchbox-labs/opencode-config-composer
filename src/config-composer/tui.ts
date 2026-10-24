@@ -19,7 +19,7 @@ import { configurationErrorText, diagnosticPages, inspectionText } from './tui/c
 import { openProfiles, selectionLabel } from './tui/profile.ts';
 import { loadInspection } from './tui/inspection.ts';
 import { openEffective } from './tui/effective.ts';
-import { type ConfigurationView, fieldDetail } from './tui/view.ts';
+import { type ConfigurationView, fieldDetail, modelParameterDetail } from './tui/view.ts';
 import type { Selection } from './composition/document-types.ts';
 export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): void {
   const nav = dialogNavigation(api, fixedMenu);
@@ -222,9 +222,28 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
           .join('\n\n');
       const effective = describe(changes.filter(([, decision]) => decision?.origin.kind !== 'frontmatter'));
       const pinned = describe(changes.filter(([, decision]) => decision?.origin.kind === 'frontmatter'));
+      const previousParameters = new Map(Object.entries(context.runtime.candidate?.modelParameters ?? {}));
+      const proposedParameters = new Map(Object.entries(preview.candidate.modelParameters ?? {}));
+      const parameterChanges = [...new Set([...previousParameters.keys(), ...proposedParameters.keys()])]
+        .filter((name) => !isDeepStrictEqual(previousParameters.get(name), proposedParameters.get(name)))
+        .map(
+          (name) =>
+            `${name}\n${
+              proposedParameters.has(name)
+                ? modelParameterDetail(
+                    preview.candidate,
+                    context.runtime.observation.authority,
+                    name,
+                    context.source.path,
+                  )
+                : `Removed model-bound defaults; native request defaults apply.\nPreviously configured: ${JSON.stringify(previousParameters.get(name)?.parameters)}`
+            }`,
+        )
+        .join('\n\n');
       const effects = [
         effective === '' ? '' : `Effective changes:\n${effective}`,
         pinned === '' ? '' : `Final frontmatter contributions:\n${pinned}`,
+        parameterChanges === '' ? '' : `Model-bound parameter changes:\n${parameterChanges}`,
       ]
         .filter(Boolean)
         .join('\n\n');

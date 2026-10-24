@@ -42,7 +42,6 @@ test('model alias definitions and references have parser/schema structural parit
     { models: { coding: { model: 'invalid' } } },
     { models: { coding: { model: 'p/m', variant: null } } },
     { models: { coding: { model: 'p/m', modelRef: 'other' } } },
-    { models: { coding: { model: 'p/m', options: {} } } },
     { profiles: { inactive: { models: { coding: { variant: 'high' } } } } },
     { agent: { build: { modelRef: '' } } },
     { agent: { build: { modelRef: '\0' } } },

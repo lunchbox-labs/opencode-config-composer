@@ -25,7 +25,11 @@ const suites = {
   core: ['tests/config-composer.native.ts'],
   examples: ['tests/review-programming.native.ts'],
   coexistence: ['tests/integration/prompt-coexistence.integration.ts'],
-  profile: ['tests/composition-profiles.native.ts', 'tests/model-aliases.native.ts'],
+  profile: [
+    'tests/composition-profiles.native.ts',
+    'tests/model-aliases.native.ts',
+    'tests/model-parameters.native.ts',
+  ],
   permissions: ['tests/integration/permission-runtime.integration.ts', 'tests/permission-combinations.native.ts'],
   inspector: ['tests/integration/running-inspector.integration.ts'],
   apply: ['tests/integration/scoped-apply.integration.ts'],

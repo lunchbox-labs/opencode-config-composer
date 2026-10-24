@@ -1,4 +1,4 @@
-import { type ConfigurationView, fieldDetail, permissionNotice } from './view.ts';
+import { type ConfigurationView, fieldDetail, modelParameterDetail, permissionNotice } from './view.ts';
 import { agentFields, commandFields, pointer } from '../composition/document.ts';
 import { sameConfigurationValue } from '../composition/runtime-baseline.ts';
 import { record } from '../settings.ts';
@@ -89,6 +89,15 @@ function openEntity(view: InspectionView, kind: 'agent' | 'command', name: strin
         value: field,
         description: inspectionText(display(nativeField(view, kind, name, field) ?? entry(view, kind, name)[field])),
       })),
+      ...(kind === 'agent' && Object.hasOwn(candidate?.modelParameters ?? {}, name)
+        ? [
+            {
+              title: 'Model-bound parameter defaults',
+              value: '\0model-parameters',
+              description: candidate?.modelParameters?.[name]?.model,
+            },
+          ]
+        : []),
     ],
     onSelect: (option) =>
       view.run(() => {
@@ -100,6 +109,16 @@ function openEntity(view: InspectionView, kind: 'agent' | 'command', name: strin
               : membership === undefined
                 ? 'No declared groups.'
                 : `Loaded application order: ${JSON.stringify(membership.groups)}\nSource: ${membership.origin.source ?? 'Native agent configuration'} ${membership.origin.pointer ?? ''}\nEach group applies its shared settings, then its selected profile patch. Later listed groups win overlapping settings.`,
+          );
+        } else if (option.value === '\0model-parameters' && candidate !== undefined) {
+          view.details(
+            `agent ${name} · model parameters`,
+            modelParameterDetail(
+              candidate,
+              view.snapshot.runtime?.observation.authority ?? {},
+              name,
+              view.snapshot.runtime?.source.path ?? '',
+            ),
           );
         } else {
           openField(view, kind, name, option.value);
