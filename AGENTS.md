@@ -2,9 +2,9 @@
 
 Read the applicable shared Lunchbox Labs standards before editing this repository:
 
-- [Common agent guidance](https://github.com/lunchbox-labs/.github/blob/main/standards/agent-guidance.md)
-- [Workflow conventions](https://github.com/lunchbox-labs/.github/blob/main/standards/workflows.md)
-- [npm package conventions](https://github.com/lunchbox-labs/.github/blob/main/standards/npm-packages.md)
+- [Common agent guidance](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/common.md)
+- [Workflow conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/workflows.md)
+- [npm package conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/npm-packages.md)
 
 These documents must be read explicitly; GitHub does not automatically inherit them here.
 
