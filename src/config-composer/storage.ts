@@ -113,7 +113,7 @@ export function validateCandidate(candidate: ResolvedCandidate, models: CatalogM
     }
   }
   for (const [agent, binding] of Object.entries(candidate.modelParameters ?? {})) {
-    if (binding === undefined || binding.parameters.topK === undefined) {
+    if (binding?.parameters.topK === undefined) {
       continue;
     }
     if (models.find((item) => item.id === binding.model)?.npm === openaiCompatible) {
