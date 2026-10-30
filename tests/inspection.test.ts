@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type Inspection, appliedProfile, inspectionAgents } from '../src/config-composer/tui/inspection.ts';
+import {
+  type Inspection,
+  appliedProfile,
+  inspectionAgents,
+  runtimeDiagnostic,
+} from '../src/config-composer/tui/inspection.ts';
 import { sameConfigurationValue } from '../src/config-composer/composition/runtime-baseline.ts';
 
 test('profile label uses only the applied marker and remains safe for reactive proxies', () => {
@@ -22,6 +27,25 @@ test('profile label uses only the applied marker and remains safe for reactive p
   marker.status = 'applied';
   assert.equal(appliedProfile(config, '/other', '/other'), undefined);
   assert.equal(appliedProfile({}, '/project', '/project'), undefined);
+});
+test('the published diagnostic is read only from an error marker for the same location', () => {
+  const marker: Record<string, unknown> = {
+    version: 2,
+    status: 'applied',
+    location: { directory: '/project', root: '/project' },
+  };
+  const config = new Proxy({ plugin: ['other', ['composer', { __configComposerRuntime: marker }]] }, {});
+  const read = () => runtimeDiagnostic(config, '/project', '/project');
+  assert.equal(read(), undefined);
+  marker.status = 'error';
+  assert.equal(read(), undefined);
+  marker.diagnostic = 'Composer not applied. Fix the file.';
+  assert.equal(read(), 'Composer not applied. Fix the file.');
+  assert.equal(runtimeDiagnostic(config, '/other', '/other'), undefined);
+  assert.equal(appliedProfile(config, '/project', '/project'), undefined);
+  marker.status = 'applied';
+  assert.equal(read(), undefined);
+  assert.equal(runtimeDiagnostic({}, '/project', '/project'), undefined);
 });
 test('native classification wins over names, hidden is independent and absent built-ins use names', () => {
   const snapshot = {
