@@ -12,7 +12,7 @@ const builtinsKey = 'config-composer.showBuiltins';
 function storedBuiltins(api: TuiPluginApi): boolean {
   // Headless test doubles may omit the host store.
   const kv = api.kv as TuiPluginApi['kv'] | undefined;
-  return kv?.get<unknown>(builtinsKey) === true;
+  return kv?.get(builtinsKey) === true;
 }
 function storeBuiltins(api: TuiPluginApi, value: boolean): void {
   const kv = api.kv as TuiPluginApi['kv'] | undefined;

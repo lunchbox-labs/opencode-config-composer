@@ -67,7 +67,7 @@ test('a host without a key-value store still opens the inspector', () => {
     } as unknown as View['nav'],
     run: () => {},
     details: () => {},
-    snapshot: { config: {}, agents: [], commands: [], runtime: undefined } as unknown as Inspection,
+    snapshot: { config: {}, agents: [], commands: [], runtime: undefined },
   });
   assert.equal(current?.title, 'Configuration');
 });
