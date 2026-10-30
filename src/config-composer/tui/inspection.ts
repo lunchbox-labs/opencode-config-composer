@@ -40,7 +40,7 @@ export function inspectionAgents(snapshot: Inspection, showBuiltins: boolean): s
 }
 
 /** Slot reads must preserve the host Solid proxy; never clone api.state.config. */
-export function appliedProfile(config: unknown, directory: string, root: string): string | undefined {
+function loadedMarker(config: unknown, directory: string, root: string): Record<string, unknown> | undefined {
   if (!record(config) || !Array.isArray(config.plugin)) {
     return;
   }
@@ -52,16 +52,29 @@ export function appliedProfile(config: unknown, directory: string, root: string)
     if (
       record(marker) &&
       marker.version === 2 &&
-      marker.status === 'applied' &&
       record(marker.location) &&
       marker.location.directory === directory &&
-      marker.location.root === root &&
-      record(marker.revision) &&
-      typeof marker.revision.effective === 'string' &&
-      record(marker.candidate)
+      marker.location.root === root
     ) {
-      const profile = marker.candidate.profile;
-      return profile === null ? 'Shared only' : typeof profile === 'string' ? profile : undefined;
+      return marker;
     }
   }
+}
+export function appliedProfile(config: unknown, directory: string, root: string): string | undefined {
+  const marker = loadedMarker(config, directory, root);
+  if (
+    marker?.status !== 'applied' ||
+    !record(marker.revision) ||
+    typeof marker.revision.effective !== 'string' ||
+    !record(marker.candidate)
+  ) {
+    return;
+  }
+  const profile = marker.candidate.profile;
+  return profile === null ? 'Shared only' : typeof profile === 'string' ? profile : undefined;
+}
+/** The diagnostic the server published when its config hook failed for this location. */
+export function runtimeDiagnostic(config: unknown, directory: string, root: string): string | undefined {
+  const marker = loadedMarker(config, directory, root);
+  return marker?.status === 'error' && typeof marker.diagnostic === 'string' ? marker.diagnostic : undefined;
 }
