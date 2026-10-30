@@ -1,4 +1,4 @@
-import { SettingsError, record } from '../settings.ts';
+import { record } from '../settings.ts';
 import type { NativeAuthority, ResolvedCandidate } from './document-types.ts';
 
 interface Request {
@@ -58,17 +58,8 @@ export function applyModelParameters(
     return;
   }
   const parameters = binding.parameters;
-  if (parameters.topK !== undefined && input.model.api.npm === '@ai-sdk/openai-compatible') {
-    throw new SettingsError(
-      `Model alias ${binding.origin.modelBinding?.name ?? binding.model}: topK is unsupported by @ai-sdk/openai-compatible. Remove topK from this binding.`,
-    );
-  }
   const agent = candidate?.agent[input.agent] ?? {};
-  if (
-    parameters.temperature !== undefined &&
-    input.model.capabilities?.temperature !== false &&
-    !Object.hasOwn(agent, 'temperature')
-  ) {
+  if (parameters.temperature !== undefined && !Object.hasOwn(agent, 'temperature')) {
     output.temperature = parameters.temperature;
   }
   if (parameters.top_p !== undefined && !Object.hasOwn(agent, 'top_p')) {

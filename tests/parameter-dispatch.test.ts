@@ -104,13 +104,15 @@ test('authored frontmatter options pin the whole field, including empty objects'
   }
 });
 
-test('unsupported OpenAI-compatible topK fails clearly without partially mutating the request', () => {
+test('user topK reaches OpenAI-compatible requests without adapter filtering', () => {
   const candidate = resolveComposition(document, null, { agent: { worker: {} } }, {});
   const request = input();
   request.model.api.npm = '@ai-sdk/openai-compatible';
   const result = output();
-  assert.throws(() => applyModelParameters(candidate, {}, request, result), /topK.*openai-compatible/i);
-  assert.deepEqual(result, output());
+  applyModelParameters(candidate, {}, request, result);
+  assert.equal(result.topK, 10);
+  assert.equal(result.temperature, 0.4);
+  assert.equal(result.maxOutputTokens, 128);
 });
 
 test('native small title requests do not inherit the user message variant', () => {
@@ -126,11 +128,20 @@ test('native small title requests do not inherit the user message variant', () =
   assert.equal(result.options.reasoningEffort, 'low');
 });
 
-test('native unsupported temperature stays omitted', () => {
+test('user temperature reaches requests even when native metadata reports no support', () => {
   const candidate = resolveComposition(document, null, { agent: { worker: {} } }, {});
   const request = { ...input(), model: { ...input().model, capabilities: { temperature: false } } };
   const result = { ...output(), temperature: undefined };
   applyModelParameters(candidate, {}, request, result);
-  assert.equal(result.temperature, undefined);
+  assert.equal(result.temperature, 0.4);
   assert.equal(result.maxOutputTokens, 128);
+});
+
+test('explicit native temperature retains precedence when capability metadata reports no support', () => {
+  const candidate = resolveComposition(document, null, { agent: { worker: { temperature: 0 } } }, {});
+  const request = { ...input(), model: { ...input().model, capabilities: { temperature: false } } };
+  const result = { ...output(), temperature: 0 };
+  applyModelParameters(candidate, {}, request, result);
+  assert.equal(result.temperature, 0);
+  assert.equal(result.topK, 10);
 });
