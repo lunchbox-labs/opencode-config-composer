@@ -1,0 +1,17 @@
+# Ownership policy and CI/release automation.
+/.github/ @lunchbox-labs/trusted-developers
+/scripts/ @lunchbox-labs/trusted-developers
+
+# Package, build, and tooling configuration.
+/package.json @lunchbox-labs/trusted-developers
+/package-lock.json @lunchbox-labs/trusted-developers
+/tsconfig*.json @lunchbox-labs/trusted-developers
+/eslint.config.mjs @lunchbox-labs/trusted-developers
+/prettier.config.mjs @lunchbox-labs/trusted-developers
+/schema.json @lunchbox-labs/trusted-developers
+/.gitignore @lunchbox-labs/trusted-developers
+
+# Agent guidance.
+AGENTS.md @lunchbox-labs/trusted-developers
+/.agents/ @lunchbox-labs/trusted-developers
+/skills/ @lunchbox-labs/trusted-developers
