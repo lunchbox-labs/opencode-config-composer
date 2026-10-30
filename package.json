@@ -28,9 +28,6 @@
   },
   "files": [
     "dist",
-    "src",
-    "tsconfig.json",
-    "tsconfig.build.json",
     "schema.json",
     "README.md",
     "LICENSE",
