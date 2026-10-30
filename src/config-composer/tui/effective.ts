@@ -1,3 +1,4 @@
+import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
 import { type ConfigurationView, fieldDetail, modelParameterDetail, permissionNotice } from './view.ts';
 import { agentFields, commandFields, pointer } from '../composition/document.ts';
 import { sameConfigurationValue } from '../composition/runtime-baseline.ts';
@@ -7,6 +8,16 @@ import { inspectionText } from './configuration-error.ts';
 import { type Inspection, inspectionAgents } from './inspection.ts';
 
 type InspectionView = Pick<ConfigurationView, 'api' | 'nav' | 'run' | 'details'> & { snapshot: Inspection };
+const builtinsKey = 'config-composer.showBuiltins';
+function storedBuiltins(api: TuiPluginApi): boolean {
+  // Headless test doubles may omit the host store.
+  const kv = api.kv as TuiPluginApi['kv'] | undefined;
+  return kv?.get<unknown>(builtinsKey) === true;
+}
+function storeBuiltins(api: TuiPluginApi, value: boolean): void {
+  const kv = api.kv as TuiPluginApi['kv'] | undefined;
+  kv?.set(builtinsKey, value);
+}
 function entry(view: InspectionView, kind: 'agent' | 'command', name: string) {
   const entities = view.snapshot.config[kind] ?? {};
   return Object.hasOwn(entities, name) ? entities[name] : {};
@@ -129,7 +140,7 @@ function openEntity(view: InspectionView, kind: 'agent' | 'command', name: strin
 export function openEffective(view: InspectionView): void {
   const { runtime, config } = view.snapshot;
   const document = runtime?.source.document;
-  let showBuiltins = false;
+  let showBuiltins = storedBuiltins(view.api);
   const show = () =>
     view.nav.menu(
       {
@@ -174,6 +185,7 @@ export function openEffective(view: InspectionView): void {
           view.run(async () => {
             if (option.value === '\0builtins') {
               showBuiltins = !showBuiltins;
+              storeBuiltins(view.api, showBuiltins);
               show();
             } else if (option.value === '\0groups' && document !== undefined) {
               view.nav.menu({
