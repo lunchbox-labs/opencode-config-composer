@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { resolve } from 'node:path';
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { configurationDirectory } from './configuration.ts';
-import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
+import { bundledSkillDirectory } from './bundled-skills.ts';
 import { SettingsError, record } from './settings.ts';
 import { nativeAgentSettings } from './membership.ts';
 import { type LoadedSource, loadSource, pluginOptions } from './composition/sources.ts';
@@ -119,7 +119,6 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
   const loaded = await definition(directory, worktree, rawOptions);
   const { selectionEnvironment } = loaded;
   await publishSelectionProof(selectionEnvironment);
-  await validateBundledSkills();
   let parameters: { candidate: ResolvedCandidate; authority: NativeAuthority } | undefined;
   return {
     'chat.params': (request, output) => {
@@ -209,11 +208,8 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
         const candidate = resolveComposition(source.document, selection.choice, native, observation.authority);
         const revision = compositionRevision(source, selection, candidate);
         await verifySelection(selection);
-        const after = await observeNative(observation.context);
-        if (!isDeepStrictEqual(after, observation)) {
-          throw new SettingsError('Native inputs changed. Restart the OpenCode server process, then review again.');
-        }
-        // The complete candidate and all observed inputs are valid before any managed mutation.
+        // The complete candidate and the observed inputs are valid before any managed mutation.
+        // The editor compares this observation against the live files again before every apply.
         for (const field of ['model', 'small_model'] as const) {
           if (Object.hasOwn(candidate, field)) {
             target[field] = candidate[field];
