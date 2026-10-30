@@ -63,8 +63,7 @@ function loadedMarker(config: unknown, directory: string, root: string): Record<
 export function appliedProfile(config: unknown, directory: string, root: string): string | undefined {
   const marker = loadedMarker(config, directory, root);
   if (
-    marker === undefined ||
-    marker.status !== 'applied' ||
+    marker?.status !== 'applied' ||
     !record(marker.revision) ||
     typeof marker.revision.effective !== 'string' ||
     !record(marker.candidate)
@@ -77,7 +76,5 @@ export function appliedProfile(config: unknown, directory: string, root: string)
 /** The diagnostic the server published when its config hook failed for this location. */
 export function runtimeDiagnostic(config: unknown, directory: string, root: string): string | undefined {
   const marker = loadedMarker(config, directory, root);
-  return marker !== undefined && marker.status === 'error' && typeof marker.diagnostic === 'string'
-    ? marker.diagnostic
-    : undefined;
+  return marker?.status === 'error' && typeof marker.diagnostic === 'string' ? marker.diagnostic : undefined;
 }
