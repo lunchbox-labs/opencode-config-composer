@@ -95,7 +95,9 @@ export async function verifyContext(context: ConfigurationContext, checkRuntime 
   }
   connection.assertCurrent();
 }
-function validateCandidate(candidate: ResolvedCandidate, models: CatalogModel[]): void {
+const openaiCompatible = '@ai-sdk/openai-compatible';
+/** Catalog checks that the native request path would otherwise fail only when a message is sent. */
+export function validateCandidate(candidate: ResolvedCandidate, models: CatalogModel[]): void {
   for (const model of [candidate.model, candidate.small_model]) {
     if (model !== undefined) {
       validateChoice({ model }, models);
@@ -108,6 +110,16 @@ function validateCandidate(candidate: ResolvedCandidate, models: CatalogModel[])
   for (const command of Object.values(candidate.command)) {
     if (typeof command.model === 'string') {
       validateChoice({ model: command.model }, models);
+    }
+  }
+  for (const [agent, binding] of Object.entries(candidate.modelParameters ?? {})) {
+    if (binding === undefined || binding.parameters.topK === undefined) {
+      continue;
+    }
+    if (models.find((item) => item.id === binding.model)?.npm === openaiCompatible) {
+      throw new SettingsError(
+        `Model alias ${binding.origin.modelBinding?.name ?? binding.model} (agent ${agent}): topK is unsupported by ${openaiCompatible}. Remove topK from this binding.`,
+      );
     }
   }
 }

@@ -6,6 +6,8 @@ export function record(value: unknown): value is Record<string, unknown> {
 
 export interface CatalogModel {
   id: string;
+  /** The provider adapter package serving this model, when the catalog reports one. */
+  npm?: string;
   variants: Record<string, Record<string, unknown>>;
 }
 
@@ -29,9 +31,11 @@ export function catalogModels(providers: unknown): CatalogModel[] {
             ),
           )
         : {};
+      const npm = record(model.api) && typeof model.api.npm === 'string' ? model.api.npm : undefined;
       return [
         {
           id: `${providerID}/${id}`,
+          ...(npm === undefined ? {} : { npm }),
           variants,
         },
       ];
