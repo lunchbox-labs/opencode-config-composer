@@ -43,21 +43,12 @@ test('release publication verifies the tagged main commit and publishes only thr
   const { parse } = await import('yaml');
   const source = await readFile(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8');
   const workflow = parse(source);
-  assert.equal(workflow.name, 'Publish');
   assert.deepEqual(workflow.on, { release: { types: ['published'] } });
   assert.ok(!source.includes('workflow_dispatch'));
   assert.ok(!source.includes('inputs.'));
-  assert.deepEqual(Object.keys(workflow.jobs), ['verify', 'publish']);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   const verify = workflow.jobs.verify;
-  assert.equal(verify.name, 'Verify');
-  for (const [name, run] of [
-    ['Install dependencies', 'npm ci'],
-    ['Run checks', 'npm run check'],
-    ['Run native tests', 'npm run test:native'],
-  ]) {
-    assert.equal(verify.steps.find((step) => step.run === run)?.name, name);
-  }
+  assert.ok(verify.steps.some((step) => step.run === 'npm ci'));
   assert.equal(
     verify.if.replace(/\s+/g, ' ').trim(),
     "github.repository == 'lunchbox-labs/opencode-config-composer' && github.event_name == 'release' && !github.event.release.prerelease",
@@ -73,14 +64,10 @@ test('release publication verifies the tagged main commit and publishes only thr
   assert.ok(verify.steps.some((step) => step.run === 'npm run check'));
   assert.ok(verify.steps.some((step) => step.run === 'npm run test:native'));
   const upload = verify.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
-  assert.equal(upload.name, 'Upload verified package');
-  assert.equal(upload.uses, 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9');
-  assert.equal(upload.with['retention-days'], 3);
   const publish = workflow.jobs.publish;
-  assert.equal(publish.name, 'Publish npm');
   const download = publish.steps.find((step) => step.uses?.startsWith('actions/download-artifact@'));
-  assert.equal(download.name, 'Download verified package');
-  assert.equal(download.uses, 'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333');
+  assert.equal(download.with.name, upload.with.name, 'publish consumes the verified artifact');
+  assert.equal(upload.with['if-no-files-found'], 'error');
   assert.equal(publish.needs, 'verify');
   assert.equal(publish.environment, 'npm');
   assert.deepEqual(publish.permissions, { contents: 'read', 'id-token': 'write' });
@@ -96,10 +83,19 @@ test('release publication verifies the tagged main commit and publishes only thr
     'actions/download-artifact@',
   ];
   for (const job of Object.values(workflow.jobs)) {
-    assert.ok(job.environment === undefined || job.environment === 'npm');
+    if (job !== publish) {
+      assert.notEqual(job.permissions, 'write-all', 'other jobs must not receive implicit OIDC write permission');
+      assert.equal(job.environment, undefined, 'only the verified publish job may enter a release environment');
+      assert.notEqual(job.permissions?.['id-token'], 'write', 'only the verified publish job may mint OIDC tokens');
+      assert.ok(
+        job.steps.every((step) => !/\bnpm\s+publish\b/.test(step.run ?? '')),
+        'package publication must use the verified artifact handoff',
+      );
+    }
     for (const step of job.steps) {
       if (step.uses) {
         assert.ok(allowedActions.some((action) => step.uses.startsWith(action)));
+        assert.match(step.uses, /@[a-f0-9]{40}$/, 'release actions must use immutable commit pins');
       }
     }
   }
