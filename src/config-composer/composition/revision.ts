@@ -121,26 +121,33 @@ export async function nativeCommandPaths(context: NativeFrontmatterContext): Pro
 export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
   const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
   const roots = nativeAgentSourceRoots(context);
-  const discovery = await Promise.all(
-    roots
-      .flatMap((root) => [root, ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name))])
-      .map((path) => observation(path)),
-  );
-  const sources = await Promise.all(
+  const fingerprints = (paths: string[]) => Promise.all(paths.map((path) => observation(path, true)));
+  // Collect independent fingerprints concurrently while preserving each category's path order.
+  const [discovery, sources, json, globalJson, commands] = await Promise.all([
+    Promise.all(
+      roots
+        .flatMap((root) => [root, ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name))])
+        .map((path) => observation(path)),
+    ),
     // Independent agents may be enumerated differently by the native host and editor.
     // Keep each agent's source chain in native precedence order.
-    Object.keys(authority)
-      .sort()
-      .flatMap((name) => authority[name].sources)
-      .map(async (source) => [source, await observation(source.path)]),
-  );
+    Promise.all(
+      Object.keys(authority)
+        .sort()
+        .flatMap((name) => authority[name].sources)
+        .map(async (source) => [source, await observation(source.path)]),
+    ),
+    fingerprints(nativeJsonPaths(context)),
+    fingerprints(nativeGlobalJsonPaths(context)),
+    nativeCommandPaths(context).then(fingerprints),
+  ]);
   return {
     context,
     authority,
     metadata: digest([discovery, sources]),
-    json: digest(await Promise.all(nativeJsonPaths(context).map((path) => observation(path, true)))),
-    globalJson: digest(await Promise.all(nativeGlobalJsonPaths(context).map((path) => observation(path, true)))),
-    commands: digest(await Promise.all((await nativeCommandPaths(context)).map((path) => observation(path, true)))),
+    json: digest(json),
+    globalJson: digest(globalJson),
+    commands: digest(commands),
   };
 }
 export function compositionRevision(
