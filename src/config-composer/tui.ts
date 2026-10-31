@@ -19,7 +19,6 @@ import { configurationErrorText, diagnosticPages, inspectionText } from './tui/c
 import { openProfiles, selectionLabel } from './tui/profile.ts';
 import { loadInspection } from './tui/inspection.ts';
 import { openEffective } from './tui/effective.ts';
-import { registerErrorNotice } from './tui/notice.ts';
 import { type ConfigurationView, fieldDetail, modelParameterDetail } from './tui/view.ts';
 import type { Selection } from './composition/document-types.ts';
 export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): void {
@@ -341,6 +340,7 @@ export default {
   id: 'config-composer',
   tui: async (api) => {
     const { fixedMenu, registerProfileSlot } = await import('./tui/widgets.js');
+    const { registerErrorNotice } = await import('./tui/notice.js');
     registerConfiguration(api, (props) => fixedMenu(api, props));
     registerProfileSlot(api);
     api.lifecycle.onDispose(registerErrorNotice(api));

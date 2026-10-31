@@ -1,50 +1,35 @@
 import { resolve } from 'node:path';
 import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
+import { createComputed, createRoot, onCleanup, untrack } from 'solid-js';
 import { diagnosticText } from './configuration-error.ts';
 import { runtimeDiagnostic } from './inspection.ts';
 
-/** The host logs and ignores config hook failures; show each published diagnostic once. */
+/** Observe the host's shared Solid store, including config refreshes that finish later. */
 export function registerErrorNotice(api: TuiPluginApi): () => void {
-  let shown: string | undefined;
-  const check = () => {
-    if (api.lifecycle.signal.aborted) {
-      return;
-    }
-    const directory = resolve(api.state.path.directory);
-    const worktree = api.state.path.worktree;
-    const root = resolve(worktree !== '' && worktree !== '/' ? worktree : directory);
-    const diagnostic = runtimeDiagnostic(api.state.config, directory, root);
-    if (diagnostic === undefined || diagnostic === shown) {
-      return;
-    }
-    shown = diagnostic;
-    api.ui.toast({ variant: 'error', title: 'Config Composer', message: diagnosticText(diagnostic) });
-  };
-  // The host refreshes its configuration view shortly after connecting and after instance disposal.
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const later = () => {
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      check();
-    }, 1000);
-    timers.add(timer);
-  };
-  check();
-  const stops = [
-    api.event.on('server.connected', later),
-    api.event.on('server.instance.disposed', (event) => {
-      if (event.properties.directory === api.state.path.directory) {
-        later();
+  if (api.lifecycle.signal.aborted) {
+    return () => undefined;
+  }
+  return createRoot((dispose) => {
+    api.lifecycle.signal.addEventListener('abort', dispose, { once: true });
+    onCleanup(() => api.lifecycle.signal.removeEventListener('abort', dispose));
+    let shown: string | undefined;
+    createComputed(() => {
+      const directory = resolve(api.state.path.directory);
+      const worktree = api.state.path.worktree;
+      const root = resolve(worktree !== '' && worktree !== '/' ? worktree : directory);
+      const diagnostic = runtimeDiagnostic(api.state.config, directory, root);
+      const current = diagnostic === undefined ? undefined : JSON.stringify([directory, root, diagnostic]);
+      if (current === shown) {
+        return;
       }
-    }),
-  ];
-  return () => {
-    for (const timer of timers) {
-      clearTimeout(timer);
-    }
-    timers.clear();
-    for (const stop of stops) {
-      stop();
-    }
-  };
+      // A successful refresh clears suppression so the same error can recur.
+      shown = current;
+      if (diagnostic !== undefined) {
+        untrack(() =>
+          api.ui.toast({ variant: 'error', title: 'Config Composer', message: diagnosticText(diagnostic) }),
+        );
+      }
+    });
+    return dispose;
+  });
 }
