@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type TestContext, test } from 'node:test';
@@ -11,6 +11,11 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import descriptor from '../src/config-composer/server.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { readRuntimeContext } from '../src/config-composer/composition/runtime-baseline.ts';
+import {
+  selectionLifetime,
+  selectionLocator,
+  selectionStateDirectory,
+} from '../src/config-composer/composition/selection-state.ts';
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'composer-startup-'));
@@ -37,6 +42,73 @@ async function fixture(t: TestContext) {
     return readRuntimeContext(config, { root, directory: root });
   };
   return { root, source, input, load };
+}
+
+for (const mutation of ['agent edit', 'agent addition', 'agent deletion', 'JSON edit', 'command edit'] as const) {
+  test(`startup rejects a native ${mutation} during composition before applying managed fields`, async (t) => {
+    const f = await fixture(t);
+    await writeFile(
+      f.source,
+      JSON.stringify({
+        model: 'p/composed',
+        groups: { workers: { agent: { temperature: 0.1 } } },
+        command: { run: { model: 'p/composed' } },
+      }),
+    );
+    const agent = join(f.root, 'agents/worker.md');
+    const json = join(f.root, 'opencode.json');
+    const command = join(f.root, 'commands/run.md');
+    await mkdir(join(f.root, 'agents'));
+    await mkdir(join(f.root, 'commands'));
+    await writeFile(agent, '---\nmodel: p/pinned\n---\nNative agent.');
+    await writeFile(json, '{"model":"p/native"}');
+    await writeFile(command, 'Native command.');
+    const hooks = await descriptor.server(f.input);
+    const locator = await selectionLocator(
+      { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
+      { root: f.root, baseFile: f.source },
+    );
+    const original = fs.promises.lstat;
+    let changed = false;
+    // Selection is read after native observation, providing a deterministic edit
+    // during composition while keeping native discovery and file reads real.
+    const mocked = t.mock.method(fs.promises, 'lstat', async (...args: Parameters<typeof fs.promises.lstat>) => {
+      if (!changed && String(args[0]) === locator.path) {
+        changed = true;
+        if (mutation === 'agent edit') {
+          await writeFile(agent, '---\nmodel: p/changed\n---\nNative agent.');
+        } else if (mutation === 'agent addition') {
+          await writeFile(join(f.root, 'agents/helper.md'), '---\nmodel: p/helper\n---\nNew agent.');
+        } else if (mutation === 'agent deletion') {
+          await unlink(agent);
+        } else if (mutation === 'JSON edit') {
+          await writeFile(json, '{"model":"p/changed"}');
+        } else {
+          await writeFile(command, 'Changed native command.');
+        }
+      }
+      return original(...args);
+    });
+    syncBuiltinESMExports();
+    t.after(() => {
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+    });
+    const config = {
+      plugin: [packageName],
+      model: 'p/native',
+      agent: { worker: { groups: ['workers'], model: 'p/pinned', temperature: 0.8 } },
+      command: { run: { template: 'Native command.' } },
+    };
+    await assert.rejects(hooks.config!(config), /Native inputs changed/);
+    assert.equal(config.model, 'p/native');
+    assert.deepEqual(config.agent.worker, { model: 'p/pinned', temperature: 0.8 });
+    assert.deepEqual(config.command.run, { template: 'Native command.' });
+    const runtime = readRuntimeContext(config, { root: f.root, directory: f.root });
+    assert.equal(runtime.status, 'error');
+    assert.match(runtime.diagnostic!, /Composer not applied.*Native inputs changed/);
+    assert.equal(runtime.candidate, undefined);
+  });
 }
 
 for (const failure of ['invalid', 'explicit missing', 'invalid options'] as const) {

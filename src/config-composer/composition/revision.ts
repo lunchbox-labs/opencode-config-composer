@@ -122,7 +122,7 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
   const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
   const roots = nativeAgentSourceRoots(context);
   const fingerprints = (paths: string[]) => Promise.all(paths.map((path) => observation(path, true)));
-  // The categories read disjoint files, so their identities and hashes are collected concurrently.
+  // Collect independent fingerprints concurrently while preserving each category's path order.
   const [discovery, sources, json, globalJson, commands] = await Promise.all([
     Promise.all(
       roots
