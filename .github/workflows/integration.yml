@@ -11,8 +11,30 @@ concurrency:
   group: Integration-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  scope:
+    name: Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.scope.outputs.native }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          # The pull request merge commit and both of its parents, so the diff against
+          # the base branch needs no further fetch.
+          fetch-depth: 2
+      - name: Decide whether the changed files need the native suites
+        id: scope
+        env:
+          PULL_REQUEST_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci-scope.mjs
   native:
     name: Native integration (${{ matrix.os }}, ${{ matrix.suite }})
+    needs: scope
+    # Pushes to main always run every suite. When the scope job cannot say what changed,
+    # the suites run anyway and that failed job keeps the run red.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.native == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -25,13 +47,32 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        id: node
         with:
           node-version: '24'
           package-manager-cache: false
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
+      - name: Identify the runner image
+        id: image
+        shell: bash
+        # node-pty is compiled against the image's system libraries on Linux, so a cached
+        # install must stay within one runner image generation.
+        run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"
+      - name: Restore installed dependencies
+        id: dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+      - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        run: npm ci
         timeout-minutes: 3
+      - name: Save installed dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Test the installed package in native OpenCode
         run: npm run test:integration -- --suite ${{ matrix.suite }}
         timeout-minutes: 10
@@ -46,6 +87,8 @@ jobs:
           compression-level: 9
   minimum-registration:
     name: Npm loader (${{ matrix.os }}, OpenCode ${{ matrix.opencode }})
+    needs: scope
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.native == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -58,12 +101,31 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        id: node
         with:
           node-version: '24'
           package-manager-cache: false
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
+      - name: Identify the runner image
+        id: image
+        shell: bash
+        # node-pty is compiled against the image's system libraries on Linux, so a cached
+        # install must stay within one runner image generation.
+        run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"
+      - name: Restore installed dependencies
+        id: dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+      - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Save installed dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Test terminal profile apply readiness clock
         run: npm exec --call 'node --experimental-strip-types --test tests/terminal-apply.test.ts'
       - run: npm run test:integration -- --suite registration
