@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { setTimeout } from 'node:timers/promises';
 import { compositionFixture } from './integration/composition-fixture.ts';
 import { nativeTerminal } from './integration/terminal.ts';
+import { runtimeDiagnostic } from '../src/config-composer/tui/inspection.ts';
 
 test(
   'native inspector explains the selected alias binding and native default variant',
@@ -77,3 +81,37 @@ test(
     assert.equal(f.host.requests.length, 0);
   },
 );
+
+test('native TUI reports delayed config failures again after recovery', { timeout: 240000 }, async (t) => {
+  const f = await compositionFixture(t, 'tui-error-notice');
+  const slow = join(f.host.configRoot, 'slow-config.mjs');
+  await writeFile(
+    slow,
+    `export default { id: 'slow-config', server: async () => ({
+    config: async () => { await new Promise(resolve => setTimeout(resolve, 1600)); }
+  }) };`,
+  );
+  await f.write(f.paths.native, { ...f.native, plugin: [f.host.installed.directory, slow] });
+  const projectNative = join(f.host.project, 'opencode.jsonc');
+  await f.write(projectNative, {});
+  await f.host.start();
+  const terminal = await nativeTerminal(f.host, undefined, 'error-notice');
+  await terminal.wait(['Profile: Shared only']);
+  for (let episode = 0; episode < 2; episode++) {
+    // The later config hook keeps the host refresh pending beyond the old timer.
+    // The second episode publishes the identical diagnostic after a good refresh.
+    await f.write(projectNative, { agent: { worker: { groups: ['missing-group'] } } });
+    await f.host.api('/instance/dispose', {});
+    const loaded = await f.host.api('/config');
+    assert.match(runtimeDiagnostic(loaded, f.host.project, f.host.project) ?? '', /Composer not applied/);
+    await terminal.wait(['Config Composer', 'Composer not applied.']);
+    await f.write(projectNative, {});
+    await f.host.api('/instance/dispose', {});
+    await terminal.wait(['Profile: Shared only']);
+    for (let attempt = 0; terminal.text().includes('Composer not applied.') && attempt < 200; attempt++) {
+      await setTimeout(50);
+    }
+    assert.doesNotMatch(terminal.text(), /Composer not applied\./);
+  }
+  assert.equal(f.host.requests.length, 0);
+});

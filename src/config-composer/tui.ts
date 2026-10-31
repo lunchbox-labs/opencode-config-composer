@@ -340,7 +340,9 @@ export default {
   id: 'config-composer',
   tui: async (api) => {
     const { fixedMenu, registerProfileSlot } = await import('./tui/widgets.js');
+    const { registerErrorNotice } = await import('./tui/notice.js');
     registerConfiguration(api, (props) => fixedMenu(api, props));
     registerProfileSlot(api);
+    api.lifecycle.onDispose(registerErrorNotice(api));
   },
 } satisfies TuiPluginModule;
