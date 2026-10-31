@@ -21,6 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Validate GitHub workflows
+        if: matrix.opencode == 'latest'
         shell: bash
         run: |
           actionlint_dir="$RUNNER_TEMP/actionlint"
@@ -63,7 +64,14 @@ jobs:
         with:
           path: node_modules
           key: ${{ steps.dependencies.outputs.cache-primary-key }}
-      - run: npm run check
+      - name: Run the static checks, unit tests and packed-package tests
+        # They do not depend on the OpenCode version, so one lane runs them.
+        if: matrix.opencode == 'latest'
+        run: npm run check
+      - name: Build the package for the native tests
+        # The other lane builds it through the packed-package tests.
+        if: matrix.opencode == 'minimum'
+        run: npm run build
       - name: Resolve and install a compatible OpenCode binary
         id: opencode
         run: node scripts/opencode.mjs install "$RUNNER_TEMP/opencode"
