@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { documentationFiles, nativeChecksRequired, pullRequestChanges } from '../scripts/ci-scope.mjs';
+import { documentationFiles, main, nativeChecksRequired, pullRequestChanges } from '../scripts/ci-scope.mjs';
 
 test('pull requests that change only documentation skip the native matrix', () => {
   assert.equal(nativeChecksRequired(['README.md']), false);
@@ -34,9 +34,30 @@ test('an empty comparison runs every check', () => {
   assert.equal(nativeChecksRequired([]), true);
 });
 
+async function temporaryDirectory(t, prefix) {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  return directory;
+}
+
+async function outputOf(run) {
+  const output = join(await mkdtemp(join(tmpdir(), 'ci-scope-output-')), 'output');
+  try {
+    await run(output);
+    return await readFile(output, 'utf8');
+  } finally {
+    await rm(output, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
+test('pushes run every check without inspecting the checkout', async (t) => {
+  const directory = await temporaryDirectory(t, 'ci-scope-push-');
+  const output = await outputOf((file) => main({ GITHUB_EVENT_NAME: 'push', GITHUB_OUTPUT: file }, directory));
+  assert.equal(output, 'native=true\n');
+});
+
 test('pull request changes are read from the merge commit against its base', async (t) => {
-  const repository = await mkdtemp(join(tmpdir(), 'ci-scope-'));
-  t.after(() => rm(repository, { recursive: true, force: true }));
+  const repository = await temporaryDirectory(t, 'ci-scope-');
   const git = (...args) =>
     execFileSync(
       'git',
@@ -59,6 +80,8 @@ test('pull request changes are read from the merge commit against its base', asy
     git('add', '--all');
     git('commit', '--quiet', '--message', message);
   };
+  const scope = (env) =>
+    outputOf((file) => main({ GITHUB_EVENT_NAME: 'pull_request', GITHUB_OUTPUT: file, ...env }, repository));
 
   git('init', '--quiet', '--initial-branch=main');
   await commit('src/server.ts', 'export {};\n', 'base');
@@ -73,10 +96,15 @@ test('pull request changes are read from the merge commit against its base', asy
   git('merge', '--quiet', '--no-ff', '--no-edit', 'docs');
 
   assert.deepEqual(await pullRequestChanges({ head, cwd: repository }), ['README.md']);
-  await assert.rejects(
-    pullRequestChanges({ head: git('rev-parse', 'main^1'), cwd: repository }),
-    /does not merge the pull request head/,
-  );
+  assert.equal(await scope({ PULL_REQUEST_HEAD: head }), 'native=false\n');
+  await assert.rejects(scope({}), /PULL_REQUEST_HEAD/);
+
+  // A merge commit of an older head, or no merge commit at all, proves nothing about
+  // the pull request, so every check runs.
+  const staleHead = git('rev-parse', 'main^1');
+  assert.equal(await pullRequestChanges({ head: staleHead, cwd: repository }), undefined);
+  assert.equal(await scope({ PULL_REQUEST_HEAD: staleHead }), 'native=true\n');
   git('checkout', '--quiet', 'docs');
-  await assert.rejects(pullRequestChanges({ head, cwd: repository }), /merge commit with two parents/);
+  assert.equal(await pullRequestChanges({ head, cwd: repository }), undefined);
+  assert.equal(await scope({ PULL_REQUEST_HEAD: head }), 'native=true\n');
 });

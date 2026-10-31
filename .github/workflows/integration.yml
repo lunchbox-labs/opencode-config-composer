@@ -32,9 +32,9 @@ jobs:
   native:
     name: Native integration (${{ matrix.os }}, ${{ matrix.suite }})
     needs: scope
-    # Pushes to main always run every suite; a failed scope job skips nothing silently
-    # because the workflow itself fails.
-    if: needs.scope.outputs.native == 'true'
+    # Pushes to main always run every suite. When the scope job cannot say what changed,
+    # the suites run anyway and that failed job keeps the run red.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.native == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -51,12 +51,18 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Identify the runner image
+        id: image
+        shell: bash
+        # node-pty is compiled against the image's system libraries on Linux, so a cached
+        # install must stay within one runner image generation.
+        run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"
       - name: Restore installed dependencies
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
       - name: Install dependencies
         if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci
@@ -82,7 +88,7 @@ jobs:
   minimum-registration:
     name: Npm loader (${{ matrix.os }}, OpenCode ${{ matrix.opencode }})
     needs: scope
-    if: needs.scope.outputs.native == 'true'
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.native == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,12 +105,18 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Identify the runner image
+        id: image
+        shell: bash
+        # node-pty is compiled against the image's system libraries on Linux, so a cached
+        # install must stay within one runner image generation.
+        run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"
       - name: Restore installed dependencies
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
       - name: Install dependencies
         if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci

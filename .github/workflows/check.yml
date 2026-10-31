@@ -39,6 +39,12 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Identify the runner image
+        id: image
+        shell: bash
+        # node-pty is compiled against the image's system libraries on Linux, so a cached
+        # install must stay within one runner image generation.
+        run: echo "os=${ImageOS:-$RUNNER_OS}" >> "$GITHUB_OUTPUT"
       - name: Restore installed dependencies
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -46,7 +52,7 @@ jobs:
           path: node_modules
           # node-pty compiles from source on Linux, so the finished install restores far
           # faster than npm's download cache plus a fresh npm ci.
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+          key: node-modules-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
       - name: Install dependencies
         if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci
