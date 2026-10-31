@@ -204,7 +204,7 @@ test('published metadata preserves Node engines and keeps the OpenCode range tes
   assert.deepEqual(lock.packages[''].engines, manifest.engines);
   assert.equal(Object.hasOwn(manifest, 'opencodeTestVersion'), false);
   const testConfig = JSON.parse(await readFile(new URL('./opencode.json', import.meta.url), 'utf8'));
-  assert.deepEqual(testConfig, { range: '1.19.x', floor: '1.19.0' });
+  assert.equal(validateBaseline(manifest, lock, testConfig), testConfig.floor);
 });
 
 test('minimum coverage selects the configured test floor without querying npm', async () => {

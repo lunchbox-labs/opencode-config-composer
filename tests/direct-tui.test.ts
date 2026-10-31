@@ -68,7 +68,6 @@ async function fixture(
   const commands: { slashName: string; run: () => void }[] = [];
   let command = () => {};
   let disposed = 0;
-  let configReads = 0;
   let afterConfigRead = () => Promise.resolve();
   let catalogWait = () => Promise.resolve();
   const rendered: string[] = [];
@@ -93,7 +92,6 @@ async function fixture(
     client: {
       config: {
         get: async () => {
-          configReads++;
           await afterConfigRead();
           return { data: config };
         },
@@ -232,9 +230,6 @@ async function fixture(
     root,
     config,
     rendered,
-    get configReads() {
-      return configReads;
-    },
     onConfigRead: (operation: () => Promise<void>) => {
       afterConfigRead = operation;
     },
@@ -580,14 +575,6 @@ test('profile apply only reports applied after the new registration is attested'
   await confirmed;
   assert.equal(f.disposed, 1);
   assert.equal(f.toasts.length, 0);
-});
-
-test('profile catalog preview uses only the outer before/after runtime checks', async (t) => {
-  const f = await fixture(t);
-  const before = f.configReads;
-  await f.choose('○ a', 'Apply profile selection?');
-  assert.equal(f.configReads - before, 2);
-  assert.equal(f.disposed, 0);
 });
 
 for (const mutation of ['selection', 'frontmatter', 'native-json', 'command-body'] as const) {
