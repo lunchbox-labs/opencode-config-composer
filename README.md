@@ -45,4 +45,6 @@ Restart the OpenCode server process after editing files to update loaded definit
 
 See the [schema](schema.json) and examples for [provider profiles](docs/examples/provider-profiles/config-composer.jsonc), [shared permissions](docs/examples/role-permissions/config-composer.jsonc), and [worktree selection](docs/examples/project-selection/config-composer.jsonc); each example includes native agent membership in its adjacent `opencode.jsonc`. Native OpenCode retains agent prompts and command templates. For prompt composition, see the independent [Prompt Composer](https://github.com/lunchbox-labs/opencode-prompt-composer).
 
+For usage journeys, see the [user guide](https://github.com/lunchbox-labs/opencode-config-composer/wiki/User-Guide). Contributor and maintainer documentation is in the [Developer section](https://github.com/lunchbox-labs/opencode-config-composer/wiki/Developer).
+
 This package is licensed under MIT ([license](LICENSE)).
