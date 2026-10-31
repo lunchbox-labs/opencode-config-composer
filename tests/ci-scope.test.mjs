@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { documentationFiles, main, nativeChecksRequired, pullRequestChanges } from '../scripts/ci-scope.mjs';
 
@@ -46,7 +46,7 @@ async function outputOf(run) {
     await run(output);
     return await readFile(output, 'utf8');
   } finally {
-    await rm(output, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(dirname(output), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
