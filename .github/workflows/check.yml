@@ -5,6 +5,9 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: Check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
     strategy:
@@ -32,12 +35,28 @@ jobs:
           tar -xzf "$actionlint_dir/actionlint_1.7.7_linux_amd64.tar.gz" -C "$actionlint_dir" actionlint
           "$actionlint_dir/actionlint" .github/workflows/*.yml
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        id: node
         with:
           node-version: '24'
           package-manager-cache: false
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
+      - name: Restore installed dependencies
+        id: dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          # node-pty compiles from source on Linux, so the finished install restores far
+          # faster than npm's download cache plus a fresh npm ci.
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json') }}
+      - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Save installed dependencies
+        # Save before the checks so a failing run still seeds the cache for the next one.
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - run: npm run check
       - name: Resolve and install a compatible OpenCode binary
         id: opencode
