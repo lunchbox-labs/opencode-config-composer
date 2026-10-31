@@ -38,8 +38,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows runs on every push to main; pull requests run Linux only, which keeps the
-        # slowest jobs off the review path.
+        # Windows runs on pushes to main and manual runs; pull requests run Linux only, which
+        # keeps the slowest jobs off the review path.
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
         suite: [registration, core, examples, coexistence, profile, permissions, inspector, apply, terminal, cleanup]
     runs-on: ${{ matrix.os }}
@@ -94,6 +94,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Same lane rule as native.
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
         opencode: ['minimum']
     runs-on: ${{ matrix.os }}
@@ -129,6 +130,8 @@ jobs:
           path: node_modules
           key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Test terminal profile apply readiness clock
+        # Check already runs this unit test on Linux; only the Windows run adds coverage.
+        if: runner.os == 'Windows'
         run: npm exec --call 'node --experimental-strip-types --test tests/terminal-apply.test.ts'
       - run: npm run test:integration -- --suite registration
         env:
