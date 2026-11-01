@@ -464,26 +464,26 @@ test('native discovery merges and reports the first failure in traversal order a
   for (let index = 0; index < 40; index++) {
     await f.markdown(agents, `agent-${index}.md`, `model: fixture/${index}`);
   }
-  await f.markdown(agents, 'nested/inner.md', 'model: fixture/inner');
+  const inner = await f.markdown(agents, 'directory/inner.md', 'model: fixture/inner');
   const target = await f.markdown(f.root, 'target.md', 'model: fixture/link');
   const link = join(agents, 'link.md');
   await symlink(target, link);
   const traversal = async () =>
-    (await readdir(agents)).flatMap((name) =>
-      name === 'nested' ? [join(agents, name, 'inner.md')] : [join(agents, name)],
-    );
-  const names = async () => (await traversal()).map((path) => relative(agents, path).slice(0, -'.md'.length));
+    (await readdir(agents)).flatMap((name) => (name === 'directory' ? [inner] : [join(agents, name)]));
+  const names = async () =>
+    (await traversal()).map((path) => relative(agents, path).replaceAll('\\', '/').slice(0, -'.md'.length));
   const order = await traversal();
   assert.deepEqual([...(await readNativeAgentFrontmatter(f.context)).keys()], await names());
-  const broken = [...order.filter((_path, index) => index % 7 === 3), join(agents, 'nested/inner.md'), link];
+  const broken = [...order.filter((_path, index) => index % 7 === 3), inner, link];
   const remaining = order.filter((path) => broken.includes(path));
+  // A failure inside the directory must be reported after earlier sibling failures and before later ones.
+  assert.ok(remaining.indexOf(inner) > 0 && remaining.indexOf(inner) < remaining.length - 1, 'directory position');
   for (const [rank, path] of remaining.entries()) {
     if (path !== link) {
+      // Read failures alternate with failures found while merging an entry that read cleanly.
       // Earlier failures take longer to read, so later failures settle first.
-      await writeFile(
-        path,
-        `---\nmodel: [unterminated\n---\n${'Opaque.\n'.repeat((remaining.length - rank) * 16_384)}`,
-      );
+      const metadata = rank % 2 === 0 ? 'model: [unterminated' : 'options:\n  value: .inf';
+      await writeFile(path, `---\n${metadata}\n---\n${'Opaque.\n'.repeat((remaining.length - rank) * 16_384)}`);
     }
   }
   await rm(target);
@@ -508,7 +508,7 @@ test('native discovery merges and reports the first failure in traversal order a
   }
   const discovered = await readNativeAgentFrontmatter(f.context);
   assert.deepEqual([...discovered.keys()], await names());
-  assert.equal(discovered.get('nested/inner')?.fields.model?.value, 'fixture/repaired');
+  assert.equal(discovered.get('directory/inner')?.fields.model?.value, 'fixture/repaired');
   assert.equal(discovered.get('link')?.fields.model?.value, 'fixture/repaired');
 });
 
