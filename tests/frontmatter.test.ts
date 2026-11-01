@@ -512,6 +512,26 @@ test('native discovery merges and reports the first failure in traversal order a
   assert.equal(discovered.get('link')?.fields.model?.value, 'fixture/repaired');
 });
 
+test('a directory symlink back to an ancestor fails at the looping path among concurrent sibling reads', async (t) => {
+  const f = await fixture(t);
+  const agents = join(f.global, 'agents');
+  for (let index = 0; index < 20; index++) {
+    await f.markdown(agents, `agent-${index}.md`, `model: fixture/${index}`);
+    await f.markdown(agents, `sub/nested-${index}.md`, `model: fixture/nested-${index}`);
+  }
+  const loop = join(agents, 'sub', 'loop');
+  await symlink(agents, loop, 'dir');
+  await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, `Native agent frontmatter ${loop}: native search contains a directory cycle.`);
+    return true;
+  });
+  await rm(loop);
+  const discovered = await readNativeAgentFrontmatter(f.context);
+  assert.equal(discovered.size, 40);
+  assert.equal(discovered.get('sub/nested-19')?.fields.model?.value, 'fixture/nested-19');
+});
+
 test(
   'native agent discovery composes every agent under a bounded descriptor limit',
   { skip: process.platform === 'win32' },
