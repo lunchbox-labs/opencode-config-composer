@@ -8,6 +8,7 @@ import type { TuiDialogConfirmProps, TuiDialogSelectProps, TuiPluginApi, TuiToas
 import descriptor from '../src/config-composer/server.ts';
 import { registerConfiguration } from '../src/config-composer/tui.ts';
 import { appliedProfile } from '../src/config-composer/tui/inspection.ts';
+import { detailRows } from '../src/config-composer/tui/configuration-error.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { loadConfigurationContext } from '../src/config-composer/storage.ts';
 import { readSelectionAt, saveSelection } from '../src/config-composer/composition/selection-state.ts';
@@ -335,6 +336,42 @@ test('a long profile preview scrolls whole before its separate Apply confirmatio
   await f.confirm('Composer revision applied');
   assert.equal(f.disposed, 1);
   assert.equal((f.config.agent as Record<string, { model?: string }>).member7.model, 'p/a');
+});
+test('a preview beyond the scroll bound opens bounded pages and applies only after its confirmation', async (t) => {
+  const note = 'x'.repeat(100000);
+  const f = await fixture(
+    t,
+    '',
+    {},
+    {},
+    {
+      groups: { workers: { agent: { temperature: 0.2 } } },
+      profiles: { a: { groups: { workers: { agent: { model: 'p/a', options: { note } } } } } },
+    },
+  );
+  const title = 'Apply profile selection?';
+  await f.choose('○ a', title);
+  const pages = f.current!.options!.filter((option) => option.title.startsWith('Page '));
+  assert.ok(pages.length > 1);
+  await f.choose(pages[1].title, `${title} · 2/${pages.length}`);
+  assert.equal(f.current!.action, undefined, 'a page only returns');
+  assert.ok(f.current!.message!.split('\n').length <= detailRows);
+  await f.escape(title);
+  assert.equal(f.current!.current, pages[1].value, 'Escape returns to the page menu at the same page');
+  // Pages are wrapped rows; joined without breaks they hold the whole preview.
+  const text = (await f.detailText()).replaceAll('\n', '');
+  assert.ok(text.includes(`"note":"${note}"`));
+  assert.ok(text.endsWith('Existing session model/variant choices remain native.'));
+  await f.choose('Apply', 'Apply reviewed changes?');
+  await f.escape(title);
+  assert.equal(f.disposed, 0);
+  await assert.rejects(
+    f.context().then((context) => readFile(context.selection.path)),
+    /ENOENT/,
+  );
+  await f.confirm('Composer revision applied');
+  assert.equal(f.disposed, 1);
+  assert.equal(f.config.agent.worker.model, 'p/a');
 });
 test('profile confirmation includes changed and removed model parameter defaults', async (t) => {
   const f = await fixture(
