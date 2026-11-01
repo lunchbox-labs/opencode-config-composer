@@ -40,9 +40,9 @@ test('release validation rejects private, provisional, mismatched, prerelease, a
 
 test('release publication verifies the tagged main commit and publishes only through npm OIDC', async () => {
   const { readFile } = await import('node:fs/promises');
-  const { parse } = await import('yaml');
+  const { default: jsYaml } = await import('js-yaml');
   const source = await readFile(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8');
-  const workflow = parse(source);
+  const workflow = jsYaml.safeLoad(source);
   assert.deepEqual(workflow.on, { release: { types: ['published'] } });
   assert.ok(!source.includes('workflow_dispatch'));
   assert.ok(!source.includes('inputs.'));
