@@ -97,12 +97,53 @@ test('overlapping groups follow the agent array and report the winning source', 
   );
 });
 
+test('steps follows scalar precedence across groups, profile groups and named patches', () => {
+  const document = read({
+    groups: { first: { agent: { steps: 10 } }, last: { agent: { steps: 20 } } },
+    agent: { pinned: { steps: 30 } },
+    profiles: {
+      capped: { groups: { first: { agent: { steps: 1 } }, last: { agent: { steps: 2 } } } },
+      named: { agent: { pinned: { steps: 40 } } },
+    },
+  });
+  const baseline = {
+    agent: {
+      worker: { groups: ['first', 'last'], steps: 99 },
+      early: { groups: ['first'] },
+      pinned: { groups: ['first', 'last'] },
+      native: { steps: 7 },
+    },
+  };
+  const steps = (profile: string | null) => {
+    const result = resolveComposition(document, profile, baseline, {});
+    return Object.fromEntries(
+      ['worker', 'early', 'pinned', 'native'].map((name) => [
+        name,
+        [result.agent[name].steps, result.decisions[`/agent/${name}/steps`].origin.pointer],
+      ]),
+    );
+  };
+  assert.deepEqual(steps(null), {
+    worker: [20, '/groups/last/agent/steps'],
+    early: [10, '/groups/first/agent/steps'],
+    pinned: [30, '/agent/pinned/steps'],
+    native: [7, undefined],
+  });
+  assert.deepEqual(steps('capped'), {
+    worker: [2, '/profiles/capped/groups/last/agent/steps'],
+    early: [1, '/profiles/capped/groups/first/agent/steps'],
+    pinned: [30, '/agent/pinned/steps'],
+    native: [7, undefined],
+  });
+  assert.deepEqual(steps('named').pinned, [40, '/profiles/named/agent/pinned/steps']);
+});
 test('each Composer contribution reports its blocked values beneath final authored fields', () => {
   const patch = {
     model: 'p/composer',
     variant: 'high',
     temperature: 1,
     top_p: 1,
+    steps: 9,
     options: { flag: true },
     mode: 'subagent',
     permission: 'allow',
@@ -112,6 +153,7 @@ test('each Composer contribution reports its blocked values beneath final author
     variant: '',
     temperature: 0,
     top_p: 0,
+    steps: 2,
     options: { flag: false },
     mode: 'primary',
     permission: { '*': 'deny' },

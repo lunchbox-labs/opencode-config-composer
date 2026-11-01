@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { compositionFixture } from './integration/composition-fixture.ts';
 test(
@@ -76,5 +77,71 @@ test(
         ),
     );
     assert.equal(await readFile(f.paths.native, 'utf8'), bytes);
+  },
+);
+
+test(
+  'installed profile steps reach native agents across repeated hooks while frontmatter steps stay final',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'profile-steps');
+    await f.write(f.paths.native, {
+      ...f.native,
+      agent: { ...f.native.agent, worker: { ...f.native.agent.worker, groups: ['workers'] } },
+    });
+    const global = join(f.host.configRoot, 'agents');
+    const project = join(f.host.project, '.opencode', 'agents');
+    await mkdir(global);
+    await mkdir(project, { recursive: true });
+    // Native decodes each Markdown source's deprecated maxSteps as its steps value before merging sources,
+    // so a later maxSteps replaces an earlier source's steps.
+    const files = {
+      [join(global, 'pinned.md')]: '---\ngroups: [workers]\nsteps: 5\n---\nPINNED_BODY',
+      [join(global, 'deprecated.md')]: '---\ngroups: [workers]\nmaxSteps: 4\n---\nDEPRECATED_BODY',
+      [join(global, 'crossed.md')]: '---\ngroups: [workers]\nsteps: 5\n---\nCROSSED_BODY',
+      [join(project, 'crossed.md')]: '---\nmaxSteps: 2\n---\nCROSSED_PROJECT_BODY',
+    };
+    for (const [path, body] of Object.entries(files)) {
+      await writeFile(path, body);
+    }
+    await f.write(f.paths.shared, {
+      groups: { workers: {} },
+      profiles: { capped: { groups: { workers: { agent: { steps: 1 } } } }, open: {} },
+    });
+    const nativeBytes = await readFile(f.paths.native, 'utf8');
+    await f.host.start();
+    for (const choice of ['capped', 'open', 'capped', null] as const) {
+      await f.editor.applySelection(await f.editor.select(choice));
+      const capped = choice === 'capped';
+      const config = await f.host.api<{ agent: Record<string, Record<string, unknown>> }>('/config');
+      assert.deepEqual(
+        ['worker', 'pinned', 'deprecated', 'crossed'].map((name) => config.agent[name].steps),
+        [capped ? 1 : undefined, 5, 4, 2],
+      );
+      // Native /agent reports an unset configured agent's steps as null.
+      const agents = await f.host.api<{ name: string; steps?: number | null }[]>('/agent');
+      assert.deepEqual(
+        ['worker', 'pinned', 'deprecated', 'crossed'].map((name) => agents.find((agent) => agent.name === name)?.steps),
+        [capped ? 1 : null, 5, 4, 2],
+      );
+      const { decisions } = (await f.editor.runtime()).candidate!;
+      assert.equal(
+        Object.hasOwn(decisions, '/agent/worker/steps') ? decisions['/agent/worker/steps'].origin.pointer : undefined,
+        capped ? '/profiles/capped/groups/workers/agent/steps' : undefined,
+      );
+      for (const name of ['pinned', 'deprecated', 'crossed']) {
+        const decision = decisions[`/agent/${name}/steps`];
+        assert.equal(decision.origin.kind, 'frontmatter', name);
+        assert.equal(decision.value, agents.find((agent) => agent.name === name)?.steps, name);
+        assert.equal(decision.blockedComposer?.value, capped ? 1 : undefined, name);
+      }
+      // The native loop switches to text-only output on the configured final step.
+      const { captured } = await f.send('worker');
+      assert.equal(JSON.stringify(captured.messages).includes('MAXIMUM STEPS REACHED'), capped);
+    }
+    for (const [path, body] of Object.entries(files)) {
+      assert.equal(await readFile(path, 'utf8'), body);
+    }
+    assert.equal(await readFile(f.paths.native, 'utf8'), nativeBytes);
   },
 );

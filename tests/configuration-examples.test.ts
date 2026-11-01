@@ -53,6 +53,32 @@ test('shipped examples validate against strict schema and target native builtins
   }
 });
 
+test('published schema and parser accept only positive safe integer steps in every agent patch', async () => {
+  const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as object;
+  const validate = new Ajv({ strict: false }).compile(schema);
+  const documents = (patch: Record<string, unknown>) => [
+    { agent: { worker: patch } },
+    { groups: { workers: { agent: patch } } },
+    { profiles: { inactive: { agent: { worker: patch } } } },
+    { groups: { workers: {} }, profiles: { inactive: { groups: { workers: { agent: patch } } } } },
+  ];
+  for (const steps of [1, Number.MAX_SAFE_INTEGER]) {
+    for (const document of documents({ steps })) {
+      assert.equal(validate(document), true, JSON.stringify(document));
+      assert.doesNotThrow(() => readCompositionDocument(document));
+    }
+  }
+  for (const patch of [
+    ...[0, -1, 1.5, '3', null, Number.MAX_SAFE_INTEGER + 1].map((steps) => ({ steps })),
+    { maxSteps: 3 },
+  ]) {
+    for (const document of documents(patch)) {
+      assert.equal(validate(document), false, JSON.stringify(document));
+      assert.throws(() => readCompositionDocument(document), /positive safe integer|Unknown key/);
+    }
+  }
+});
+
 test('published schema uses native action-only permissions and string modes in every agent patch', async () => {
   const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as object;
   const validate = new Ajv({ strict: false }).compile(schema);
