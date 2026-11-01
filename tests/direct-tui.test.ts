@@ -434,7 +434,7 @@ test('inspection attributes group and profile steps to their Composer pointers',
   await f.reopen();
   await f.choose('○ capped', 'Apply profile selection?');
   assert.match((await f.preview()).replaceAll('\n', ''), /\/profiles\/capped\/groups\/workers\/agent\/steps/);
-  await f.confirm('Composer revision applied');
+  await f.applied();
   f.setNativeAgents([{ name: 'worker', native: false, steps: 1 }]);
   await f.open('view-configs', 'Configuration');
   await f.choose('agent worker', 'agent worker');
