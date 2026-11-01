@@ -1,12 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
-import {
-  MAX_CONFIGURATION_BYTES,
-  configurationDirectory,
-  configurationFile,
-  configurationPath,
-  parseConfiguration,
-} from '../configuration.ts';
+import { MAX_CONFIGURATION_BYTES, configurationFile, configurationPath, parseConfiguration } from '../configuration.ts';
+import { configurationDirectory } from '../configuration-directory.ts';
 import { SettingsError, record } from '../settings.ts';
 import { canonical } from './selection-state.ts';
 import { readCompositionDocument } from './document.ts';

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { resolve } from 'node:path';
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
-import { configurationDirectory } from './configuration.ts';
+import { configurationDirectory } from './configuration-directory.ts';
 import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
 import { SettingsError, record } from './settings.ts';
 import { nativeAgentSettings } from './membership.ts';

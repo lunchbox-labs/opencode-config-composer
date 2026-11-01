@@ -8,6 +8,21 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { installPackage } from './install-package.ts';
 
+// Prints the URL of every module resolved while importing the specifier in argv[1].
+const recordImports = `
+import { registerHooks } from 'node:module';
+const urls = [];
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const result = nextResolve(specifier, context);
+    urls.push(result.url);
+    return result;
+  },
+});
+await import(process.argv[1]);
+console.log(JSON.stringify(urls));
+`;
+
 test('the tarball runs outside the checkout with only production dependencies', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'composer-package-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -21,6 +36,17 @@ test('the tarball runs outside the checkout with only production dependencies', 
   await copyFile(new URL('./installed-consumer.mjs', import.meta.url), join(root, 'consumer.mjs'));
   const result = await promisify(execFile)(process.execPath, ['consumer.mjs', installed.name], { cwd: root });
   assert.match(result.stdout, /installed package verified/);
+  // The host imports the TUI entry at startup. Frontmatter and JSONC parsing happen later, if at all.
+  const startup = await promisify(execFile)(
+    process.execPath,
+    ['--input-type=module', '--eval', recordImports, `${installed.name}/tui`],
+    { cwd: root },
+  );
+  const resolved = JSON.parse(startup.stdout) as string[];
+  assert.ok(resolved.some((url) => url.endsWith('/dist/tui.js')));
+  for (const parser of ['gray-matter', 'js-yaml', 'jsonc-parser']) {
+    assert.ok(!resolved.some((url) => url.includes(`/node_modules/${parser}/`)), `the TUI entry imports ${parser}`);
+  }
   // TypeScript consumers supply OpenCode's development types; runtime checks above use production dependencies only.
   for (const name of ['@opencode-ai', '@opentui', '@types', 'solid-js']) {
     await symlink(

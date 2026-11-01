@@ -10,15 +10,6 @@ export interface ConfigurationFile {
 }
 export const MAX_CONFIGURATION_BYTES = 1024 * 1024;
 
-export function configurationDirectory(environment: NodeJS.ProcessEnv = process.env): string {
-  const configured = environment.OPENCODE_CONFIG_DIR;
-  if (configured !== undefined && configured !== '') {
-    return resolve(configured);
-  }
-  const xdg = environment.XDG_CONFIG_HOME;
-  return xdg !== undefined && isAbsolute(xdg) ? join(xdg, 'opencode') : join(homedir(), '.config', 'opencode');
-}
-
 export function configurationPath(value: string, directory: string): string {
   if (value.trim() === '' || value.includes('\0')) {
     throw new SettingsError('Select a valid Config Composer configuration path.');
