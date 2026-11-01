@@ -27,6 +27,7 @@ test('CI suites partition every portable integration file exactly once', async (
     'tests/model-parameters.native.ts',
     'tests/review-programming.native.ts',
     'tests/config-composer-tui.native.ts',
+    'tests/process-profile.native.ts',
     ...(await readdir(new URL('./integration/', import.meta.url)))
       .filter((name) => /\.integration\.(?:ts|mjs)$/.test(name))
       .map((name) => `tests/integration/${name}`),

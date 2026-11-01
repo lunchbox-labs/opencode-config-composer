@@ -14,6 +14,14 @@ export function selectionStateDirectory(environment: NodeJS.ProcessEnv = process
   return join(state !== undefined && isAbsolute(state) ? state : join(homedir(), '.local', 'state'), 'opencode');
 }
 
+/** Names one existing profile for the whole server process in place of the saved worktree choice. */
+export const processProfileVariable = 'OPENCODE_CONFIG_COMPOSER_PROFILE';
+/** An empty value means unset; profile names are never empty. */
+export function processProfile(environment: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = environment[processProfileVariable];
+  return value === undefined || value === '' ? undefined : value;
+}
+
 export interface SelectionEnvironment {
   stateDirectory: string;
   lifetime: string;

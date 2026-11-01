@@ -10,6 +10,7 @@ test('server startup publishes a real selection proof', async () => {
   const directory = selectionStateDirectory();
   assert.equal((await readdir(join(directory, 'config-composer/v2/processes'))).length, 1);
   console.log(`STATE_DIRECTORY=${JSON.stringify(process.env.XDG_STATE_HOME)}`);
+  console.log(`PROCESS_PROFILE=${JSON.stringify(process.env.OPENCODE_CONFIG_COMPOSER_PROFILE ?? null)}`);
   if (process.env.COMPOSER_FAIL_FIXTURE === '1') {
     assert.fail('intentional fixture failure');
   }
