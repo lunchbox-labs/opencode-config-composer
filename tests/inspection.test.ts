@@ -4,29 +4,33 @@ import {
   type Inspection,
   appliedProfile,
   inspectionAgents,
+  profileSlot,
   runtimeDiagnostic,
 } from '../src/config-composer/tui/inspection.ts';
 import { sameConfigurationValue } from '../src/config-composer/composition/runtime-baseline.ts';
 
-test('profile label uses only the applied marker and remains safe for reactive proxies', () => {
-  const marker = {
+test('prompt slot shows the applied profile or a failed composition and remains safe for reactive proxies', () => {
+  const marker: Record<string, unknown> & { candidate: { profile: string | null } } = {
     version: 2,
     status: 'applied',
     location: { directory: '/project', root: '/project' },
     revision: { effective: 'applied-revision' },
-    candidate: { profile: 'Primary' as string | null },
+    candidate: { profile: 'Primary' },
     selection: { choice: 'different-saved-choice' },
   };
   const config = new Proxy({ plugin: [['composer', { __configComposerRuntime: marker }]] }, {});
-  const read = () => appliedProfile(config, '/project', '/project');
-  assert.equal(read(), 'Primary');
+  const read = () => profileSlot(config, '/project', '/project');
+  assert.deepEqual(read(), { text: 'Profile: Primary', error: false });
   marker.candidate.profile = null;
-  assert.equal(read(), 'Shared only');
+  assert.deepEqual(read(), { text: 'Profile: Shared only', error: false });
+  // The slot outlasts the toast and shows neither the earlier profile nor the diagnostic text.
   marker.status = 'error';
-  assert.equal(read(), undefined);
+  marker.diagnostic = 'Composer not applied. apiKey=PRIVATE_SENTINEL';
+  assert.deepEqual(read(), { text: 'Profile: error', error: true });
+  assert.deepEqual(profileSlot(config, '/other', '/other'), { text: '', error: false });
   marker.status = 'applied';
-  assert.equal(appliedProfile(config, '/other', '/other'), undefined);
-  assert.equal(appliedProfile({}, '/project', '/project'), undefined);
+  assert.deepEqual(read(), { text: 'Profile: Shared only', error: false });
+  assert.deepEqual(profileSlot({}, '/project', '/project'), { text: '', error: false });
 });
 test('the published diagnostic is read only from an error marker for the same location', () => {
   const marker: Record<string, unknown> = {
