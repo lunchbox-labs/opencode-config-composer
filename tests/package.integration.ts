@@ -17,6 +17,7 @@ test('the tarball runs outside the checkout with only production dependencies', 
   assert.ok(!dependencies.includes('@opentui'));
   assert.ok(!dependencies.includes('typescript'));
   assert.ok(!dependencies.includes('ajv'), 'schema validation is a development-only dependency');
+  assert.ok(!dependencies.includes('yaml'), 'packaged skill frontmatter uses the native agent YAML parser');
   assert.deepEqual(await readdir(join(root, 'node_modules', '@lunchbox-labs')), ['opencode-config-composer']);
   await copyFile(new URL('./installed-consumer.mjs', import.meta.url), join(root, 'consumer.mjs'));
   const result = await promisify(execFile)(process.execPath, ['consumer.mjs', installed.name], { cwd: root });

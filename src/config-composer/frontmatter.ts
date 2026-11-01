@@ -188,18 +188,8 @@ function sanitize(content: string): string {
   });
 }
 
-function parseMetadata(content: string, path: string): Record<string, unknown> {
-  // gray-matter removes a UTF-8 BOM before selecting its engine. Match that preflight too.
-  const input = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-  if (input.startsWith('---') && input[3] !== '-') {
-    const language = matter.language(input).name;
-    if (language !== '' && language !== 'json' && !['yaml', 'yml'].includes(language.toLowerCase())) {
-      throw diagnostic(
-        path,
-        `unsupported frontmatter engine ${JSON.stringify(language)}; only YAML and JSON are available.`,
-      );
-    }
-  }
+/** Parse a Markdown header with only the safe YAML and JSON engines, without native's lenient fallback. */
+export function frontmatterData(content: string, path: string): unknown {
   const yaml = (text: string): object => {
     const value: unknown = jsYaml.safeLoad(text);
     if (!record(value)) {
@@ -218,13 +208,27 @@ function parseMetadata(content: string, path: string): Record<string, unknown> {
     throw diagnostic(path, 'unsupported executable frontmatter engine.');
   };
   // Passing options is essential: gray-matter otherwise caches entire files, including prompt bodies.
-  const options = { engines: { yaml, json, javascript: unsupported } };
+  return matter(content, { engines: { yaml, json, javascript: unsupported } }).data;
+}
+
+function parseMetadata(content: string, path: string): Record<string, unknown> {
+  // gray-matter removes a UTF-8 BOM before selecting its engine. Match that preflight too.
+  const input = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+  if (input.startsWith('---') && input[3] !== '-') {
+    const language = matter.language(input).name;
+    if (language !== '' && language !== 'json' && !['yaml', 'yml'].includes(language.toLowerCase())) {
+      throw diagnostic(
+        path,
+        `unsupported frontmatter engine ${JSON.stringify(language)}; only YAML and JSON are available.`,
+      );
+    }
+  }
   try {
     let data: unknown;
     try {
-      data = matter(content, options).data;
+      data = frontmatterData(content, path);
     } catch {
-      data = matter(sanitize(content), options).data;
+      data = frontmatterData(sanitize(content), path);
     }
     if (!record(data)) {
       throw new Error('Native frontmatter must be an object.');

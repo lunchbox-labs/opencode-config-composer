@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout } from 'node:timers/promises';
 import { readFile, readdir } from 'node:fs/promises';
-import { parse } from 'yaml';
+import jsYaml from 'js-yaml';
 import { stopProcess } from './integration/process.ts';
 
 test('integration runner selects native Linux and Windows binaries and rejects untested platforms', () => {
@@ -31,7 +31,9 @@ test('CI suites partition every portable integration file exactly once', async (
       .filter((name) => /\.integration\.(?:ts|mjs)$/.test(name))
       .map((name) => `tests/integration/${name}`),
   ].sort();
-  const workflow = parse(await readFile(new URL('../.github/workflows/integration.yml', import.meta.url), 'utf8'));
+  const workflow = jsYaml.safeLoad(
+    await readFile(new URL('../.github/workflows/integration.yml', import.meta.url), 'utf8'),
+  );
   const suites = workflow.jobs.native.strategy.matrix.suite;
   assert.ok(Array.isArray(suites) && suites.every((suite) => typeof suite === 'string'));
   const files = suites.flatMap(integrationFiles);
