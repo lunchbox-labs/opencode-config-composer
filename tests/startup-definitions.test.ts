@@ -3,15 +3,17 @@ import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { type TestContext, test } from 'node:test';
 import type { PluginInput } from '@opencode-ai/plugin';
 import descriptor from '../src/config-composer/server.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { readRuntimeContext } from '../src/config-composer/composition/runtime-baseline.ts';
+import { loadConfigurationContext } from '../src/config-composer/storage.ts';
 import {
+  processProfileVariable,
   selectionLifetime,
   selectionLocator,
   selectionStateDirectory,
@@ -42,6 +44,17 @@ async function fixture(t: TestContext) {
     return readRuntimeContext(config, { root, directory: root });
   };
   return { root, source, input, load };
+}
+function setProcessProfile(t: TestContext, value: string) {
+  const before = process.env[processProfileVariable];
+  process.env[processProfileVariable] = value;
+  t.after(() => {
+    if (before === undefined) {
+      Reflect.deleteProperty(process.env, processProfileVariable);
+    } else {
+      process.env[processProfileVariable] = before;
+    }
+  });
 }
 
 for (const mutation of ['agent edit', 'agent addition', 'agent deletion', 'JSON edit', 'command edit'] as const) {
@@ -204,6 +217,65 @@ test('concurrent first registrations and duplicate module loads share one captur
   assert.equal(reads, 2);
 });
 
+test('a captured process profile replaces saved and default choices and keeps saved state read-only', async (t) => {
+  const f = await fixture(t);
+  await writeFile(
+    f.source,
+    JSON.stringify({ profiles: { a: { model: 'p/a' }, b: { model: 'p/b' } }, defaultProfile: 'b' }),
+  );
+  setProcessProfile(t, 'a');
+  const first = await f.load();
+  assert.equal(first.processProfile, 'a');
+  assert.equal(first.candidate?.profile, 'a');
+  assert.equal(first.applied.model, 'p/a');
+  assert.equal(first.selection, undefined);
+  // Saved state that would stop normal composition is neither read nor replaced.
+  await mkdir(dirname(first.selectionLocator.path), { recursive: true });
+  await writeFile(first.selectionLocator.path, 'unreadable');
+  process.env[processProfileVariable] = 'b';
+  const config = { plugin: [packageName] };
+  await (
+    await descriptor.server(f.input)
+  ).config!(config);
+  const again = readRuntimeContext(config, { root: f.root, directory: f.root });
+  assert.equal(again.definitionId, first.definitionId);
+  assert.equal(again.candidate?.profile, 'a');
+  await assert.rejects(
+    loadConfigurationContext({
+      location: { root: f.root, directory: f.root },
+      assertCurrent: () => {},
+      config: () => Promise.resolve(config),
+      proveFilesystem: () => Promise.resolve(),
+    }),
+    /OPENCODE_CONFIG_COMPOSER_PROFILE selects profile a.*read-only/,
+  );
+  assert.equal(await readFile(first.selectionLocator.path, 'utf8'), 'unreadable');
+});
+
+test('an empty process profile is unset', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.source, JSON.stringify({ profiles: { a: {}, b: {} }, defaultProfile: 'b' }));
+  setProcessProfile(t, '');
+  const runtime = await f.load();
+  assert.equal(runtime.processProfile, undefined);
+  assert.equal(runtime.candidate?.profile, 'b');
+  assert.equal(runtime.selection?.path, runtime.selectionLocator.path);
+});
+
+test('an unknown process profile is a sticky startup error naming the variable and loaded profiles', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.source, JSON.stringify({ model: 'p/shared', profiles: { a: {}, b: {} }, defaultProfile: 'a' }));
+  setProcessProfile(t, 'missing');
+  const diagnostic = /OPENCODE_CONFIG_COMPOSER_PROFILE names unknown profile "missing"\. Profiles in .+: "a", "b"\./;
+  await assert.rejects(f.load(), diagnostic);
+  process.env[processProfileVariable] = 'a';
+  const config = { plugin: [packageName], model: 'p/native' };
+  await assert.rejects((await descriptor.server(f.input)).config!(config), diagnostic);
+  // Composer is not applied; neither the default profile nor shared settings replace the request.
+  assert.equal(config.model, 'p/native');
+  assert.throws(() => readRuntimeContext(config, { root: f.root, directory: f.root }), diagnostic);
+});
+
 test('loaded definition and locator transport reject malformed attestation', async (t) => {
   const f = await fixture(t);
   const hooks = await descriptor.server(f.input);
@@ -213,6 +285,7 @@ test('loaded definition and locator transport reject malformed attestation', asy
     { definitionId: '' },
     { source: { fingerprint: 'bad' } },
     { selectionLocator: { root: f.root, path: '../state', baseFile: f.source } },
+    { processProfile: 'missing' },
   ]) {
     const altered = structuredClone(config) as unknown as {
       plugin: [string, { __configComposerRuntime: Record<string, unknown> }][];

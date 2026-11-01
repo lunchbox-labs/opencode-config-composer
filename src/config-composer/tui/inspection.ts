@@ -84,7 +84,9 @@ export function appliedProfile(config: unknown, directory: string, root: string)
     return;
   }
   const profile = marker.candidate.profile;
-  return profile === null ? 'Shared only' : typeof profile === 'string' ? profile : undefined;
+  const label = profile === null ? 'Shared only' : typeof profile === 'string' ? profile : undefined;
+  // A process profile is not the saved worktree choice that /profiles would change.
+  return label !== undefined && typeof marker.processProfile === 'string' ? `${label} (env)` : label;
 }
 /** The diagnostic the server published when its config hook failed for this location. */
 export function runtimeDiagnostic(config: unknown, directory: string, root: string): string | undefined {

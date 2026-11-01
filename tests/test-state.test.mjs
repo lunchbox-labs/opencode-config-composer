@@ -10,7 +10,12 @@ for (const failure of [false, true]) {
   test(`server test state is isolated and removed after ${failure ? 'failure' : 'success'}`, async (t) => {
     const inherited = await mkdtemp(join(tmpdir(), 'composer-user-state-'));
     t.after(() => rm(inherited, { recursive: true, force: true }));
-    const env = { ...process.env, XDG_STATE_HOME: inherited, COMPOSER_FAIL_FIXTURE: failure ? '1' : '0' };
+    const env = {
+      ...process.env,
+      XDG_STATE_HOME: inherited,
+      OPENCODE_CONFIG_COMPOSER_PROFILE: 'inherited',
+      COMPOSER_FAIL_FIXTURE: failure ? '1' : '0',
+    };
     delete env.NODE_TEST_CONTEXT;
     const result = await promisify(execFile)(
       process.execPath,
@@ -33,5 +38,6 @@ for (const failure of [false, true]) {
     assert.notEqual(isolated, inherited, 'test startup must not publish proofs into inherited personal state');
     assert.deepEqual(await readdir(inherited), [], 'personal state remains untouched');
     await assert.rejects(stat(isolated), { code: 'ENOENT' }, 'temporary state must be removed');
+    assert.match(result.stdout, /PROCESS_PROFILE=null/, 'the caller process profile must not reach tests');
   });
 }

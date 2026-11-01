@@ -41,6 +41,14 @@ Later entries in an agent's `groups` array win overlaps. Permission patterns com
 
 Definitions are shared across projects using this file; profile choices persist separately per worktree. **Shared only** skips profile settings. **Follow configured default** follows `defaultProfile` again. Profile changes have a preview and Apply confirmation.
 
+To use another profile for one OpenCode process, such as a CI run or one of several servers on a worktree, name it in `OPENCODE_CONFIG_COMPOSER_PROFILE`. It takes precedence over the saved choice and `defaultProfile`, is never saved, and makes `/profiles` read-only for that process:
+
+```sh
+OPENCODE_CONFIG_COMPOSER_PROFILE=review opencode run "Review the staged changes"
+```
+
+An unknown name leaves Composer unapplied for that process. `opencode run` then continues with native settings and exits successfully; the error appears only with `--print-logs`.
+
 Restart the OpenCode server process after editing files to update loaded definitions. Applying a profile requires an idle instance and unchanged native configuration files. Existing session model/variant choices remain native.
 
 See the [schema](schema.json) and examples for [provider profiles](docs/examples/provider-profiles/config-composer.jsonc), [shared permissions](docs/examples/role-permissions/config-composer.jsonc), and [worktree selection](docs/examples/project-selection/config-composer.jsonc); each example includes native agent membership in its adjacent `opencode.jsonc`. Native OpenCode retains agent prompts and command templates. For prompt composition, see the independent [Prompt Composer](https://github.com/lunchbox-labs/opencode-prompt-composer).

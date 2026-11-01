@@ -2,6 +2,7 @@ import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
 import { type ConfigurationView, fieldDetail, modelParameterDetail, permissionNotice } from './view.ts';
 import { agentFields, commandFields, pointer } from '../composition/document.ts';
 import { sameConfigurationValue } from '../composition/runtime-baseline.ts';
+import { processProfileNotice } from '../storage.ts';
 import { record } from '../settings.ts';
 import { retainedSession, sessionNotice } from './running.ts';
 import { inspectionText } from './configuration-error.ts';
@@ -216,9 +217,13 @@ export function openEffective(view: InspectionView): void {
                 `Current loaded configuration\n${JSON.stringify({ model: config.model, small_model: config.small_model, default_agent: config.default_agent, permission: config.permission }, null, 2)}\n\nLoaded Composer definitions\n${document === undefined ? 'Unavailable' : JSON.stringify({ model: document.model, small_model: document.small_model, models: document.models, agent: document.agent, command: document.command }, null, 2)}`,
               );
             } else if (option.value === '\0status') {
+              const selection =
+                runtime?.processProfile === undefined
+                  ? 'Saved choices awaiting apply are shown in /profiles.'
+                  : processProfileNotice(runtime.processProfile);
               view.details(
                 'Runtime status and sources',
-                `Current loaded server configuration\n${runtime?.status === 'applied' ? `Applied profile: ${runtime.candidate?.profile ?? 'Shared only'}` : 'Applied Composer profile unavailable.'}\n${runtime === undefined ? 'Composer source attribution unavailable.' : `Source: ${runtime.source.path}\nLoaded default: ${document?.defaultProfile ?? 'Shared only'}\nStatus: ${runtime.status}\n${runtime.diagnostic ?? ''}`}\nSaved choices awaiting apply are shown in /profiles.\n\n${sessionNotice}`,
+                `Current loaded server configuration\n${runtime?.status === 'applied' ? `Applied profile: ${runtime.candidate?.profile ?? 'Shared only'}` : 'Applied Composer profile unavailable.'}\n${runtime === undefined ? 'Composer source attribution unavailable.' : `Source: ${runtime.source.path}\nLoaded default: ${document?.defaultProfile ?? 'Shared only'}\nStatus: ${runtime.status}\n${runtime.diagnostic ?? ''}`}\n${selection}\n\n${sessionNotice}`,
               );
             } else if (option.value === '\0session') {
               const checkpoint = view.nav.checkpoint();

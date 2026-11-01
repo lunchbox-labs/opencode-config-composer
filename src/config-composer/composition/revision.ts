@@ -150,13 +150,20 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
     commands: digest(commands),
   };
 }
+/** The saved worktree state, or the process profile that replaces it. */
+export type SelectionInput = Pick<SelectionSnapshot, 'text'> | { processProfile: string };
 export function compositionRevision(
   source: LoadedSource,
-  state: SelectionSnapshot,
+  selection: SelectionInput,
   candidate: ResolvedCandidate,
 ): CompositionRevision {
   return {
-    sources: digest([source.path, source.canonicalPath, source.fingerprint, state.text ?? null]),
+    sources: digest([
+      source.path,
+      source.canonicalPath,
+      source.fingerprint,
+      'processProfile' in selection ? { processProfile: selection.processProfile } : (selection.text ?? null),
+    ]),
     effective: digest({
       ...candidate,
       agent: Object.fromEntries(
