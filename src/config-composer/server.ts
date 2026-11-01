@@ -7,6 +7,7 @@ import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.t
 import { SettingsError, record } from './settings.ts';
 import { nativeAgentSettings } from './membership.ts';
 import { type LoadedSource, loadSource, pluginOptions } from './composition/sources.ts';
+import { agentFields, commandFields } from './composition/document.ts';
 import { resolveComposition } from './composition/runtime.ts';
 import { applyModelParameters } from './composition/model-parameters.ts';
 import { type RuntimeMarker, configFields, metadata, publishRuntime } from './composition/runtime-baseline.ts';
@@ -173,13 +174,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
                 }
                 return [
                   name,
-                  restore(
-                    value,
-                    nested.get(value),
-                    kind === 'agent'
-                      ? ['groups', 'model', 'variant', 'temperature', 'top_p', 'options', 'mode', 'permission']
-                      : ['agent', 'model', 'subtask'],
-                  ),
+                  restore(value, nested.get(value), kind === 'agent' ? ['groups', ...agentFields] : commandFields),
                 ];
               }),
             );

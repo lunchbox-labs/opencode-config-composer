@@ -1,7 +1,16 @@
 import { SettingsError, record } from '../settings.ts';
 import type { CompositionDocument } from './document-types.ts';
 export const pointer = (value: string) => value.replaceAll('~', '~0').replaceAll('/', '~1');
-export const agentFields = ['model', 'variant', 'temperature', 'top_p', 'options', 'mode', 'permission'] as const;
+export const agentFields = [
+  'model',
+  'variant',
+  'temperature',
+  'top_p',
+  'steps',
+  'options',
+  'mode',
+  'permission',
+] as const;
 export const commandFields = ['agent', 'model', 'subtask'] as const;
 function fail(path: string, message: string): never {
   throw new SettingsError(`${path === '' ? '/' : path}: ${message}`);
@@ -137,6 +146,10 @@ function patch(value: unknown, kind: 'agent' | 'command', path: string, referenc
     } else if (key === 'temperature' || key === 'top_p') {
       if (typeof v !== 'number' || !Number.isFinite(v)) {
         fail(at, 'Invalid numeric value.');
+      }
+    } else if (key === 'steps') {
+      if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0) {
+        fail(at, 'Expected a positive safe integer.');
       }
     } else if (key === 'options') {
       if (!record(v)) {

@@ -27,6 +27,7 @@
         "review": {
           "agent": {
             "temperature": 0,
+            "steps": 25,
           },
         },
       },

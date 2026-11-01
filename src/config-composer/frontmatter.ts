@@ -8,7 +8,8 @@ import jsYaml from 'js-yaml';
 import { SettingsError, record } from './settings.ts';
 import { readAgentGroups, withoutGroups } from './membership.ts';
 
-export type AuthoredAgentField = 'model' | 'variant' | 'temperature' | 'top_p' | 'options' | 'mode' | 'permission';
+export type AuthoredAgentField =
+  'model' | 'variant' | 'temperature' | 'top_p' | 'steps' | 'options' | 'mode' | 'permission';
 
 export interface NativeFrontmatterSource {
   /** Lexical native discovery path; aliases retain their native identity. */
@@ -263,6 +264,13 @@ function authoredFields(
     if (Object.hasOwn(data, key)) {
       pin(key, data[key], { [key]: data[key] });
     }
+  }
+  // Native decodes each source as steps ?? maxSteps before merging sources.
+  if (Object.hasOwn(data, 'steps') || Object.hasOwn(data, 'maxSteps')) {
+    pin('steps', data.steps ?? data.maxSteps, {
+      ...(Object.hasOwn(data, 'steps') ? { steps: data.steps } : {}),
+      ...(Object.hasOwn(data, 'maxSteps') ? { maxSteps: data.maxSteps } : {}),
+    });
   }
   const extras = Object.fromEntries(Object.entries(data).filter(([key]) => !nativeAgentKeys.has(key)));
   if (Object.hasOwn(data, 'options') || Object.keys(extras).length !== 0) {
