@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { SettingsError, record } from '../settings.ts';
+import { permissionNames } from '../host.ts';
 import { readAgentGroups } from '../membership.ts';
 import { serverEntry } from '../registration.ts';
 import { configurationDirectory } from '../configuration-directory.ts';
@@ -96,23 +97,6 @@ export function publishRuntime(
   }
   return marker;
 }
-const permissionNames = [
-  'read',
-  'edit',
-  'glob',
-  'grep',
-  'list',
-  'bash',
-  'task',
-  'external_directory',
-  'todowrite',
-  'question',
-  'webfetch',
-  'websearch',
-  'lsp',
-  'doom_loop',
-  'skill',
-];
 function permissionTransport(value: unknown): unknown {
   if (!record(value)) {
     return value;

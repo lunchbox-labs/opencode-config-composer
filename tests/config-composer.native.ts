@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { actionOnlyPermissions, permissionNames } from '../src/config-composer/host.ts';
 import { compositionFixture } from './integration/composition-fixture.ts';
 test(
   'installed native authority preserves field pins and appends authored permission rules last',
@@ -98,7 +99,7 @@ test(
   async (t) => {
     const f = await compositionFixture(t, 'invalid-native-values');
     const documents = [
-      ...['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'].flatMap((tool) =>
+      ...[...actionOnlyPermissions].flatMap((tool) =>
         [{}, { '*': 'deny' }].map((value) => ({
           model: 'fixture/beta',
           agent: { worker: { temperature: 0.9, permission: { [tool]: value } } },
@@ -137,6 +138,24 @@ test(
     await f.host.stop();
     await f.host.start();
     assert.equal((await f.editor.runtime()).status, 'applied');
+  },
+);
+
+test(
+  'native validation rejects pattern blocks for exactly the action-only permissions',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'native-action-only-permissions');
+    const permission = Object.fromEntries([...permissionNames, 'custom_tool'].map((name) => [name, { '*': 'deny' }]));
+    await f.host.start({ configContent: { agent: { worker: { permission } } } });
+    const response = await f.host.response('/config');
+    const body = (await response.json()) as { name?: string; data?: { issues?: { path: string[] }[] } };
+    assert.equal(response.status, 400, JSON.stringify(body));
+    assert.equal(body.name, 'ConfigInvalidError');
+    assert.deepEqual(
+      new Set(body.data?.issues?.map(({ path }) => path.join('.'))),
+      new Set([...actionOnlyPermissions].map((name) => `agent.worker.permission.${name}`)),
+    );
   },
 );
 

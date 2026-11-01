@@ -1,4 +1,5 @@
 import { SettingsError, record } from '../settings.ts';
+import { actionOnlyPermissions } from '../host.ts';
 import type { CompositionDocument } from './document-types.ts';
 export const pointer = (value: string) => value.replaceAll('~', '~0').replaceAll('/', '~1');
 export const agentFields = [
@@ -47,7 +48,7 @@ function permission(value: unknown, path: string): void {
     if (action(entry)) {
       continue;
     }
-    if (['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'].includes(key)) {
+    if (actionOnlyPermissions.has(key)) {
       fail(`${path}/${pointer(key)}`, 'Expected a permission action.');
     }
     if (!record(entry) || !Object.values(entry).every(action)) {

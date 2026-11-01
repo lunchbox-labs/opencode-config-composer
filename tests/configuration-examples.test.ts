@@ -5,6 +5,7 @@ import Ajv from 'ajv/dist/2020.js';
 import { parseConfiguration } from '../src/config-composer/configuration.ts';
 import { readCompositionDocument } from '../src/config-composer/composition/document.ts';
 import { resolveComposition } from '../src/config-composer/composition/runtime.ts';
+import { actionOnlyPermissions, permissionNames } from '../src/config-composer/host.ts';
 
 test('provider examples allocate one provider or an explicit mixed profile to existing agents', async () => {
   const document = readCompositionDocument(
@@ -82,7 +83,7 @@ test('published schema and parser accept only positive safe integer steps in eve
 test('published schema uses native action-only permissions and string modes in every agent patch', async () => {
   const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as object;
   const validate = new Ajv({ strict: false }).compile(schema);
-  for (const tool of ['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop']) {
+  for (const tool of [...permissionNames, 'custom_tool']) {
     for (const value of [{}, { '*': 'deny' }]) {
       const patch = { permission: { [tool]: value } };
       for (const document of [
@@ -90,7 +91,7 @@ test('published schema uses native action-only permissions and string modes in e
         { groups: { workers: { agent: patch } } },
         { profiles: { inactive: { agent: { worker: patch } } } },
       ]) {
-        assert.equal(validate(document), false, JSON.stringify(document));
+        assert.equal(validate(document), !actionOnlyPermissions.has(tool), JSON.stringify(document));
       }
     }
     assert.equal(validate({ agent: { worker: { permission: { [tool]: 'ask' } } } }), true);
@@ -98,11 +99,5 @@ test('published schema uses native action-only permissions and string modes in e
   for (const mode of [['primary'], ['subagent'], ['all'], [[['primary']]]]) {
     assert.equal(validate({ profiles: { inactive: { agent: { worker: { mode } } } } }), false);
   }
-  assert.equal(
-    validate({
-      agent: { worker: { permission: { bash: {}, read: { '*.md': 'ask' }, custom_tool: { '*': 'deny' } } } },
-    }),
-    true,
-  );
   assert.equal(validate({ agent: { worker: { permission: {} } } }), true);
 });
