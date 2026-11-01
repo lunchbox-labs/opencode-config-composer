@@ -29,7 +29,11 @@ function fixture(samples: (() => Runtime)[]) {
     editor: { runtime: async () => samples[Math.min(reads++, samples.length - 1)]() },
   } as unknown as Fixture;
   const terminal = { text: () => '', choose: async () => {}, press: async () => {} } as unknown as Terminal;
-  return { run: () => applyFromTerminal(fixture, terminal), reads: () => reads, agentReads: () => agentReads };
+  return {
+    run: () => applyFromTerminal(fixture, terminal, 'Profile a applied.'),
+    reads: () => reads,
+    agentReads: () => agentReads,
+  };
 }
 
 test('terminal profile apply waits through unpublished registration and an old marker before accepting the new baseline', async () => {
