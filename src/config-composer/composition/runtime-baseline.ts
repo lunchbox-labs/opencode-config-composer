@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { SettingsError, record } from '../settings.ts';
 import { readAgentGroups } from '../membership.ts';
 import { serverEntry } from '../registration.ts';
-import { configurationDirectory } from '../configuration.ts';
+import { configurationDirectory } from '../configuration-directory.ts';
 import type { NativeBaseline, ResolvedCandidate } from './document-types.ts';
 import type { CompositionRevision, NativeObservation } from './revision.ts';
 import type { LoadedSource } from './sources.ts';

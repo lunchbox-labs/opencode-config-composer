@@ -3,8 +3,6 @@ import { createHash } from 'node:crypto';
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, extname, join, relative, sep } from 'node:path';
-import matter from 'gray-matter';
-import jsYaml from 'js-yaml';
 import { SettingsError, record } from './settings.ts';
 import { readAgentGroups, withoutGroups } from './membership.ts';
 
@@ -188,7 +186,15 @@ function sanitize(content: string): string {
   });
 }
 
-function parseMetadata(content: string, path: string): Record<string, unknown> {
+// The TUI parses frontmatter only while verifying a profile, so load the parsers on first use, not at startup.
+let parsers: ReturnType<typeof importParsers> | undefined;
+async function importParsers() {
+  const [{ default: matter }, { default: jsYaml }] = await Promise.all([import('gray-matter'), import('js-yaml')]);
+  return { matter, jsYaml };
+}
+
+async function parseMetadata(content: string, path: string): Promise<Record<string, unknown>> {
+  const { matter, jsYaml } = await (parsers ??= importParsers());
   // gray-matter removes a UTF-8 BOM before selecting its engine. Match that preflight too.
   const input = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
   if (input.startsWith('---') && input[3] !== '-') {
@@ -373,7 +379,7 @@ async function readMetadata(path: string): Promise<{ data: Record<string, unknow
     }
     const text = bytes.toString('utf8');
     return {
-      data: parseMetadata(text, path),
+      data: await parseMetadata(text, path),
       source: { path, canonicalPath, fingerprint: createHash('sha256').update(bytes).digest('hex') },
     };
   } finally {
