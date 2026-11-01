@@ -72,3 +72,10 @@ export function diagnosticPages(value: string, columns: number, rows: number): s
   }
   return pages;
 }
+
+/** Wrapped rows one scrollable view holds; longer text is divided into pages so each view stays bounded. */
+export const detailRows = 1000;
+export function detailPages(value: string): string[] {
+  const pages = diagnosticPages(value, 95, detailRows);
+  return pages.length > 1 ? pages : [value];
+}

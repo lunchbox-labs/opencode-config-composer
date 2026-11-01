@@ -1,12 +1,25 @@
 import type { TuiDialogSelectProps, TuiPluginApi } from '@opencode-ai/plugin/tui';
 
-type Render = () => ReturnType<TuiPluginApi['ui']['DialogAlert']>;
+type Element = ReturnType<TuiPluginApi['ui']['DialogAlert']>;
+interface Frame {
+  render: () => Element;
+  size?: TuiPluginApi['ui']['dialog']['size'];
+}
 const backValue = '\u0000back';
 
 /** Retain parent views while using V1's replacement-only dialog API. */
-export type FixedMenu = (props: TuiDialogSelectProps<string>) => ReturnType<TuiPluginApi['ui']['DialogSelect']>;
-export function dialogNavigation(api: TuiPluginApi, fixedMenu: FixedMenu) {
-  let frames: Render[] = [];
+export type FixedMenu = (props: TuiDialogSelectProps<string>) => Element;
+/** Read-only text. Enter runs onConfirm, labelled by action, and otherwise returns like Escape. */
+export interface DetailsProps {
+  title: string;
+  message: string;
+  onConfirm?: () => void;
+  action?: string;
+}
+/** `scroll` holds the reader's place while the view's Enter action is open. */
+export type DetailsView = (props: DetailsProps & { onConfirm: () => void; scroll: { top: number } }) => Element;
+export function dialogNavigation(api: TuiPluginApi, widgets: { fixedMenu: FixedMenu; details: DetailsView }) {
+  let frames: Frame[] = [];
   let revision = 0;
   let replacing = false;
 
@@ -35,7 +48,7 @@ export function dialogNavigation(api: TuiPluginApi, fixedMenu: FixedMenu) {
     };
   };
 
-  const display = (render: Render) => {
+  const display = (frame: Frame) => {
     if (api.lifecycle.signal.aborted) {
       return;
     }
@@ -46,7 +59,7 @@ export function dialogNavigation(api: TuiPluginApi, fixedMenu: FixedMenu) {
     const active = ++revision;
     replacing = true;
     try {
-      api.ui.dialog.replace(render, () => {
+      api.ui.dialog.replace(frame.render, () => {
         if (replacing || active !== revision) {
           return;
         }
@@ -74,19 +87,23 @@ export function dialogNavigation(api: TuiPluginApi, fixedMenu: FixedMenu) {
           }
         });
       });
+      // Replacement resets the native dialog to its medium size.
+      if (frame.size !== undefined) {
+        api.ui.dialog.setSize(frame.size);
+      }
     } finally {
       replacing = false;
     }
   };
-  const show = (render: Render, root = false) => {
+  const show = (frame: Frame, root = false) => {
     if (api.lifecycle.signal.aborted) {
       return;
     }
     if (root) {
       reset();
     }
-    frames.push(render);
-    display(render);
+    frames.push(frame);
+    display(frame);
   };
   const close = () => {
     reset();
@@ -141,10 +158,18 @@ export function dialogNavigation(api: TuiPluginApi, fixedMenu: FixedMenu) {
         },
       });
   };
-  const menu = (props: TuiDialogSelectProps<string>, root = false) => show(select(props, api.ui.DialogSelect), root);
-  const fixed = (props: TuiDialogSelectProps<string>, root = false) => show(select(props, fixedMenu), root);
-  const alert = (props: Parameters<TuiPluginApi['ui']['DialogAlert']>[0]) => show(() => api.ui.DialogAlert(props));
-  const confirm = (props: Parameters<TuiPluginApi['ui']['DialogConfirm']>[0]) =>
-    show(() => api.ui.DialogConfirm(props));
-  return { menu, fixed, alert, confirm, close, reset, checkpoint };
+  const menu = (props: TuiDialogSelectProps<string>, root = false) =>
+    show({ render: select(props, api.ui.DialogSelect) }, root);
+  const fixed = (props: TuiDialogSelectProps<string>, root = false) =>
+    show({ render: select(props, widgets.fixedMenu) }, root);
+  const alert = (props: Parameters<TuiPluginApi['ui']['DialogAlert']>[0]) =>
+    show({ render: () => api.ui.DialogAlert(props) });
+  const confirm = (props: Parameters<TuiPluginApi['ui']['DialogConfirm']>[0], size?: Frame['size']) =>
+    show({ render: () => api.ui.DialogConfirm(props), size });
+  const details = (props: DetailsProps) => {
+    // Cancelling the Enter action shows this frame again; it reopens where the reader left it.
+    const scroll = { top: 0 };
+    show({ render: () => widgets.details({ ...props, onConfirm: props.onConfirm ?? back, scroll }), size: 'xlarge' });
+  };
+  return { menu, fixed, alert, confirm, details, close, reset, checkpoint };
 }
