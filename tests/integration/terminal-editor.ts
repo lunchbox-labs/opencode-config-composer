@@ -5,13 +5,14 @@ import type { nativeTerminal } from './terminal.ts';
 export async function applyFromTerminal(
   fixture: Awaited<ReturnType<typeof compositionFixture>>,
   terminal: Awaited<ReturnType<typeof nativeTerminal>>,
+  notice: string,
 ) {
   await fixture.host.prepareConfigurationDependencies();
   const previous = await fixture.editor.runtime();
   if (terminal.text().includes('Review page')) {
     await terminal.choose('Apply', 'Apply reviewed changes?');
   }
-  await terminal.press('\r', 'Composer revision applied');
+  await terminal.press('\r', 'Config Composer', notice);
   let pending: Error | undefined;
   for (let attempt = 0; attempt < 200; attempt++) {
     const current = await fixture.editor.runtime().catch((error: unknown) => {

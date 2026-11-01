@@ -66,13 +66,17 @@ export function mergePermission(previous: unknown, incoming: unknown): unknown {
   }
   return result;
 }
+/** The profile a worktree choice selects: following the default resolves to the loaded `defaultProfile`. */
+export function effectiveProfile(document: CompositionDocument, choice: Selection): string | null {
+  return choice === undefined ? (document.defaultProfile ?? null) : choice;
+}
 export function resolveComposition(
   document: CompositionDocument,
   choice: Selection,
   native: NativeBaseline,
   authority: NativeAuthority,
 ): ResolvedCandidate {
-  const profile = choice === undefined ? (document.defaultProfile ?? null) : choice;
+  const profile = effectiveProfile(document, choice);
   if (profile !== null && !Object.hasOwn(document.profiles, profile)) {
     throw new SettingsError(
       `Saved profile ${profile} does not exist. Choose none, follow default, or another profile. Composer not applied.`,
