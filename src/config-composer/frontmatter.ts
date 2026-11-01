@@ -6,6 +6,7 @@ import { dirname, extname, join, relative, sep } from 'node:path';
 import matter from 'gray-matter';
 import jsYaml from 'js-yaml';
 import { SettingsError, record } from './settings.ts';
+import { type AgentConfigKey, actionOnlyPermissions } from './host.ts';
 import { readAgentGroups, withoutGroups } from './membership.ts';
 
 export type AuthoredAgentField = 'model' | 'variant' | 'temperature' | 'top_p' | 'options' | 'mode' | 'permission';
@@ -45,25 +46,27 @@ export interface NativeFrontmatterContext {
 
 // OpenCode v1.19.0 packages/core/src/v1/config/agent.ts, plus Composer groups metadata.
 // These keys are not provider options.
-const nativeAgentKeys = new Set([
-  'name',
-  'groups',
-  'model',
-  'variant',
-  'prompt',
-  'description',
-  'temperature',
-  'top_p',
-  'mode',
-  'hidden',
-  'color',
-  'steps',
-  'maxSteps',
-  'options',
-  'permission',
-  'disable',
-  'tools',
-]);
+const nativeAgentKeys = new Set(
+  Object.keys({
+    name: true,
+    groups: true,
+    model: true,
+    variant: true,
+    prompt: true,
+    description: true,
+    temperature: true,
+    top_p: true,
+    mode: true,
+    hidden: true,
+    color: true,
+    steps: true,
+    maxSteps: true,
+    options: true,
+    permission: true,
+    disable: true,
+    tools: true,
+  } satisfies Record<AgentConfigKey | 'name' | 'groups', true>),
+);
 const directFields = ['model', 'variant', 'temperature', 'top_p', 'mode'] as const;
 const actions = new Set(['allow', 'ask', 'deny']);
 
@@ -147,10 +150,7 @@ function validateMetadata(data: Record<string, unknown>, path: string): void {
       (!record(permission) ||
         !Object.entries(permission).every(
           ([key, value]) =>
-            action(value) ||
-            (!['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop'].includes(key) &&
-              record(value) &&
-              Object.values(value).every(action)),
+            action(value) || (!actionOnlyPermissions.has(key) && record(value) && Object.values(value).every(action)),
         ))
     ) {
       invalid('permission');

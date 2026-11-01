@@ -121,18 +121,8 @@ test(
       const runtime = await f.editor.runtime();
       assert.equal(runtime.definitionId, loaded.definitionId);
       const agents = await f.host.api<PermissionAgent[]>('/agent');
-      for (const name of [
-        'worker',
-        'helper',
-        'empty',
-        'build',
-        'plan',
-        'general',
-        'explore',
-        'compaction',
-        'title',
-        'summary',
-      ]) {
+      // Every agent the host reports, including built-ins Composer did not see in native config.
+      for (const { name } of agents) {
         assert.equal(
           action(agents, name, 'edit', 'file.ts'),
           choice === 'a' ? 'ask' : choice === 'b' ? 'allow' : 'deny',

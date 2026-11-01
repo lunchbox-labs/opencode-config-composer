@@ -5,6 +5,7 @@ import Ajv from 'ajv/dist/2020.js';
 import { parseConfiguration } from '../src/config-composer/configuration.ts';
 import { readCompositionDocument } from '../src/config-composer/composition/document.ts';
 import { resolveComposition } from '../src/config-composer/composition/runtime.ts';
+import { actionOnlyPermissions } from '../src/config-composer/host.ts';
 
 test('provider examples allocate one provider or an explicit mixed profile to existing agents', async () => {
   const document = readCompositionDocument(
@@ -56,7 +57,7 @@ test('shipped examples validate against strict schema and target native builtins
 test('published schema uses native action-only permissions and string modes in every agent patch', async () => {
   const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as object;
   const validate = new Ajv({ strict: false }).compile(schema);
-  for (const tool of ['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop']) {
+  for (const tool of actionOnlyPermissions) {
     for (const value of [{}, { '*': 'deny' }]) {
       const patch = { permission: { [tool]: value } };
       for (const document of [
