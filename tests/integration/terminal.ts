@@ -13,6 +13,7 @@ export async function nativeTerminal(
   host: Awaited<ReturnType<typeof nativeHarness>>,
   sessionID?: string,
   name = 'compose-terminal',
+  { cols, rows } = { cols: 180, rows: 55 },
 ) {
   const diagnosticModule = join(host.root, 'native-path-diagnostics.mjs');
   const diagnosticFile = join(host.root, `${name}-paths.json`);
@@ -26,14 +27,14 @@ export async function nativeTerminal(
       plugin: [...(tuiConfig.plugin ?? []), [diagnosticModule, { file: diagnosticFile }]],
     }),
   );
-  const screen = new headless.Terminal({ cols: 180, rows: 55, scrollback: 0, allowProposedApi: true });
+  const screen = new headless.Terminal({ cols, rows, scrollback: 0, allowProposedApi: true });
   const child = pty.spawn(
     process.env.OPENCODE_BIN ?? 'opencode',
     ['attach', host.url, '--dir', host.project, ...(sessionID === undefined ? [] : ['--session', sessionID])],
     {
       name: 'xterm-256color',
-      cols: 180,
-      rows: 55,
+      cols,
+      rows,
       cwd: host.project,
       env: { ...host.environment, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     },
@@ -159,11 +160,34 @@ export async function nativeTerminal(
     }
     assert.fail(`Fixed menu option ${label} not found:\n${text()}`);
   };
+  // Wrapped text can break after punctuation without a space, so ignore all whitespace.
+  const shows = (label: string) => text().replace(/\s/g, '').includes(label.replace(/\s/g, ''));
+  // A frame can arrive in several writes, and a newly opened scroll box can take one
+  // more frame to settle its layout after its labels first appear.
+  const idle = async () => {
+    for (let seen = -1; seen !== revision;) {
+      seen = revision;
+      await setTimeout(250);
+    }
+  };
+  /** Page down the focused details view until `end` shows; returns every screen read on the way. */
+  const scrollTo = async (end: string) => {
+    let read = text();
+    for (let page = 0; !shows(end); page++) {
+      assert.ok(page < 100, `Scrolling did not reveal ${JSON.stringify(end)}:\n${text()}`);
+      const before = revision;
+      child.write('\x1b[6~');
+      await waitInput(() => revision > before, 'the next scrolled frame');
+      await idle();
+      read += `\n${text()}`;
+    }
+    return read;
+  };
   const command = async (name: string, ...labels: string[]) => {
     await waitInput(search.promptFocused, 'the main conversation input');
     await press(name, name);
     await waitInput(() => search.echoed(name), `the command query ${JSON.stringify(name)}`);
     await press('\r', ...labels);
   };
-  return { text, wait, press, choose, chooseFixed, command, stop };
+  return { text, shows, wait, idle, press, choose, chooseFixed, scrollTo, command, stop };
 }

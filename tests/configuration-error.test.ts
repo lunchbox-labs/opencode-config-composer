@@ -43,6 +43,18 @@ test('long diagnostics are divided into readable pages without dropping the fina
   assert.match(pages.at(-1)!, /Final validation detail/);
 });
 
+test('detail text scrolls whole up to the generous bound and divides beyond it without loss', async () => {
+  const { detailPages, detailRows } = await import('../src/config-composer/tui/configuration-error.ts');
+  const line = 'option: ' + 'x'.repeat(150);
+  const long = Array.from({ length: detailRows / 2 - 1 }, () => line).join('\n');
+  assert.deepEqual(detailPages(long), [long], 'text within the bound keeps its own lines for native wrapping');
+  const huge = Array.from({ length: detailRows }, (_, index) => `${index}: ${line}`).join('\n');
+  const pages = detailPages(huge);
+  assert.ok(pages.length > 1);
+  assert.ok(pages.every((page) => page.split('\n').length <= detailRows));
+  assert.equal(pages.join('').replaceAll('\n', ''), huge.replaceAll('\n', ''));
+});
+
 test('inspection preserves complete long values while retaining diagnostic sanitization', () => {
   const value = 'options: ' + 'x'.repeat(30000);
   assert.equal(inspectionText(value), value);
