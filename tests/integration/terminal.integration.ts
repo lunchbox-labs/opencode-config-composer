@@ -28,7 +28,7 @@ test(
     assert.match(preview, /Removed contribution: inherit\/native fallback/);
     assert.match(preview, /Previously configured/);
     assert.match(preview, /0\.7/);
-    await applyFromTerminal(f, terminal);
+    await applyFromTerminal(f, terminal, 'Shared only applied.');
     assert.equal((await f.editor.runtime()).candidate?.agent.helper.top_p, undefined);
     assert.equal((await f.editor.context()).selection.choice, null);
     assert.equal(await readFile(f.paths.shared, 'utf8'), source);
@@ -62,9 +62,11 @@ test(
     await terminal.press('\x1b', 'Profiles');
     await assert.rejects(readFile(context.selection.path), /ENOENT/);
     await terminal.choose('○ review', 'Apply profile selection?');
-    await applyFromTerminal(f, terminal);
+    await applyFromTerminal(f, terminal, 'Profile review applied.');
     assert.equal((await f.editor.context()).selection.choice, 'review');
-    await terminal.press('\x1b', 'ctrl+p', 'Profile: review');
+    // The applied notice is a toast and the requesting review menu closes, leaving the input usable.
+    await terminal.wait(['ctrl+p', 'Profile: review']);
+    assert.doesNotMatch(terminal.text(), /Apply profile selection\?|Follow configured default/);
     await terminal.command('/view-configs', 'Configuration');
     await terminal.choose('agent worker', 'agent worker', 'model');
     await terminal.chooseFixed(
@@ -100,7 +102,7 @@ test(
     await terminal.press('\x1b', 'ctrl+p');
     await terminal.command('/profiles', 'Follow configured default');
     await terminal.choose('Shared only', 'Config Composer', 'Restart the OpenCode server process');
-    assert.doesNotMatch(terminal.text(), /Composer revision applied/);
+    assert.doesNotMatch(terminal.text(), /Shared only applied/);
     assert.equal((await f.editor.runtime()).id, previous.id);
     assert.equal(f.host.requests.length, 0);
   },

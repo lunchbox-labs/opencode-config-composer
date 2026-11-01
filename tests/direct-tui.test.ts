@@ -8,6 +8,7 @@ import type { TuiDialogConfirmProps, TuiDialogSelectProps, TuiPluginApi, TuiToas
 import descriptor from '../src/config-composer/server.ts';
 import { registerConfiguration } from '../src/config-composer/tui.ts';
 import { appliedProfile } from '../src/config-composer/tui/inspection.ts';
+import { sessionNotice } from '../src/config-composer/tui/running.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { loadConfigurationContext } from '../src/config-composer/storage.ts';
 import { readSelectionAt, saveSelection } from '../src/config-composer/composition/selection-state.ts';
@@ -184,13 +185,26 @@ async function fixture(
     api.ui.dialog.clear();
     await wait(next);
   };
-  const confirm = async (next: string) => {
+  const submit = async () => {
     if (current?.options?.some((option) => option.value === 'apply') === true) {
       await choose('Apply', 'Apply reviewed changes?');
     }
     (current as TuiDialogConfirmProps).onConfirm?.();
     api.ui.dialog.clear();
+  };
+  const confirm = async (next: string) => {
+    await submit();
     await wait(next);
+  };
+  const applied = async () => {
+    const before = toasts.length;
+    await submit();
+    for (let i = 0; i < 1000 && toasts.length === before; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    assert.equal(toasts.length, before + 1, `Expected one applied notice; got ${JSON.stringify(current)}`);
+    assert.equal(current, undefined, 'a confirmed apply leaves no Composer dialog open');
+    return toasts.at(-1);
   };
   const detailText = async () => {
     const title = current!.title;
@@ -267,7 +281,9 @@ async function fixture(
     },
     choose,
     escape,
+    submit,
     confirm,
+    applied,
     preview,
     detailText,
     wait,
@@ -310,10 +326,49 @@ test('profile preview confirms selection and writes no definition bytes', async 
   await f.escape('Profiles');
   assert.equal(f.disposed, 0);
   await f.choose('○ a', 'Apply profile selection?');
-  await f.confirm('Composer revision applied');
+  assert.deepEqual(await f.applied(), { variant: 'success', title: 'Config Composer', message: 'Profile a applied.' });
   assert.equal(f.disposed, 1);
   assert.equal(f.config.agent.worker.model, 'p/a');
   assert.equal(await f.read(), before);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('Runtime status and sources', 'Runtime status and sources');
+  const status = await f.detailText();
+  assert.match(status, /Applied profile: a/);
+  // Detail pages hard-wrap long lines.
+  assert.ok(status.replaceAll('\n', '').includes(sessionNotice), 'retained-session guidance remains in the inspector');
+});
+test('following the configured default reports the default profile as applied', async (t) => {
+  const f = await fixture(t, '', undefined, undefined, {
+    groups: { workers: { agent: {} } },
+    profiles: { a: { agent: { worker: { model: 'p/a' } } }, b: { agent: { worker: { model: 'p/b' } } } },
+    defaultProfile: 'b',
+  });
+  await f.choose('○ a', 'Apply profile selection?');
+  assert.equal((await f.applied())?.message, 'Profile a applied.');
+  await f.reopen();
+  await f.choose('Follow configured default', 'Apply profile selection?');
+  assert.equal((await f.applied())?.message, 'Profile b applied.');
+  assert.equal(f.config.agent.worker.model, 'p/b');
+});
+test('a failing applied notice does not report an attested apply as failed', async (t) => {
+  const f = await fixture(t);
+  const toast = t.mock.method(f.api.ui, 'toast', () => {
+    throw new Error('Toast unavailable');
+  });
+  await f.choose('○ a', 'Apply profile selection?');
+  await f.submit();
+  for (let i = 0; i < 1000 && toast.mock.callCount() === 0; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.equal(toast.mock.callCount(), 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.current, undefined);
+  assert.equal(f.rendered.includes('Saved; not applied'), false);
+  assert.equal(f.rendered.includes('Config Composer'), false);
+  assert.equal(f.disposed, 1);
+  assert.equal(f.config.agent.worker.model, 'p/a');
+  // The command is no longer busy: profiles open again.
+  await f.reopen();
 });
 
 test('profile confirmation includes changed and removed model parameter defaults', async (t) => {
@@ -341,7 +396,7 @@ test('profile confirmation includes changed and removed model parameter defaults
   assert.match(changed, /"maxOutputTokens": 100/);
   assert.match(changed, /temperature: 0 takes priority \(frontmatter\)/);
   assert.match(changed, /Alias options blocked by authored frontmatter/);
-  await f.confirm('Composer revision applied');
+  await f.applied();
   await f.reopen();
   await f.choose('○ b', 'Apply profile selection?');
   assert.match(await f.preview(), /Removed model-bound defaults/);
@@ -454,6 +509,7 @@ test('busy selection remains saved and pending without disposal', async (t) => {
   f.setBusy();
   await f.choose('○ b', 'Apply profile selection?');
   await f.confirm('Saved; not applied');
+  assert.equal(f.toasts.length, 0);
   assert.equal(f.disposed, 0);
   assert.equal(await f.read(), before);
 });
@@ -465,7 +521,7 @@ test('deleted saved profile can be recovered through Shared only', async (t) => 
   await saveSelection(selection, 'deleted', async () => {});
   await f.reopen();
   await f.choose('Shared only', 'Apply profile selection?');
-  await f.confirm('Composer revision applied');
+  assert.equal((await f.applied())?.message, 'Shared only applied.');
   assert.equal(readRuntimeContext(f.config, { root: f.root, directory: f.root }).selection?.choice, null);
 });
 test('inspection and profile switching retain loaded definitions after malformed source edits', async (t) => {
@@ -481,7 +537,7 @@ test('inspection and profile switching retain loaded definitions after malformed
   assert.match(f.current?.message ?? '', /workers/);
   await f.reopen();
   await f.choose('○ a', 'Apply profile selection?');
-  await f.confirm('Composer revision applied');
+  await f.applied();
   assert.equal(f.config.agent.worker.model, 'p/a');
   assert.equal(await f.read(), '{"profiles":');
 });
@@ -519,6 +575,7 @@ test('unconfirmed profile application remains saved pending', async (t) => {
   await f.confirm('Saved; not applied');
   await f.choose('Reason', 'Saved; not applied');
   assert.match(await f.detailText(), /did not confirm/);
+  assert.equal(f.toasts.length, 0);
   assert.equal(f.disposed, 1);
 });
 for (const replacement of ['route', 'client', 'lifecycle'] as const) {
@@ -567,14 +624,12 @@ test('profile apply only reports applied after the new registration is attested'
     return original(...args);
   });
   await f.choose('○ a', 'Apply profile selection?');
-  const confirmed = f.confirm('Composer revision applied');
+  const applied = f.applied();
   await started.promise;
-  assert.notEqual(f.current?.title, 'Composer revision applied');
   assert.equal(f.toasts.length, 0);
   gate.resolve(undefined);
-  await confirmed;
+  assert.equal((await applied)?.variant, 'success');
   assert.equal(f.disposed, 1);
-  assert.equal(f.toasts.length, 0);
 });
 
 for (const mutation of ['selection', 'frontmatter', 'native-json', 'command-body'] as const) {

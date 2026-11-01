@@ -14,7 +14,7 @@ import {
 } from './storage.ts';
 import { readRuntimeContext } from './composition/runtime-baseline.ts';
 import { type ApplyPort, applySavedComposition } from './composition/apply.ts';
-import { sessionNotice } from './tui/running.ts';
+import { effectiveProfile } from './composition/runtime.ts';
 import { configurationErrorText, diagnosticPages, inspectionText } from './tui/configuration-error.ts';
 import { openProfiles, selectionLabel } from './tui/profile.ts';
 import { loadInspection } from './tui/inspection.ts';
@@ -154,14 +154,21 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
     }
     return current;
   };
+  const announceApplied = (context: ConfigurationContext) => {
+    const profile = effectiveProfile(context.source.document, context.selection.choice);
+    try {
+      api.ui.toast({
+        variant: 'success',
+        title: 'Config Composer',
+        message: profile === null ? 'Shared only applied.' : `Profile ${profile} applied.`,
+      });
+    } catch {
+      // The server already attested this revision; a failed notice must not report the apply as failed.
+    }
+  };
   const finish = async (context: ConfigurationContext, current = nav.checkpoint()) => {
     try {
       await applySavedComposition(context, context.runtime, port(context));
-      if (!current()) {
-        return;
-      }
-      nav.reset();
-      nav.alert({ title: 'Composer revision applied', message: sessionNotice });
     } catch (error) {
       if (!current()) {
         return;
@@ -191,6 +198,14 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
           }
         },
       });
+      return;
+    }
+    // Close the menu that requested this apply; its selection markers predate the attested revision.
+    if (current()) {
+      nav.close();
+    }
+    if (!api.lifecycle.signal.aborted) {
+      announceApplied(context);
     }
   };
   const open = async (mode: 'profiles' | 'inspect') => {
