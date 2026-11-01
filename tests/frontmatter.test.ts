@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { type TestContext, test } from 'node:test';
+import { promisify } from 'node:util';
 import matter from 'gray-matter';
 import { readNativeAgentFrontmatter } from '../src/config-composer/frontmatter.ts';
 
@@ -492,3 +494,134 @@ test('malformed sources and unreadable discovered files surface their native sou
     return true;
   });
 });
+
+test('native discovery merges and reports the first failure in traversal order across concurrent reads', async (t) => {
+  const f = await fixture(t);
+  const agents = join(f.global, 'agents');
+  for (let index = 0; index < 40; index++) {
+    await f.markdown(agents, `agent-${index}.md`, `model: fixture/${index}`);
+  }
+  const inner = await f.markdown(agents, 'directory/inner.md', 'model: fixture/inner');
+  const target = await f.markdown(f.root, 'target.md', 'model: fixture/link');
+  const link = join(agents, 'link.md');
+  await symlink(target, link);
+  const traversal = async () =>
+    (await readdir(agents)).flatMap((name) => (name === 'directory' ? [inner] : [join(agents, name)]));
+  const names = async () =>
+    (await traversal()).map((path) => relative(agents, path).replaceAll('\\', '/').slice(0, -'.md'.length));
+  const order = await traversal();
+  assert.deepEqual([...(await readNativeAgentFrontmatter(f.context)).keys()], await names());
+  const broken = [...order.filter((_path, index) => index % 7 === 3), inner, link];
+  const remaining = order.filter((path) => broken.includes(path));
+  // A failure inside the directory must be reported after earlier sibling failures and before later ones.
+  assert.ok(remaining.indexOf(inner) > 0 && remaining.indexOf(inner) < remaining.length - 1, 'directory position');
+  for (const [rank, path] of remaining.entries()) {
+    if (path !== link) {
+      // Read failures alternate with failures found while merging an entry that read cleanly.
+      // Earlier failures take longer to read, so later failures settle first.
+      const metadata = rank % 2 === 0 ? 'model: [unterminated' : 'options:\n  value: .inf';
+      await writeFile(path, `---\n${metadata}\n---\n${'Opaque.\n'.repeat((remaining.length - rank) * 16_384)}`);
+    }
+  }
+  await rm(target);
+  // A slow later read must also settle before an earlier failure is reported.
+  const large = order.findLast((path) => !broken.includes(path))!;
+  await writeFile(large, `---\nmodel: fixture/large\n---\n${'Opaque.\n'.repeat(524_288)}`);
+  const openDescriptors = async () =>
+    process.platform === 'linux' ? (await readdir('/proc/self/fd')).length : undefined;
+  while (remaining.length !== 0) {
+    const descriptors = await openDescriptors();
+    await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.startsWith(`Native agent frontmatter ${remaining[0]}:`), error.message);
+      for (const later of remaining.slice(1)) {
+        assert.equal(error.message.includes(later), false);
+      }
+      return true;
+    });
+    assert.equal(await openDescriptors(), descriptors);
+    const repaired = remaining.shift()!;
+    await writeFile(repaired === link ? target : repaired, '---\nmodel: fixture/repaired\n---\nOpaque native body.');
+  }
+  const discovered = await readNativeAgentFrontmatter(f.context);
+  assert.deepEqual([...discovered.keys()], await names());
+  assert.equal(discovered.get('directory/inner')?.fields.model?.value, 'fixture/repaired');
+  assert.equal(discovered.get('link')?.fields.model?.value, 'fixture/repaired');
+});
+
+test('a directory symlink back to an ancestor fails at the looping path among concurrent sibling reads', async (t) => {
+  const f = await fixture(t);
+  const agents = join(f.global, 'agents');
+  for (let index = 0; index < 20; index++) {
+    await f.markdown(agents, `agent-${index}.md`, `model: fixture/${index}`);
+    await f.markdown(agents, `sub/nested-${index}.md`, `model: fixture/nested-${index}`);
+  }
+  const loop = join(agents, 'sub', 'loop');
+  await symlink(agents, loop, 'dir');
+  await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, `Native agent frontmatter ${loop}: native search contains a directory cycle.`);
+    return true;
+  });
+  await rm(loop);
+  const discovered = await readNativeAgentFrontmatter(f.context);
+  assert.equal(discovered.size, 40);
+  assert.equal(discovered.get('sub/nested-19')?.fields.model?.value, 'fixture/nested-19');
+});
+
+test(
+  'native agent discovery composes every agent under a bounded descriptor limit',
+  { skip: process.platform !== 'linux' },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'composer-frontmatter-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await mkdir(join(root, 'agents'));
+    for (let index = 0; index < 800; index++) {
+      await writeFile(
+        join(root, 'agents', `agent-${index}.md`),
+        `---\ngroups: [workers]\ntemperature: 0.5\n---\nNative agent ${index}.`,
+      );
+    }
+    await writeFile(
+      join(root, 'config-composer.jsonc'),
+      JSON.stringify({ groups: { workers: { agent: { model: 'p/composed', temperature: 0.1 } } } }),
+    );
+    // Every agent receives its group's model, while its authored temperature stays pinned.
+    const script = `import assert from 'node:assert/strict';
+import server from ${JSON.stringify(new URL('../src/config-composer/server.ts', import.meta.url).href)};
+import { packageName } from ${JSON.stringify(new URL('../src/config-composer/package-name.ts', import.meta.url).href)};
+const root = process.argv[1];
+const agent = {};
+for (let index = 0; index < 800; index++) {
+  agent['agent-' + index] = { groups: ['workers'], temperature: 0.5, prompt: 'Native agent ' + index + '.' };
+}
+const config = { plugin: [packageName], agent };
+await (await server.server({ directory: root, worktree: root })).config(config);
+for (let index = 0; index < 800; index++) {
+  assert.deepEqual(config.agent['agent-' + index], { temperature: 0.5, prompt: 'Native agent ' + index + '.', model: 'p/composed' });
+}`;
+    await promisify(execFile)(
+      'prlimit',
+      [
+        '--nofile=128:128',
+        '--',
+        process.execPath,
+        '--experimental-strip-types',
+        '--input-type=module',
+        '-e',
+        script,
+        root,
+      ],
+      {
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          OPENCODE_CONFIG_DIR: root,
+          OPENCODE_TEST_HOME: root,
+          XDG_CONFIG_HOME: root,
+          XDG_STATE_HOME: join(root, 'state'),
+        },
+      },
+    );
+  },
+);
