@@ -2,14 +2,16 @@ import assert from 'node:assert/strict';
 import timers from 'node:timers/promises';
 import type { compositionFixture } from './composition-fixture.ts';
 import type { nativeTerminal } from './terminal.ts';
+/** A longer preview scrolls before its separate Apply confirmation. */
+const reviewAction = 'enter apply…';
 export async function applyFromTerminal(
   fixture: Awaited<ReturnType<typeof compositionFixture>>,
   terminal: Awaited<ReturnType<typeof nativeTerminal>>,
 ) {
   await fixture.host.prepareConfigurationDependencies();
   const previous = await fixture.editor.runtime();
-  if (terminal.text().includes('Review page')) {
-    await terminal.choose('Apply', 'Apply reviewed changes?');
+  if (terminal.shows(reviewAction)) {
+    await terminal.press('\r', 'Apply reviewed changes?');
   }
   await terminal.press('\r', 'Composer revision applied');
   let pending: Error | undefined;
@@ -31,20 +33,8 @@ export async function applyFromTerminal(
   throw new Error('The terminal profile apply did not publish a new native registration', { cause: pending });
 }
 
-export async function readPreview(
-  terminal: Awaited<ReturnType<typeof nativeTerminal>>,
-  title: string,
-): Promise<string> {
-  const match = /Review page \d+ of (\d+)/.exec(terminal.text());
-  if (match === null) {
-    return terminal.text();
-  }
-  const pages = Number(match[1]);
-  let text = '';
-  for (let page = 1; page <= pages; page++) {
-    await terminal.choose(`Review page ${page} of ${pages}`, `Preview · ${page}/${pages}`);
-    text += terminal.text();
-    await terminal.press('\x1b', title);
-  }
-  return text;
+export async function readPreview(terminal: Awaited<ReturnType<typeof nativeTerminal>>): Promise<string> {
+  return terminal.shows(reviewAction)
+    ? terminal.scrollTo('Existing session model/variant choices remain native.')
+    : terminal.text();
 }

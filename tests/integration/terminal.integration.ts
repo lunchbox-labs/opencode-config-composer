@@ -23,7 +23,7 @@ test(
     await terminal.wait(['ctrl+p', 'commands']);
     await terminal.command('/profiles', 'Follow configured default');
     await terminal.choose('Shared only', 'Apply profile selection?');
-    const preview = await readPreview(terminal, 'Apply profile selection?');
+    const preview = await readPreview(terminal);
     assert.match(preview, /\/agent\/helper\/top_p/);
     assert.match(preview, /Removed contribution: inherit\/native fallback/);
     assert.match(preview, /Previously configured/);
@@ -55,7 +55,7 @@ test(
     await terminal.wait(['ctrl+p', 'commands']);
     await terminal.command('/profiles', 'Follow configured default');
     await terminal.choose('○ review', 'Apply profile selection?');
-    const preview = await readPreview(terminal, 'Apply profile selection?');
+    const preview = await readPreview(terminal);
     assert.match(preview, /Pinned by frontmatter/);
     assert.match(preview, /Blocked Composer value/);
     assert.match(preview, /fixture\/beta/);

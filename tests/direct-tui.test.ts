@@ -12,7 +12,9 @@ import { packageName } from '../src/config-composer/package-name.ts';
 import { loadConfigurationContext } from '../src/config-composer/storage.ts';
 import { readSelectionAt, saveSelection } from '../src/config-composer/composition/selection-state.ts';
 
-type Dialog = { title: string; message?: string } & Partial<TuiDialogSelectProps<string> & TuiDialogConfirmProps>;
+type Dialog = { title: string; message?: string; action?: string } & Partial<
+  TuiDialogSelectProps<string> & TuiDialogConfirmProps
+>;
 async function fixture(
   t: TestContext,
   pin = '',
@@ -163,7 +165,7 @@ async function fixture(
       },
     },
   } as unknown as TuiPluginApi;
-  registerConfiguration(api, api.ui.DialogSelect);
+  registerConfiguration(api, { fixedMenu: api.ui.DialogSelect, details: api.ui.DialogAlert });
   const wait = async (title: string) => {
     for (let i = 0; i < 1000; i++) {
       if (current?.title === title) {
@@ -187,6 +189,9 @@ async function fixture(
   const confirm = async (next: string) => {
     if (current?.options?.some((option) => option.value === 'apply') === true) {
       await choose('Apply', 'Apply reviewed changes?');
+    } else if (current?.action !== undefined) {
+      current.onConfirm?.();
+      await wait('Apply reviewed changes?');
     }
     (current as TuiDialogConfirmProps).onConfirm?.();
     api.ui.dialog.clear();
@@ -198,17 +203,6 @@ async function fixture(
     const pages = current?.options?.filter((option) => option.title.startsWith('Page ')) ?? [];
     for (const page of pages) {
       await choose(page.title, `${title} · ${Number(page.value) + 1}/${pages.length}`);
-      text += current?.message ?? '';
-      await escape(title);
-    }
-    return text;
-  };
-  const preview = async () => {
-    const title = current!.title;
-    let text = current?.message ?? '';
-    const pages = current?.options?.filter((option) => option.title.startsWith('Review page')) ?? [];
-    for (const page of pages) {
-      await choose(page.title, `Preview · ${Number(page.value) + 1}/${pages.length}`);
       text += current?.message ?? '';
       await escape(title);
     }
@@ -268,7 +262,7 @@ async function fixture(
     choose,
     escape,
     confirm,
-    preview,
+    preview: detailText,
     detailText,
     wait,
     reopen: async () => {
@@ -316,6 +310,32 @@ test('profile preview confirms selection and writes no definition bytes', async 
   assert.equal(await f.read(), before);
 });
 
+test('a long profile preview scrolls whole before its separate Apply confirmation', async (t) => {
+  const agents = Object.fromEntries(
+    Array.from({ length: 8 }, (_, index) => [`member${index}`, { groups: ['workers'], mode: 'subagent' as const }]),
+  );
+  const f = await fixture(t, '', { temperature: 0.2 }, agents);
+  await f.choose('○ a', 'Apply profile selection?');
+  const review = f.current!;
+  assert.equal(review.options, undefined, 'the review is one view, not a page picker');
+  assert.match(review.message!, /\/agent\/member0\/model/);
+  assert.match(review.message!, /\/agent\/member7\/model/);
+  assert.match(review.message!, /Existing session model\/variant choices remain native\.$/);
+  await f.escape('Profiles');
+  await f.choose('○ a', 'Apply profile selection?');
+  f.current!.onConfirm!();
+  await f.wait('Apply reviewed changes?');
+  await f.escape('Apply profile selection?');
+  assert.equal(f.current!.message, review.message);
+  assert.equal(f.disposed, 0);
+  await assert.rejects(
+    f.context().then((context) => readFile(context.selection.path)),
+    /ENOENT/,
+  );
+  await f.confirm('Composer revision applied');
+  assert.equal(f.disposed, 1);
+  assert.equal((f.config.agent as Record<string, { model?: string }>).member7.model, 'p/a');
+});
 test('profile confirmation includes changed and removed model parameter defaults', async (t) => {
   const f = await fixture(
     t,
@@ -813,7 +833,7 @@ test('an effective native model different from the config contribution is explic
   assert.match(detail, /Effective native model: "p\/b"/);
   assert.match(detail, /Source attribution above covers only the config contribution/);
 });
-test('field menu descriptions redact credentials while keeping useful options visible', async (t) => {
+test('field menu descriptions and details redact credentials while keeping useful options visible', async (t) => {
   const f = await fixture(t, '', { options: { reasoningEffort: 'high', apiKey: 'PRIVATE_SENTINEL' } });
   await f.open('view-configs', 'Configuration');
   await f.choose('agent worker', 'agent worker');
@@ -821,4 +841,8 @@ test('field menu descriptions redact credentials while keeping useful options vi
   assert.doesNotMatch(description, /PRIVATE_SENTINEL/);
   assert.match(description, /reasoningEffort/);
   assert.match(description, /high/);
+  await f.choose('options', 'agent worker · options');
+  const detail = await f.detailText();
+  assert.doesNotMatch(detail, /PRIVATE_SENTINEL/);
+  assert.match(detail, /apiKey=\[redacted\]/);
 });

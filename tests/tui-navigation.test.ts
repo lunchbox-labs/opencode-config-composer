@@ -6,13 +6,14 @@ import type {
   TuiDialogSelectProps,
   TuiPluginApi,
 } from '@opencode-ai/plugin/tui';
-import { dialogNavigation } from '../src/tui/navigation.ts';
+import { type DetailsProps, dialogNavigation } from '../src/tui/navigation.ts';
 
-type Dialog = TuiDialogSelectProps<string> | TuiDialogAlertProps | TuiDialogConfirmProps;
+type Dialog = TuiDialogSelectProps<string> | TuiDialogAlertProps | TuiDialogConfirmProps | DetailsProps;
 
 function harness() {
   let current: Dialog | undefined;
   let closed: (() => void) | undefined;
+  let size = 'medium';
   const controller = new AbortController();
   const render = (props: Dialog) => {
     current = props;
@@ -29,9 +30,17 @@ function harness() {
         get open() {
           return current !== undefined;
         },
+        get size() {
+          return size;
+        },
+        setSize: (next: string) => {
+          size = next;
+        },
+        // V1 replacement also resets the dialog to its medium size.
         replace: (next: () => void, onClose?: () => void) => {
           closed?.();
           closed = onClose;
+          size = 'medium';
           next();
         },
         // V1 invokes onClose before removing the current dialog.
@@ -45,7 +54,7 @@ function harness() {
   } as unknown as TuiPluginApi;
   return {
     api,
-    navigation: dialogNavigation(api, api.ui.DialogSelect),
+    navigation: dialogNavigation(api, { fixedMenu: api.ui.DialogSelect, details: api.ui.DialogAlert }),
     controller,
     get current() {
       return current;
@@ -122,6 +131,36 @@ test('Escape and native OK return through confirmations and alerts without repea
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Escape can replace or clear the captured dialog.
   assert.equal(view.current?.title, 'Root');
   assert.equal(submitted, 1);
+});
+
+test('extra-large details return to their parent through Enter or Escape, and an Enter action keeps its own step', async () => {
+  const view = harness();
+  const nav = view.navigation;
+  let applied = 0;
+  nav.menu({ title: 'Root', options: [] }, true);
+  nav.details({ title: 'Details', message: 'Long text' });
+  assert.equal(view.api.ui.dialog.size, 'xlarge');
+  (view.current as DetailsProps).onConfirm!();
+  assert.equal(view.current?.title, 'Root');
+  assert.equal(view.api.ui.dialog.size, 'medium');
+  nav.details({
+    title: 'Review',
+    message: 'Long preview',
+    action: 'apply…',
+    onConfirm: () => nav.confirm({ title: 'Apply?', message: 'Short', onConfirm: () => applied++ }),
+  });
+  (view.current as DetailsProps).onConfirm!();
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Enter replaces the captured dialog.
+  assert.equal(view.current?.title, 'Apply?');
+  assert.equal(applied, 0);
+  await view.escape();
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Escape can replace or clear the captured dialog.
+  assert.equal(view.current?.title, 'Review');
+  assert.equal(view.api.ui.dialog.size, 'xlarge');
+  await view.escape();
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Escape can replace or clear the captured dialog.
+  assert.equal(view.current?.title, 'Root');
+  assert.equal(applied, 0);
 });
 
 test('a deferred confirmation can replace navigation without the native clear erasing its result', async () => {

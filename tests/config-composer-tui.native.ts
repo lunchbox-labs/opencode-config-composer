@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { compositionFixture } from './integration/composition-fixture.ts';
 import { nativeTerminal } from './integration/terminal.ts';
+import { applyFromTerminal } from './integration/terminal-editor.ts';
 import { runtimeDiagnostic } from '../src/config-composer/tui/inspection.ts';
 
 test(
@@ -78,6 +79,67 @@ test(
     await terminal.stop();
     const home = await nativeTerminal(f.host, undefined, 'home-slot');
     await home.wait(['Profile: Shared only']);
+    assert.equal(f.host.requests.length, 0);
+  },
+);
+
+test(
+  'native details scroll in a narrow terminal, stay redacted and return through Back and Escape before an explicit Apply',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'tui-scroll');
+    const members = Array.from({ length: 12 }, (_, index) => `member${index}`);
+    await f.write(f.paths.native, {
+      ...f.native,
+      agent: {
+        ...f.native.agent,
+        ...Object.fromEntries(
+          members.map((name) => [name, { mode: 'subagent', prompt: 'MEMBER', groups: ['coding'] }]),
+        ),
+      },
+    });
+    await f.write(f.paths.shared, {
+      agent: {
+        ...Object.fromEntries(members.map((name, index) => [name, { temperature: index / 100 }])),
+        member11: { temperature: 0.11, options: { apiKey: 'PRIVATE_SENTINEL', reasoningEffort: 'high' } },
+      },
+      groups: { coding: { agent: { top_p: 0.5 } } },
+      profiles: { review: { groups: { coding: { agent: { model: 'fixture/beta' } } } } },
+    });
+    await f.host.start();
+    const session = await f.host.api<{ id: string }>('/session', { title: 'Scrolling details' });
+    const terminal = await nativeTerminal(f.host, session.id, 'tui-scroll', { cols: 80, rows: 24 });
+    const title = 'Global models and shared exceptions';
+    await terminal.wait(['ctrl+p', 'Profile: Shared only']);
+    await terminal.command('/view-configs', 'Configuration');
+    await terminal.choose(title, title, 'Current loaded configuration', 'enter/esc back');
+    assert.equal(terminal.shows('"reasoningEffort": "high"'), false, 'the definitions extend beyond the dialog');
+    const read = await terminal.scrollTo('"reasoningEffort": "high"');
+    assert.ok(terminal.shows(title) && terminal.shows('enter/esc back'), 'scrolling keeps the title and hint');
+    assert.equal(terminal.shows('Current loaded configuration'), false);
+    assert.match(read, /apiKey=\[redacted\]/);
+    assert.doesNotMatch(read, /PRIVATE_SENTINEL/);
+    await terminal.press('\x1b[H', 'Current loaded configuration');
+    await terminal.press('\x1b', 'Configuration', 'Runtime status and sources');
+    await terminal.choose(title, title, 'enter/esc back');
+    await terminal.press('\r', 'Configuration', 'Runtime status and sources');
+    await terminal.press('\x1b', 'ctrl+p');
+    // The command helper waits for the restored conversation input.
+    await terminal.command('/profiles', 'Follow configured default');
+    await terminal.choose('○ review', 'Apply profile selection?', 'enter apply…');
+    const preview = await terminal.scrollTo('Existing session model/variant choices remain native.');
+    for (const name of members) {
+      assert.match(preview, new RegExp(`/agent/${name}/model`));
+    }
+    await terminal.press('\r', 'Apply reviewed changes?');
+    await terminal.press('\x1b', 'Apply profile selection?', 'enter apply…');
+    await terminal.press('\x1b', 'Profiles');
+    const context = await f.editor.context();
+    await assert.rejects(readFile(context.selection.path), /ENOENT/);
+    await terminal.choose('○ review', 'Apply profile selection?', 'enter apply…');
+    await applyFromTerminal(f, terminal);
+    assert.equal((await f.editor.context()).selection.choice, 'review');
+    assert.equal((await f.editor.runtime()).candidate?.agent.member11.model, 'fixture/beta');
     assert.equal(f.host.requests.length, 0);
   },
 );

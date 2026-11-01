@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { TuiPluginApi, TuiPluginModule } from '@opencode-ai/plugin/tui';
-import { type FixedMenu, dialogNavigation } from '../tui/navigation.ts';
+import { dialogNavigation } from '../tui/navigation.ts';
 import { verifySharedFilesystem } from './connection.ts';
 import { SettingsError, catalogModels } from './settings.ts';
 import {
@@ -15,14 +15,14 @@ import {
 import { readRuntimeContext } from './composition/runtime-baseline.ts';
 import { type ApplyPort, applySavedComposition } from './composition/apply.ts';
 import { sessionNotice } from './tui/running.ts';
-import { configurationErrorText, diagnosticPages, inspectionText } from './tui/configuration-error.ts';
+import { configurationErrorText, detailPages, diagnosticPages, inspectionText } from './tui/configuration-error.ts';
 import { openProfiles, selectionLabel } from './tui/profile.ts';
 import { loadInspection } from './tui/inspection.ts';
 import { openEffective } from './tui/effective.ts';
 import { type ConfigurationView, fieldDetail, modelParameterDetail } from './tui/view.ts';
 import type { Selection } from './composition/document-types.ts';
-export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): void {
-  const nav = dialogNavigation(api, fixedMenu);
+export function registerConfiguration(api: TuiPluginApi, widgets: Parameters<typeof dialogNavigation>[1]): void {
+  const nav = dialogNavigation(api, widgets);
   let busy = false;
   const run = (action: () => void | Promise<void>) => {
     if (busy || api.lifecycle.signal.aborted) {
@@ -87,27 +87,38 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
       },
     };
   };
-  const details = (title: string, text: string) => {
-    api.ui.dialog.setSize('xlarge');
-    const pages = diagnosticPages(inspectionText(text), 95, 22);
-    if (pages.length <= 1) {
-      nav.alert({ title, message: pages[0] ?? '' });
+  /** Text scrolls in one view; only text beyond the generous bound is divided into pages. */
+  const scrollable = (title: string, text: string, apply?: () => void) => {
+    const pages = detailPages(text);
+    if (pages.length === 1) {
+      nav.details({ title, message: text, onConfirm: apply, action: apply === undefined ? undefined : 'apply…' });
       return;
     }
     nav.menu({
       title,
-      options: pages.map((page, index) => ({
-        title: `Page ${index + 1} of ${pages.length}`,
-        value: String(index),
-        description: page.split('\n')[0],
-      })),
-      onSelect: (option) =>
-        nav.alert({
-          title: `${title} · ${Number(option.value) + 1}/${pages.length}`,
-          message: pages[Number(option.value)],
-        }),
+      options: [
+        ...pages.map((page, index) => ({
+          title: `Page ${index + 1} of ${pages.length}`,
+          value: String(index),
+          description: page.split('\n')[0],
+        })),
+        ...(apply === undefined
+          ? []
+          : [{ title: 'Apply', value: 'apply', description: 'Save reviewed changes and apply to this idle instance' }]),
+      ],
+      onSelect: (option) => {
+        if (option.value === 'apply') {
+          apply?.();
+        } else {
+          nav.details({
+            title: `${title} · ${Number(option.value) + 1}/${pages.length}`,
+            message: pages[Number(option.value)],
+          });
+        }
+      },
     });
   };
+  const details = (title: string, text: string) => scrollable(title, inspectionText(text));
   const port = (context: ConfigurationContext): ApplyPort => {
     const client = api.client;
     const directory = context.connection.location.directory;
@@ -201,7 +212,6 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
     }
     const context = await loadConfigurationContext(connection());
     const confirm = (view: ConfigurationView, preview: Preview, title: string, destination: string) => {
-      api.ui.dialog.setSize('xlarge');
       const previous = context.runtime.candidate?.decisions ?? {};
       const proposed = preview.candidate.decisions;
       const changes = [...new Set([...Object.keys(previous), ...Object.keys(proposed)])]
@@ -256,36 +266,18 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
           const saved = await saveSelectionGuarded(context, preview);
           await finish(saved, current);
         });
-      const pages = diagnosticPages(message, 95, 22);
-      if (pages.length <= 1) {
-        nav.confirm({ title, message, onConfirm: commit });
+      if (diagnosticPages(message, 95, 22).length <= 1) {
+        nav.confirm({ title, message, onConfirm: commit }, 'xlarge');
         return;
       }
-      nav.menu({
-        title,
-        options: [
-          ...pages.map((page, index) => ({
-            title: `Review page ${index + 1} of ${pages.length}`,
-            value: String(index),
-            description: page.split('\n')[0],
-          })),
-          { title: 'Apply', value: 'apply', description: 'Save reviewed changes and apply to this idle instance' },
-        ],
-        onSelect: (option) => {
-          if (option.value === 'apply') {
-            nav.confirm({
-              title: 'Apply reviewed changes?',
-              message: `${destination}\n${context.source.path}\n${pages.length} preview pages. Saved changes remain pending if this instance is busy.`,
-              onConfirm: commit,
-            });
-          } else {
-            nav.alert({
-              title: `Preview · ${Number(option.value) + 1}/${pages.length}`,
-              message: pages[Number(option.value)],
-            });
-          }
-        },
-      });
+      // Longer previews scroll first; Apply keeps its separate explicit confirmation.
+      scrollable(title, message, () =>
+        nav.confirm({
+          title: 'Apply reviewed changes?',
+          message: `${destination}\n${context.source.path}\nSaved changes remain pending if this instance is busy.`,
+          onConfirm: commit,
+        }),
+      );
     };
     const view: ConfigurationView = {
       api,
@@ -339,9 +331,12 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
 export default {
   id: 'config-composer',
   tui: async (api) => {
-    const { fixedMenu, registerProfileSlot } = await import('./tui/widgets.js');
+    const { detailsView, fixedMenu, registerProfileSlot } = await import('./tui/widgets.js');
     const { registerErrorNotice } = await import('./tui/notice.js');
-    registerConfiguration(api, (props) => fixedMenu(api, props));
+    registerConfiguration(api, {
+      fixedMenu: (props) => fixedMenu(api, props),
+      details: (props) => detailsView(api, props),
+    });
     registerProfileSlot(api);
     api.lifecycle.onDispose(registerErrorNotice(api));
   },
