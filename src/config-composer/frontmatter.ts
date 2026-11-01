@@ -385,6 +385,9 @@ async function readMetadata(path: string): Promise<{ data: Record<string, unknow
 export async function readNativeAgentFrontmatter(
   context: NativeFrontmatterContext,
 ): Promise<Map<string, NativeAgentFrontmatter>> {
+  type EntryRead =
+    | { path: string; directory: boolean; metadata?: Awaited<ReturnType<typeof readMetadata>> }
+    | { path: string; error: unknown };
   const agents = new Map<string, NativeAgentFrontmatter>();
   let activePath = context.directory;
   try {
@@ -401,20 +404,50 @@ export async function readNativeAgentFrontmatter(
           if (parents.has(canonical)) {
             throw diagnostic(directory, 'native search contains a directory cycle.');
           }
-          for (const entry of await readdir(directory, { withFileTypes: true })) {
-            const path = join(directory, entry.name);
+          const entries = await readdir(directory, { withFileTypes: true });
+          // Read entries concurrently, then recurse, merge and report the first failure in readdir order.
+          // Every started read settles before any result is used, and reads never touch shared state.
+          // Each read may hold a descriptor; one directory reads at a time, so this bounds the whole traversal.
+          const reads: EntryRead[] = [];
+          let next = 0;
+          let failed = false;
+          await Promise.all(
+            Array.from({ length: Math.min(16, entries.length) }, async () => {
+              // Entries after a failure are never used, so stop claiming them.
+              while (!failed && next < entries.length) {
+                const index = next++;
+                const entry = entries[index];
+                const path = join(directory, entry.name);
+                try {
+                  const info = entry.isSymbolicLink() ? await stat(path) : await lstat(path);
+                  reads[index] = {
+                    path,
+                    directory: info.isDirectory(),
+                    metadata: info.isFile() && entry.name.endsWith('.md') ? await readMetadata(path) : undefined,
+                  };
+                } catch (error) {
+                  failed = true;
+                  reads[index] = { path, error };
+                }
+              }
+            }),
+          );
+          for (const read of reads) {
+            const path = read.path;
             activePath = path;
-            const info = entry.isSymbolicLink() ? await stat(path) : await lstat(path);
-            if (info.isDirectory()) {
+            if ('error' in read) {
+              throw read.error;
+            }
+            if (read.directory) {
               if (!primary) {
                 await scan(path, base, new Set([...parents, canonical]));
               }
               continue;
             }
-            if (!info.isFile() || !entry.name.endsWith('.md')) {
+            if (read.metadata === undefined) {
               continue;
             }
-            const { data, source } = await readMetadata(path);
+            const { data, source } = read.metadata;
             const candidate = relative(base, path).replaceAll('\\', '/');
             const extension = extname(candidate);
             const name =
