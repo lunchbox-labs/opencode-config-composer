@@ -156,15 +156,11 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
   };
   const announceApplied = (context: ConfigurationContext) => {
     const profile = effectiveProfile(context.source.document, context.selection.choice);
-    try {
-      api.ui.toast({
-        variant: 'success',
-        title: 'Config Composer',
-        message: profile === null ? 'Shared only applied.' : `Profile ${profile} applied.`,
-      });
-    } catch {
-      // The server already attested this revision; a failed notice must not report the apply as failed.
-    }
+    api.ui.toast({
+      variant: 'success',
+      title: 'Config Composer',
+      message: profile === null ? 'Shared only applied.' : `Profile ${profile} applied.`,
+    });
   };
   const finish = async (context: ConfigurationContext, current = nav.checkpoint()) => {
     try {
@@ -204,6 +200,8 @@ export function registerConfiguration(api: TuiPluginApi, fixedMenu: FixedMenu): 
     if (current()) {
       nav.close();
     }
+    // Notify only after the apply's try block and the close: a throwing notice then reaches run() for a
+    // closed view, which drops it instead of reporting the attested apply as failed.
     if (!api.lifecycle.signal.aborted) {
       announceApplied(context);
     }

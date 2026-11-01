@@ -631,6 +631,30 @@ test('profile apply only reports applied after the new registration is attested'
   assert.equal((await applied)?.variant, 'success');
   assert.equal(f.disposed, 1);
 });
+test('an apply that finishes after its menu was dismissed still reports applied and leaves other dialogs open', async (t) => {
+  const f = await fixture(t);
+  const original = f.api.client.instance.dispose.bind(f.api.client.instance);
+  const gate = Promise.withResolvers<undefined>();
+  const started = Promise.withResolvers<undefined>();
+  t.mock.method(f.api.client.instance, 'dispose', async (...args: Parameters<typeof original>) => {
+    started.resolve(undefined);
+    await gate.promise;
+    return original(...args);
+  });
+  await f.choose('○ a', 'Apply profile selection?');
+  await f.submit();
+  await started.promise;
+  assert.equal(f.current?.title, 'Profiles');
+  f.api.ui.dialog.clear();
+  f.api.ui.dialog.replace(() => f.api.ui.DialogAlert({ title: 'Unrelated', message: '' }));
+  gate.resolve(undefined);
+  for (let i = 0; i < 1000 && f.toasts.length === 0; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.deepEqual(f.toasts, [{ variant: 'success', title: 'Config Composer', message: 'Profile a applied.' }]);
+  assert.deepEqual(f.current, { title: 'Unrelated', message: '' });
+  assert.equal(f.disposed, 1);
+});
 
 for (const mutation of ['selection', 'frontmatter', 'native-json', 'command-body'] as const) {
   test(`TUI preview rejects ${mutation} changes while the provider catalog is pending`, async (t) => {
