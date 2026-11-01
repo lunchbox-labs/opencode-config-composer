@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const name = process.argv[2];
 const rootModule = await import(name);
@@ -76,6 +77,28 @@ await hooks.config(config);
 assert.equal(config.agent.worker.model, 'fixture/model');
 assert.equal(config.agent.worker.temperature, 0);
 assert.equal(config.agent.worker.prompt, 'PACKAGED_NATIVE_BODY');
+
+// Each server start checks the packaged skills it registers and names the damaged file.
+const skill = fileURLToPath(new URL('./skills/config-composer-create/SKILL.md', schemaUrl));
+const reference = fileURLToPath(new URL('./skills/config-composer-explain/references/schema.md', schemaUrl));
+const skillText = await readFile(skill, 'utf8');
+const referenceText = await readFile(reference, 'utf8');
+for (const [damaged, damage] of [
+  // A parser that let either duplicate win would accept this identity.
+  [skill, () => writeFile(skill, skillText.replace(/^description:/m, 'description: Duplicate.\n$&'))],
+  [skill, () => writeFile(skill, skillText.replace(/^description: /m, '$&"unterminated '))],
+  [reference, () => rm(reference)],
+]) {
+  await damage();
+  const location = join(process.cwd(), 'damaged-skills');
+  await assert.rejects(server.server({ directory: location, worktree: location }, {}), (error) => {
+    const expected = `Could not load bundled skill resource ${damaged}. Reinstall Config Composer with its packaged skills.`;
+    assert.ok(error.message.startsWith(expected), error.message);
+    return true;
+  });
+  await writeFile(skill, skillText);
+  await writeFile(reference, referenceText);
+}
 
 // Registration/rendering needs the host shared Solid/OpenTUI runtime. Packed native
 // terminal tests exercise it; plain Node must still import both descriptors safely.
