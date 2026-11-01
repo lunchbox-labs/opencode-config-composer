@@ -162,12 +162,12 @@ export async function nativeTerminal(
   };
   // Wrapped text can break after punctuation without a space, so ignore all whitespace.
   const shows = (label: string) => text().replace(/\s/g, '').includes(label.replace(/\s/g, ''));
-  // A scrolled frame can arrive in several writes; read it once output pauses.
-  const settle = async (before: number) => {
-    await waitInput(() => revision > before, 'the next scrolled frame');
+  // A frame can arrive in several writes, and a newly opened scroll box can take one
+  // more frame to settle its layout after its labels first appear.
+  const idle = async () => {
     for (let seen = -1; seen !== revision;) {
       seen = revision;
-      await setTimeout(100);
+      await setTimeout(250);
     }
   };
   /** Page down the focused details view until `end` shows; returns every screen read on the way. */
@@ -177,7 +177,8 @@ export async function nativeTerminal(
       assert.ok(page < 100, `Scrolling did not reveal ${JSON.stringify(end)}:\n${text()}`);
       const before = revision;
       child.write('\x1b[6~');
-      await settle(before);
+      await waitInput(() => revision > before, 'the next scrolled frame');
+      await idle();
       read += `\n${text()}`;
     }
     return read;
@@ -188,5 +189,5 @@ export async function nativeTerminal(
     await waitInput(() => search.echoed(name), `the command query ${JSON.stringify(name)}`);
     await press('\r', ...labels);
   };
-  return { text, shows, wait, press, choose, chooseFixed, scrollTo, command, stop };
+  return { text, shows, wait, idle, press, choose, chooseFixed, scrollTo, command, stop };
 }
