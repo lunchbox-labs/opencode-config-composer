@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { readCompositionDocument } from '../src/config-composer/composition/document.ts';
 import { resolveComposition } from '../src/config-composer/composition/runtime.ts';
 import { parseConfiguration } from '../src/config-composer/configuration.ts';
+import { actionOnlyPermissions } from '../src/config-composer/host.ts';
 const native = {
   model: 'p/native',
   agent: { worker: { prompt: 'opaque', options: {}, permission: {} } },
@@ -318,7 +319,7 @@ test('Composer scalar policies append wildcard rules before native hook output',
 });
 
 test('native action-only permissions reject pattern maps across every authored layer', () => {
-  for (const tool of ['todowrite', 'question', 'webfetch', 'websearch', 'doom_loop']) {
+  for (const tool of actionOnlyPermissions) {
     for (const value of [{}, { '*': 'deny' }]) {
       const patch = { permission: { [tool]: value } };
       for (const document of [
