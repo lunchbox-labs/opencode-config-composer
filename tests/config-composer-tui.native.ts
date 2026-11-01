@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { compositionFixture } from './integration/composition-fixture.ts';
@@ -78,6 +78,32 @@ test(
     await terminal.stop();
     const home = await nativeTerminal(f.host, undefined, 'home-slot');
     await home.wait(['Profile: Shared only']);
+    assert.equal(f.host.requests.length, 0);
+  },
+);
+
+test(
+  'native TUI keeps profiles read-only and explains a process profile in inspection',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'tui-process-profile');
+    await f.write(f.paths.shared, { profiles: { a: { agent: { worker: { model: 'fixture/beta' } } }, b: {} } });
+    await f.host.start({ variables: { OPENCODE_CONFIG_COMPOSER_PROFILE: 'a' } });
+    const runtime = await f.editor.runtime();
+    const session = await f.host.api<{ id: string }>('/session', { title: 'Process profile' });
+    const terminal = await nativeTerminal(f.host, session.id, 'process-profile');
+    await terminal.wait(['Profile: a (env)']);
+    await terminal.command(
+      '/profiles',
+      'Config Composer',
+      'OPENCODE_CONFIG_COMPOSER_PROFILE selects profile a',
+      'Profile switching is',
+    );
+    assert.doesNotMatch(terminal.text(), /Follow configured default/);
+    await terminal.press('\x1b', 'ctrl+p');
+    await terminal.command('/view-configs', 'Configuration');
+    await terminal.choose('Runtime status and sources', 'Applied profile: a', 'OPENCODE_CONFIG_COMPOSER_PROFILE');
+    await assert.rejects(readFile(runtime.selectionLocator.path), /ENOENT/);
     assert.equal(f.host.requests.length, 0);
   },
 );

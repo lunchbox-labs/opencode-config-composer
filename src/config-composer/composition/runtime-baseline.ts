@@ -5,7 +5,7 @@ import { SettingsError, record } from '../settings.ts';
 import { readAgentGroups } from '../membership.ts';
 import { serverEntry } from '../registration.ts';
 import { configurationDirectory } from '../configuration.ts';
-import type { NativeBaseline, ResolvedCandidate } from './document-types.ts';
+import type { CompositionDocument, NativeBaseline, ResolvedCandidate } from './document-types.ts';
 import type { CompositionRevision, NativeObservation } from './revision.ts';
 import type { LoadedSource } from './sources.ts';
 import { readCompositionDocument } from './document.ts';
@@ -23,6 +23,8 @@ export interface RuntimeMarker {
   source?: LoadedSource;
   selectionLocator?: SelectionLocator;
   selection?: { path: string; choice?: string | null; revision: number; identity?: string };
+  /** Set by the process environment in place of the saved worktree selection. */
+  processProfile?: string;
   diagnostic?: string;
   native?: NativeBaseline;
   observation?: NativeObservation;
@@ -201,12 +203,24 @@ export function readLoadedRuntime(config: unknown, location: RuntimeLocation): A
   ) {
     return fail('Invalid server attestation.');
   }
+  let document: CompositionDocument;
   try {
-    if (!isDeepStrictEqual(readCompositionDocument(marker.source.document), marker.source.document)) {
-      return fail('Invalid loaded definition.');
-    }
+    document = readCompositionDocument(marker.source.document);
   } catch {
     return fail('Invalid loaded definition.');
+  }
+  if (!isDeepStrictEqual(document, marker.source.document)) {
+    return fail('Invalid loaded definition.');
+  }
+  if (
+    Object.hasOwn(marker, 'processProfile') &&
+    (typeof marker.processProfile !== 'string' ||
+      !Object.hasOwn(document.profiles, marker.processProfile) ||
+      Object.hasOwn(marker, 'selection') ||
+      (marker.status === 'applied' &&
+        (!record(marker.candidate) || marker.candidate.profile !== marker.processProfile)))
+  ) {
+    return fail('Invalid server attestation.');
   }
   if (marker.status === 'applied') {
     const candidate = marker.candidate;

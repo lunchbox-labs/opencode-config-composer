@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { type ChildProcess, execFile } from 'node:child_process';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -11,6 +11,7 @@ import type { TestContext } from 'node:test';
 import { installPackage } from '../install-package.ts';
 import { stopProcess } from './process.ts';
 import { launchNativeHost } from './native-host.ts';
+import { registerProcess } from './resources.ts';
 
 // Only OS launch settings and network transport for host dependency installation are inherited.
 // Provider credentials and personal OpenCode configuration are never inherited.
@@ -302,7 +303,7 @@ export async function nativeHarness(t: TestContext, name: string) {
     prepared.add(directory);
   };
   let environment = isolatedEnvironment(root);
-  const prepareConfigurationDependencies = async (additionalProjects: readonly string[] = []) => {
+  const prepareDirectories = async (additionalProjects: readonly string[]) => {
     const additionalDirectories: string[] = [];
     for (const directory of additionalProjects) {
       const canonical = await realpath(directory);
@@ -329,6 +330,20 @@ export async function nativeHarness(t: TestContext, name: string) {
       await prepareDependencies(directory);
     }
   };
+  // Simultaneous runs and starts must not install into the same directory at once.
+  let preparation: Promise<unknown> = Promise.resolve();
+  const prepareConfigurationDependencies = (additionalProjects: readonly string[] = []) => {
+    const next = preparation.then(() => prepareDirectories(additionalProjects));
+    preparation = next.catch(() => undefined);
+    return next;
+  };
+  const checkVariables = (variables: Record<string, string>) =>
+    assert.ok(
+      Object.keys(variables).every(
+        (name) => name.startsWith('COMPOSER_FIXTURE_') || name === 'OPENCODE_CONFIG_COMPOSER_PROFILE',
+      ),
+      'only explicit synthetic fixture variables and the Composer process profile may supplement the isolated environment',
+    );
   const start = async (
     options: {
       variables?: Record<string, string>;
@@ -337,10 +352,7 @@ export async function nativeHarness(t: TestContext, name: string) {
     } = {},
   ) => {
     assert.equal(child, undefined, 'stop the host before restarting');
-    assert.ok(
-      Object.keys(options.variables ?? {}).every((name) => name.startsWith('COMPOSER_FIXTURE_')),
-      'only explicit synthetic fixture variables may supplement the isolated environment',
-    );
+    checkVariables(options.variables ?? {});
     if (options.configurationAlias !== undefined) {
       assert.equal(
         await realpath(options.configurationAlias),
@@ -386,6 +398,45 @@ export async function nativeHarness(t: TestContext, name: string) {
     }
     assert.fail(`OpenCode did not start: ${output}`);
   };
+  /** A separate one-shot `opencode run` process in the project, with its own in-process server. */
+  const run = async (args: readonly string[], variables: Record<string, string> = {}) => {
+    checkVariables(variables);
+    await prepareConfigurationDependencies();
+    // Native run appends piped standard input to the message and waits for it to close.
+    const runner = spawn(process.env.OPENCODE_BIN ?? 'opencode', ['run', ...args], {
+      cwd: project,
+      env: { ...isolatedEnvironment(root), ...variables },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+    const release = runner.pid === undefined ? () => {} : registerProcess(runner.pid, root);
+    const finished = once(runner, 'exit');
+    let runOutput = '';
+    let runErrors = '';
+    runner.stdout.on('data', (data: Buffer) => {
+      runOutput = (runOutput + data.toString()).slice(-65_536);
+    });
+    runner.stderr.on('data', (data: Buffer) => {
+      runErrors = (runErrors + data.toString()).slice(-65_536);
+    });
+    const deadline = new AbortController();
+    try {
+      const [code] = (await Promise.race([
+        finished,
+        setTimeout(120_000, undefined, { signal: deadline.signal }).then(() =>
+          assert.fail(`opencode run did not finish: ${runErrors.slice(-4000)}`),
+        ),
+      ])) as [number | null];
+      return { code, stdout: runOutput, stderr: runErrors };
+    } finally {
+      deadline.abort();
+      await stopProcess(
+        runner,
+        finished.catch(() => undefined),
+      );
+      release();
+    }
+  };
   const response = async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
     assert.ok(baseURL !== undefined, 'start the native host first');
     return fetch(`${baseURL}${path}`, {
@@ -429,6 +480,7 @@ export async function nativeHarness(t: TestContext, name: string) {
     providerURL: `http://127.0.0.1:${address.port}/v1`,
     start,
     stop,
+    run,
     api,
     response,
   };

@@ -3,12 +3,18 @@ import { type CatalogModel, SettingsError, validateChoice } from './settings.ts'
 import type { LoadedSource } from './composition/sources.ts';
 import {
   type SelectionSnapshot,
+  processProfileVariable,
   readSelectionAt,
   saveSelection,
   verifySelectionProof,
   withSelectionLock,
 } from './composition/selection-state.ts';
-import { type AttestedRuntime, type RuntimeLocation, readRuntimeContext } from './composition/runtime-baseline.ts';
+import {
+  type AttestedRuntime,
+  type RuntimeLocation,
+  readLoadedRuntime,
+  readRuntimeContext,
+} from './composition/runtime-baseline.ts';
 import { type CompositionRevision, compositionRevision, digest, observeNative } from './composition/revision.ts';
 import { resolveComposition } from './composition/runtime.ts';
 import type { ResolvedCandidate, Selection } from './composition/document-types.ts';
@@ -31,9 +37,18 @@ export interface Preview {
 }
 export const metadataChanged = 'Native agent metadata changed. Restart the OpenCode server process, then review again.';
 export const jsonChanged = 'Native JSON configuration changed. Restart the OpenCode server process, then review again.';
+export function processProfileNotice(profile: string): string {
+  return `${processProfileVariable} selects profile ${profile} for this OpenCode server process. Profile switching is read-only while it is set; the saved worktree choice is unchanged. Restart the server process without it to switch profiles with /profiles.`;
+}
+/** Every selection edit starts here, so a process profile keeps saved state read-only. */
 export async function loadConfigurationContext(connection: ConfigurationConnection): Promise<ConfigurationContext> {
   connection.assertCurrent();
-  const runtime = readRuntimeContext(await connection.config(), connection.location);
+  const config = await connection.config();
+  const profile = readLoadedRuntime(config, connection.location).processProfile;
+  if (profile !== undefined) {
+    throw new SettingsError(processProfileNotice(profile));
+  }
+  const runtime = readRuntimeContext(config, connection.location);
   await verifySelectionProof(runtime.selectionEnvironment);
   const source = runtime.source;
   const selection = await readSelectionAt(runtime.selectionEnvironment, runtime.selectionLocator);

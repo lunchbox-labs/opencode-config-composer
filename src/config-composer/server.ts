@@ -12,6 +12,7 @@ import { applyModelParameters } from './composition/model-parameters.ts';
 import { type RuntimeMarker, configFields, metadata, publishRuntime } from './composition/runtime-baseline.ts';
 import {
   type NativeObservation,
+  type SelectionInput,
   compositionRevision,
   discoveryContext,
   nativeGlobalJsonPaths,
@@ -20,6 +21,9 @@ import {
 import {
   type SelectionEnvironment,
   type SelectionLocator,
+  type SelectionSnapshot,
+  processProfile,
+  processProfileVariable,
   publishSelectionProof,
   readSelectionAt,
   selectionLifetime,
@@ -39,6 +43,7 @@ interface Definition {
   selectionEnvironment: SelectionEnvironment;
   source?: LoadedSource;
   selectionLocator?: SelectionLocator;
+  processProfile?: string;
   error?: string;
 }
 interface Startup {
@@ -66,10 +71,20 @@ async function definition(directory: string, worktree: string, rawOptions: unkno
         id: randomUUID(),
         selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
       };
+      // Read once with this location's source capture.
+      const profile = processProfile();
       try {
         const options = pluginOptions(rawOptions);
         const configDirectory = configurationDirectory();
-        value.source = await loadSource(options, configDirectory);
+        const source = await loadSource(options, configDirectory);
+        if (profile !== undefined && !Object.hasOwn(source.document.profiles, profile)) {
+          const names = Object.keys(source.document.profiles);
+          throw new SettingsError(
+            `${processProfileVariable} names unknown profile ${JSON.stringify(profile)}. ${names.length === 0 ? `${source.path} defines no profiles.` : `Profiles in ${source.path}: ${names.map((name) => JSON.stringify(name)).join(', ')}.`}`,
+          );
+        }
+        value.source = source;
+        value.processProfile = profile;
         value.selectionLocator = await selectionLocator(value.selectionEnvironment, {
           root: worktree,
           baseFile: value.source.canonicalPath,
@@ -145,10 +160,14 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
       let native: NativeBaseline | undefined;
       let observation: NativeObservation | undefined;
       let globalJsonBaseline: string | undefined;
-      const identities: Pick<RuntimeMarker, 'definitionId' | 'source' | 'selectionLocator' | 'selection'> = {
+      const identities: Pick<
+        RuntimeMarker,
+        'definitionId' | 'source' | 'selectionLocator' | 'selection' | 'processProfile'
+      > = {
         definitionId: loaded.id,
         source: loaded.source,
         selectionLocator: loaded.selectionLocator,
+        processProfile: loaded.processProfile,
       };
       try {
         const previous = roots.get(config);
@@ -199,16 +218,32 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           );
         }
         const source = loaded.source;
-        const selection = await readSelectionAt(selectionEnvironment, loaded.selectionLocator);
-        identities.selection = {
-          path: selection.path,
-          choice: selection.choice,
-          revision: selection.revision,
-          identity: selection.identity,
-        };
-        const candidate = resolveComposition(source.document, selection.choice, native, observation.authority);
-        const revision = compositionRevision(source, selection, candidate);
-        await verifySelection(selection);
+        const profile = loaded.processProfile;
+        let selection: SelectionSnapshot | undefined;
+        let selected: SelectionInput;
+        if (profile === undefined) {
+          selection = await readSelectionAt(selectionEnvironment, loaded.selectionLocator);
+          identities.selection = {
+            path: selection.path,
+            choice: selection.choice,
+            revision: selection.revision,
+            identity: selection.identity,
+          };
+          selected = selection;
+        } else {
+          // The process profile replaces the saved worktree choice, which is neither read nor written.
+          selected = { processProfile: profile };
+        }
+        const candidate = resolveComposition(
+          source.document,
+          profile ?? selection?.choice,
+          native,
+          observation.authority,
+        );
+        const revision = compositionRevision(source, selected, candidate);
+        if (selection !== undefined) {
+          await verifySelection(selection);
+        }
         const after = await observeNative(observation.context);
         if (!isDeepStrictEqual(after, observation)) {
           throw new SettingsError('Native inputs changed. Restart the OpenCode server process, then review again.');
