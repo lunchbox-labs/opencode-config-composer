@@ -1,7 +1,14 @@
+import { resolve } from 'node:path';
 import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
 import { SettingsError, record } from '../settings.ts';
 import type { ConfigurationConnection } from '../storage.ts';
-import { type AttestedRuntime, configFields, metadata, readLoadedRuntime } from '../composition/runtime-baseline.ts';
+import {
+  type AttestedRuntime,
+  type RuntimeLocation,
+  configFields,
+  metadata,
+  readLoadedRuntime,
+} from '../composition/runtime-baseline.ts';
 import { builtins } from '../composition/runtime.ts';
 
 /** A server read, independent of local definition/selection files and mutation proofs. */
@@ -39,6 +46,12 @@ export function inspectionAgents(snapshot: Inspection, showBuiltins: boolean): s
     .sort();
 }
 
+/** The location whose loaded marker the TUI reports, read reactively from the host state. */
+export function stateLocation(api: TuiPluginApi): RuntimeLocation {
+  const directory = resolve(api.state.path.directory);
+  const worktree = api.state.path.worktree;
+  return { directory, root: resolve(worktree !== '' && worktree !== '/' ? worktree : directory) };
+}
 /** Slot reads must preserve the host Solid proxy; never clone api.state.config. */
 function loadedMarker(config: unknown, directory: string, root: string): Record<string, unknown> | undefined {
   if (!record(config) || !Array.isArray(config.plugin)) {
@@ -77,4 +90,12 @@ export function appliedProfile(config: unknown, directory: string, root: string)
 export function runtimeDiagnostic(config: unknown, directory: string, root: string): string | undefined {
   const marker = loadedMarker(config, directory, root);
   return marker?.status === 'error' && typeof marker.diagnostic === 'string' ? marker.diagnostic : undefined;
+}
+/** The prompt slot label; a failed composition stays visible after its toast is dismissed. */
+export function profileSlot(config: unknown, directory: string, root: string): { text: string; error: boolean } {
+  if (runtimeDiagnostic(config, directory, root) !== undefined) {
+    return { text: 'Profile: error', error: true };
+  }
+  const profile = appliedProfile(config, directory, root);
+  return { text: profile === undefined ? '' : `Profile: ${profile}`, error: false };
 }

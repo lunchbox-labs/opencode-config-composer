@@ -1,8 +1,7 @@
-import { resolve } from 'node:path';
 import type { TuiDialogSelectProps, TuiPluginApi } from '@opencode-ai/plugin/tui';
 import { jsx } from '@opentui/solid/jsx-runtime';
 import type { SelectProps } from '@opentui/solid';
-import { appliedProfile } from './inspection.ts';
+import { profileSlot, stateLocation } from './inspection.ts';
 
 /** dialog.replace supplies the native Dialog wrapper; this content needs no filter input. */
 export function fixedMenu(api: TuiPluginApi, props: TuiDialogSelectProps<string>) {
@@ -49,18 +48,17 @@ export function fixedMenu(api: TuiPluginApi, props: TuiDialogSelectProps<string>
   });
 }
 export function registerProfileSlot(api: TuiPluginApi): void {
+  const slot = () => {
+    const { directory, root } = stateLocation(api);
+    return profileSlot(api.state.config, directory, root);
+  };
   const render = () =>
     jsx('text', {
-      fg: api.theme.current.textMuted,
+      get fg() {
+        return slot().error ? api.theme.current.error : api.theme.current.textMuted;
+      },
       get children() {
-        const directory = resolve(api.state.path.directory);
-        const worktree = api.state.path.worktree;
-        const profile = appliedProfile(
-          api.state.config,
-          directory,
-          resolve(worktree !== '' && worktree !== '/' ? worktree : directory),
-        );
-        return profile === undefined ? '' : `Profile: ${profile}`;
+        return slot().text;
       },
     });
   api.slots.register({ slots: { home_prompt_right: render, session_prompt_right: render } });
