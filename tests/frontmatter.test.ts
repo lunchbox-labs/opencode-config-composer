@@ -534,7 +534,7 @@ test('a directory symlink back to an ancestor fails at the looping path among co
 
 test(
   'native agent discovery composes every agent under a bounded descriptor limit',
-  { skip: process.platform === 'win32' },
+  { skip: process.platform !== 'linux' },
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'composer-frontmatter-'));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -564,11 +564,10 @@ for (let index = 0; index < 800; index++) {
   assert.deepEqual(config.agent['agent-' + index], { temperature: 0.5, prompt: 'Native agent ' + index + '.', model: 'p/composed' });
 }`;
     await promisify(execFile)(
-      'bash',
+      'prlimit',
       [
-        '-c',
-        'set -e\nulimit -n 128\nexec "$@"',
-        'native-discovery',
+        '--nofile=128:128',
+        '--',
         process.execPath,
         '--experimental-strip-types',
         '--input-type=module',
