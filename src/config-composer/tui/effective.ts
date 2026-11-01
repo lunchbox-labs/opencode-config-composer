@@ -31,7 +31,8 @@ function nativeField(view: InspectionView, kind: 'agent' | 'command', name: stri
   if (field === 'model' && record(value)) {
     return `${String(value.providerID)}/${String(value.modelID)}`;
   }
-  return value;
+  // Native /agent reports an unset steps limit as null.
+  return value ?? undefined;
 }
 function display(value: unknown): string {
   return value === undefined ? 'Inherit' : JSON.stringify(value);

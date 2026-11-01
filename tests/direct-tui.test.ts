@@ -351,16 +351,25 @@ test('inspection attributes group and profile steps to their Composer pointers',
     t,
     '',
     {},
-    {},
+    { solo: { mode: 'subagent' } },
     {
       groups: { workers: { agent: { steps: 6 } } },
       profiles: { capped: { groups: { workers: { agent: { steps: 1 } } } } },
     },
   );
-  f.setNativeAgents([{ name: 'worker', native: false, steps: 6 }]);
+  // Native /agent reports an unset steps limit as null.
+  f.setNativeAgents([
+    { name: 'worker', native: false, steps: 6 },
+    { name: 'solo', native: false, steps: null },
+  ]);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent solo', 'agent solo');
+  assert.equal(f.current?.options?.find((option) => option.title === 'steps')?.description, 'Inherit');
+  await f.choose('steps', 'agent solo · steps');
+  assert.match(await f.detailText(), /Effective native steps: Inherit/);
   await f.open('view-configs', 'Configuration');
   await f.choose('agent worker', 'agent worker');
-  assert.equal(f.current?.options?.find((option) => option.title === 'steps')?.description, '6');
+  assert.equal(f.current.options.find((option) => option.title === 'steps')?.description, '6');
   await f.choose('steps', 'agent worker · steps');
   // Long source pointers wrap in the dialog.
   const shared = (await f.detailText()).replaceAll('\n', '');

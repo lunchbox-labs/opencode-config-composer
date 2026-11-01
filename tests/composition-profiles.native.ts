@@ -89,14 +89,20 @@ test(
       ...f.native,
       agent: { ...f.native.agent, worker: { ...f.native.agent.worker, groups: ['workers'] } },
     });
-    await mkdir(join(f.host.configRoot, 'agents'));
-    // Native decodes a Markdown source's deprecated maxSteps as its steps value.
-    const bodies = {
-      pinned: '---\ngroups: [workers]\nsteps: 5\n---\nPINNED_BODY',
-      deprecated: '---\ngroups: [workers]\nmaxSteps: 4\n---\nDEPRECATED_BODY',
+    const global = join(f.host.configRoot, 'agents');
+    const project = join(f.host.project, '.opencode', 'agents');
+    await mkdir(global);
+    await mkdir(project, { recursive: true });
+    // Native decodes each Markdown source's deprecated maxSteps as its steps value before merging sources,
+    // so a later maxSteps replaces an earlier source's steps.
+    const files = {
+      [join(global, 'pinned.md')]: '---\ngroups: [workers]\nsteps: 5\n---\nPINNED_BODY',
+      [join(global, 'deprecated.md')]: '---\ngroups: [workers]\nmaxSteps: 4\n---\nDEPRECATED_BODY',
+      [join(global, 'crossed.md')]: '---\ngroups: [workers]\nsteps: 5\n---\nCROSSED_BODY',
+      [join(project, 'crossed.md')]: '---\nmaxSteps: 2\n---\nCROSSED_PROJECT_BODY',
     };
-    for (const [name, body] of Object.entries(bodies)) {
-      await writeFile(join(f.host.configRoot, 'agents', `${name}.md`), body);
+    for (const [path, body] of Object.entries(files)) {
+      await writeFile(path, body);
     }
     await f.write(f.paths.shared, {
       groups: { workers: {} },
@@ -109,31 +115,32 @@ test(
       const capped = choice === 'capped';
       const config = await f.host.api<{ agent: Record<string, Record<string, unknown>> }>('/config');
       assert.deepEqual(
-        ['worker', 'pinned', 'deprecated'].map((name) => config.agent[name].steps),
-        [capped ? 1 : undefined, 5, 4],
+        ['worker', 'pinned', 'deprecated', 'crossed'].map((name) => config.agent[name].steps),
+        [capped ? 1 : undefined, 5, 4, 2],
       );
       // Native /agent reports an unset configured agent's steps as null.
       const agents = await f.host.api<{ name: string; steps?: number | null }[]>('/agent');
       assert.deepEqual(
-        ['worker', 'pinned', 'deprecated'].map((name) => agents.find((agent) => agent.name === name)?.steps),
-        [capped ? 1 : null, 5, 4],
+        ['worker', 'pinned', 'deprecated', 'crossed'].map((name) => agents.find((agent) => agent.name === name)?.steps),
+        [capped ? 1 : null, 5, 4, 2],
       );
       const { decisions } = (await f.editor.runtime()).candidate!;
       assert.equal(
         Object.hasOwn(decisions, '/agent/worker/steps') ? decisions['/agent/worker/steps'].origin.pointer : undefined,
         capped ? '/profiles/capped/groups/workers/agent/steps' : undefined,
       );
-      for (const name of ['pinned', 'deprecated']) {
+      for (const name of ['pinned', 'deprecated', 'crossed']) {
         const decision = decisions[`/agent/${name}/steps`];
         assert.equal(decision.origin.kind, 'frontmatter', name);
+        assert.equal(decision.value, agents.find((agent) => agent.name === name)?.steps, name);
         assert.equal(decision.blockedComposer?.value, capped ? 1 : undefined, name);
       }
       // The native loop switches to text-only output on the configured final step.
       const { captured } = await f.send('worker');
       assert.equal(JSON.stringify(captured.messages).includes('MAXIMUM STEPS REACHED'), capped);
     }
-    for (const [name, body] of Object.entries(bodies)) {
-      assert.equal(await readFile(join(f.host.configRoot, 'agents', `${name}.md`), 'utf8'), body);
+    for (const [path, body] of Object.entries(files)) {
+      assert.equal(await readFile(path, 'utf8'), body);
     }
     assert.equal(await readFile(f.paths.native, 'utf8'), nativeBytes);
   },
