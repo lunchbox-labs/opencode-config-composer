@@ -16,7 +16,8 @@ export interface DetailsProps {
   onConfirm?: () => void;
   action?: string;
 }
-export type DetailsView = (props: DetailsProps & { onConfirm: () => void }) => Element;
+/** `scroll` holds the reader's place while the view's Enter action is open. */
+export type DetailsView = (props: DetailsProps & { onConfirm: () => void; scroll: { top: number } }) => Element;
 export function dialogNavigation(api: TuiPluginApi, widgets: { fixedMenu: FixedMenu; details: DetailsView }) {
   let frames: Frame[] = [];
   let revision = 0;
@@ -165,7 +166,10 @@ export function dialogNavigation(api: TuiPluginApi, widgets: { fixedMenu: FixedM
     show({ render: () => api.ui.DialogAlert(props) });
   const confirm = (props: Parameters<TuiPluginApi['ui']['DialogConfirm']>[0], size?: Frame['size']) =>
     show({ render: () => api.ui.DialogConfirm(props), size });
-  const details = (props: DetailsProps) =>
-    show({ render: () => widgets.details({ ...props, onConfirm: props.onConfirm ?? back }), size: 'xlarge' });
+  const details = (props: DetailsProps) => {
+    // Cancelling the Enter action shows this frame again; it reopens where the reader left it.
+    const scroll = { top: 0 };
+    show({ render: () => widgets.details({ ...props, onConfirm: props.onConfirm ?? back, scroll }), size: 'xlarge' });
+  };
   return { menu, fixed, alert, confirm, details, close, reset, checkpoint };
 }

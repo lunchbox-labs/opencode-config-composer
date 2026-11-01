@@ -54,11 +54,14 @@ export function fixedMenu(api: TuiPluginApi, props: TuiDialogSelectProps<string>
 export function detailsView(api: TuiPluginApi, props: Parameters<DetailsView>[0]) {
   const theme = api.theme.current;
   const dimensions = useTerminalDimensions();
+  let view: { scrollTop: number } | undefined;
+  let restore = props.scroll.top > 0;
   const scroll: ScrollBoxProps = {
     verticalScrollbarOptions: {
       trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
     },
     ref: (node) => {
+      view = node;
       // The session route binds page, home and end keys to scroll the conversation and close any dialog.
       // This newer focused layer takes precedence; the scroll box itself handles arrows and j/k.
       onCleanup(
@@ -70,7 +73,15 @@ export function detailsView(api: TuiPluginApi, props: Parameters<DetailsView>[0]
             { key: 'pagedown', desc: 'Scroll down', group: 'Dialog', cmd: () => node.scrollBy(0.5, 'viewport') },
             { key: 'home', desc: 'Scroll to start', group: 'Dialog', cmd: () => node.scrollTo(0) },
             { key: 'end', desc: 'Scroll to end', group: 'Dialog', cmd: () => node.scrollTo(node.scrollHeight) },
-            { key: 'return', desc: props.action ?? 'Back', group: 'Dialog', cmd: () => props.onConfirm() },
+            {
+              key: 'return',
+              desc: props.action ?? 'Back',
+              group: 'Dialog',
+              cmd: () => {
+                props.scroll.top = node.scrollTop;
+                props.onConfirm();
+              },
+            },
           ],
         }),
       );
@@ -82,7 +93,16 @@ export function detailsView(api: TuiPluginApi, props: Parameters<DetailsView>[0]
         }
       }, 1);
     },
-    children: jsx('text', { fg: theme.text, children: props.message }),
+    children: jsx('box', {
+      // The scroll box has measured its content when this first takes its size, so the saved place is reachable.
+      onSizeChange: () => {
+        if (restore && view !== undefined) {
+          restore = false;
+          view.scrollTop = props.scroll.top;
+        }
+      },
+      children: jsx('text', { fg: theme.text, children: props.message }),
+    }),
   };
   return jsx('box', {
     paddingLeft: 2,

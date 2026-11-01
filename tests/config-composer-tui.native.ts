@@ -135,6 +135,11 @@ test(
     }
     await terminal.press('\r', 'Apply reviewed changes?');
     await terminal.press('\x1b', 'Apply profile selection?', 'enter apply…');
+    await terminal.idle();
+    assert.ok(
+      terminal.shows('Existing session model/variant choices remain native.'),
+      'cancelling Apply keeps the place',
+    );
     await terminal.press('\x1b', 'Profiles');
     const context = await f.editor.context();
     await assert.rejects(readFile(context.selection.path), /ENOENT/);
