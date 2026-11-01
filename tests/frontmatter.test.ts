@@ -171,6 +171,43 @@ test('scalar permissions and legacy tools retain their raw authored values with 
   });
 });
 
+test('steps pins follow native per-source steps or deprecated maxSteps normalization', async (t) => {
+  const f = await fixture(t);
+  await f.markdown(f.global, 'agents/current.md', 'steps: 3\nmaxSteps: 9');
+  await f.markdown(f.global, 'agents/deprecated.md', 'maxSteps: 4');
+  await f.markdown(f.global, 'agents/replaced.md', 'steps: 5');
+  await f.markdown(f.custom, 'agents/replaced.md', 'maxSteps: 2');
+  await f.markdown(f.global, 'agents/retained.md', 'maxSteps: 6');
+  await f.markdown(f.custom, 'agents/retained.md', 'model: fixture/later');
+  await f.markdown(f.global, 'agents/absent.md', 'model: fixture/only');
+  const agents = await readNativeAgentFrontmatter(f.context);
+  const steps = (name: string) => {
+    const pin = agents.get(name)?.fields.steps;
+    return pin === undefined ? undefined : { value: pin.value, authored: pin.authored, path: pin.source.path };
+  };
+  assert.deepEqual(steps('current'), {
+    value: 3,
+    authored: { steps: 3, maxSteps: 9 },
+    path: join(f.global, 'agents/current.md'),
+  });
+  assert.deepEqual(steps('deprecated'), {
+    value: 4,
+    authored: { maxSteps: 4 },
+    path: join(f.global, 'agents/deprecated.md'),
+  });
+  assert.deepEqual(steps('replaced'), {
+    value: 2,
+    authored: { maxSteps: 2 },
+    path: join(f.custom, 'agents/replaced.md'),
+  });
+  assert.deepEqual(steps('retained'), {
+    value: 6,
+    authored: { maxSteps: 6 },
+    path: join(f.global, 'agents/retained.md'),
+  });
+  assert.equal(steps('absent'), undefined);
+});
+
 test('native option relocation keeps raw inputs and excludes native agent schema fields', async (t) => {
   const f = await fixture(t);
   await f.markdown(

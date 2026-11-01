@@ -92,6 +92,11 @@
         "top_p": {
           "type": "number"
         },
+        "steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
         "options": {
           "type": "object",
           "not": {

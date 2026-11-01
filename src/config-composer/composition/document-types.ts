@@ -8,6 +8,7 @@ export interface AgentPatch extends Record<string, unknown> {
   variant?: string;
   temperature?: number;
   top_p?: number;
+  steps?: number;
   options?: Record<string, unknown>;
   mode?: 'primary' | 'subagent' | 'all';
   permission?: Permission;

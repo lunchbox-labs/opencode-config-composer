@@ -346,6 +346,49 @@ test('profile confirmation includes changed and removed model parameter defaults
   await f.choose('○ b', 'Apply profile selection?');
   assert.match(await f.preview(), /Removed model-bound defaults/);
 });
+test('inspection attributes group and profile steps to their Composer pointers', async (t) => {
+  const f = await fixture(
+    t,
+    '',
+    {},
+    { solo: { mode: 'subagent' } },
+    {
+      groups: { workers: { agent: { steps: 6 } } },
+      profiles: { capped: { groups: { workers: { agent: { steps: 1 } } } } },
+    },
+  );
+  // Native /agent reports an unset steps limit as null.
+  f.setNativeAgents([
+    { name: 'worker', native: false, steps: 6 },
+    { name: 'solo', native: false, steps: null },
+  ]);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent solo', 'agent solo');
+  assert.equal(f.current?.options?.find((option) => option.title === 'steps')?.description, 'Inherit');
+  await f.choose('steps', 'agent solo · steps');
+  assert.match(await f.detailText(), /Effective native steps: Inherit/);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  assert.equal(f.current.options.find((option) => option.title === 'steps')?.description, '6');
+  await f.choose('steps', 'agent worker · steps');
+  // Long source pointers wrap in the dialog.
+  const shared = (await f.detailText()).replaceAll('\n', '');
+  assert.match(shared, /Loaded configuration contribution: 6/);
+  assert.match(shared, /config-composer\.jsonc · \/groups\/workers\/agent\/steps/);
+  assert.match(shared, /Effective native steps: 6/);
+  await f.reopen();
+  await f.choose('○ capped', 'Apply profile selection?');
+  assert.match((await f.preview()).replaceAll('\n', ''), /\/profiles\/capped\/groups\/workers\/agent\/steps/);
+  await f.confirm('Composer revision applied');
+  f.setNativeAgents([{ name: 'worker', native: false, steps: 1 }]);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  await f.choose('steps', 'agent worker · steps');
+  const capped = (await f.detailText()).replaceAll('\n', '');
+  assert.match(capped, /Loaded configuration contribution: 1/);
+  assert.match(capped, /\/profiles\/capped\/groups\/workers\/agent\/steps/);
+  assert.match(capped, /Effective native steps: 1/);
+});
 test('inspection opens untouched builtins and explains native inheritance', async (t) => {
   const f = await fixture(t);
   await f.open('view-configs', 'Configuration');
@@ -407,6 +450,7 @@ test('inspection keeps loaded raw pins after native file edits', async (t) => {
 for (const pin of [
   'model: p/native',
   'temperature: 0',
+  'steps: 2',
   'variant: ""',
   'options: {}',
   'permission: deny',
@@ -417,6 +461,7 @@ for (const pin of [
     const proposals: Record<string, unknown> = {
       model: 'p/b',
       temperature: 1,
+      steps: 9,
       variant: 'high',
       options: { composer: true },
       permission: { edit: 'ask' },

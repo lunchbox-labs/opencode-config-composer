@@ -96,12 +96,20 @@ test('all shipped examples select and reset settings on existing native agents',
       path: '../docs/examples/review-programming/config-composer.jsonc',
       defaultProfile: 'review',
       shared: {
-        plan: { temperature: undefined, permission: reviewPermission },
+        plan: { temperature: undefined, steps: undefined, permission: reviewPermission },
         build: { temperature: undefined, permission: programmingPermission },
       },
       profiles: {
-        review: { plan: { temperature: 0 }, explore: { temperature: 0 }, build: { temperature: undefined } },
-        programming: { build: { temperature: 0.2 }, general: { temperature: 0.2 }, plan: { temperature: undefined } },
+        review: {
+          plan: { temperature: 0, steps: 25 },
+          explore: { temperature: 0, steps: 25 },
+          build: { temperature: undefined, steps: undefined },
+        },
+        programming: {
+          build: { temperature: 0.2 },
+          general: { temperature: 0.2 },
+          plan: { temperature: undefined, steps: undefined },
+        },
       },
     },
     {
