@@ -82,7 +82,7 @@ test(
   },
 );
 
-test('native TUI reports delayed config failures again after recovery', { timeout: 240000 }, async (t) => {
+test('native TUI shows delayed config failures until recovery and again after it', { timeout: 240000 }, async (t) => {
   const f = await compositionFixture(t, 'tui-error-notice');
   const slow = join(f.host.configRoot, 'slow-config.mjs');
   await writeFile(
@@ -104,14 +104,18 @@ test('native TUI reports delayed config failures again after recovery', { timeou
     await f.host.api('/instance/dispose', {});
     const loaded = await f.host.api('/config');
     assert.match(runtimeDiagnostic(loaded, f.host.project, f.host.project) ?? '', /Composer not applied/);
-    await terminal.wait(['Config Composer', 'Composer not applied.']);
-    await f.write(projectNative, {});
-    await f.host.api('/instance/dispose', {});
-    await terminal.wait(['Profile: Shared only']);
-    for (let attempt = 0; terminal.text().includes('Composer not applied.') && attempt < 200; attempt++) {
+    await terminal.wait(['Config Composer', 'Composer not applied.', 'Profile: error']);
+    // The host expires the toast; the prompt slot still reports the failed composition.
+    for (let attempt = 0; terminal.text().includes('Composer not applied.') && attempt < 400; attempt++) {
       await setTimeout(50);
     }
     assert.doesNotMatch(terminal.text(), /Composer not applied\./);
+    assert.match(terminal.text(), /Profile: error/);
+    assert.doesNotMatch(terminal.text(), /Profile: Shared only/);
+    await f.write(projectNative, {});
+    await f.host.api('/instance/dispose', {});
+    await terminal.wait(['Profile: Shared only']);
+    assert.doesNotMatch(terminal.text(), /Profile: error|Composer not applied\./);
   }
   assert.equal(f.host.requests.length, 0);
 });
