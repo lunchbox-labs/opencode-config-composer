@@ -38,9 +38,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows runs on pushes to main and manual runs; pull requests run Linux only, which
-        # keeps the slowest jobs off the review path.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+        # Pull requests run Windows too, so a Windows-only regression fails the pull request
+        # instead of main's run after the merge.
+        os: [ubuntu-latest, windows-latest]
         suite:
           - registration
           - core
@@ -106,8 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Same lane rule as native.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+        os: [ubuntu-latest, windows-latest]
         opencode: ['minimum']
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
