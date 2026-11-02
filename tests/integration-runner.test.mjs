@@ -45,6 +45,10 @@ test('CI suites partition every portable integration file exactly once', async (
     'tests/config-composer.native.ts',
     'tests/review-programming.native.ts',
     'tests/integration/prompt-coexistence.integration.ts',
+    'tests/integration/scoped-apply.integration.ts',
+    'tests/config-composer-tui.native.ts',
+    'tests/integration/terminal.integration.ts',
+    'tests/model-parameters.native.ts',
   ];
   const budgets = longRunning.map((file) => suites.find((suite) => integrationFiles(suite).includes(file)));
   assert.equal(new Set(budgets).size, longRunning.length, 'long-running files need separate suite time budgets');
