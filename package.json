@@ -1,6 +1,6 @@
 {
   "name": "@lunchbox-labs/opencode-config-composer",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Compose native OpenCode settings with always-active groups and one worktree profile",
   "license": "MIT",
   "type": "module",
@@ -49,7 +49,7 @@
   },
   "dependencies": {
     "gray-matter": "4.0.3",
-    "js-yaml": "3.14.2",
+    "js-yaml": "3.15.2",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
