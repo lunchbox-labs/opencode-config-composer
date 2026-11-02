@@ -1,7 +1,8 @@
 import type { AgentConfig, PermissionActionConfig, PermissionConfig } from '@opencode-ai/sdk/v2';
 
-// Host tables taken from OpenCode v1.19.0. The @opencode-ai/sdk types of the same
-// version check them at compile time, so an SDK update that changes them fails typechecking.
+// Host tables taken from OpenCode v1.19.0. The pinned @opencode-ai/sdk types (unchanged for
+// these tables through 1.19.5) check them at compile time, so an SDK update that changes them
+// fails typechecking.
 
 /** Keys a type declares, excluding its index signature. */
 type Declared<T> = keyof { [K in keyof T as string extends K ? never : K]: unknown };
