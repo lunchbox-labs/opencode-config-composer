@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { type TestContext, test } from 'node:test';
@@ -75,6 +75,7 @@ for (const mutation of ['agent edit', 'agent addition', 'agent deletion', 'JSON 
     // Each native observation first checks the global native root (XDG_CONFIG_HOME/opencode).
     // Its second check starts the recheck after the first observation has finished, which
     // provides a deterministic edit during composition while keeping discovery and reads real.
+    // The edit is synchronous so it completes before any other read of the recheck starts.
     const globalRoot = join(f.root, 'opencode');
     let globalRootChecks = 0;
     const original = fs.promises.stat;
@@ -83,15 +84,15 @@ for (const mutation of ['agent edit', 'agent addition', 'agent deletion', 'JSON 
       if (!changed && String(args[0]) === globalRoot && ++globalRootChecks === 2) {
         changed = true;
         if (mutation === 'agent edit') {
-          await writeFile(agent, '---\nmodel: p/changed\n---\nNative agent.');
+          fs.writeFileSync(agent, '---\nmodel: p/changed\n---\nNative agent.');
         } else if (mutation === 'agent addition') {
-          await writeFile(join(f.root, 'agents/helper.md'), '---\nmodel: p/helper\n---\nNew agent.');
+          fs.writeFileSync(join(f.root, 'agents/helper.md'), '---\nmodel: p/helper\n---\nNew agent.');
         } else if (mutation === 'agent deletion') {
-          await unlink(agent);
+          fs.unlinkSync(agent);
         } else if (mutation === 'JSON edit') {
-          await writeFile(json, '{"model":"p/changed"}');
+          fs.writeFileSync(json, '{"model":"p/changed"}');
         } else {
-          await writeFile(command, 'Changed native command.');
+          fs.writeFileSync(command, 'Changed native command.');
         }
       }
       return original(...args);
@@ -228,9 +229,20 @@ test('a captured process profile replaces saved and default choices and keeps sa
   await writeFile(first.selectionLocator.path, 'unreadable');
   process.env[processProfileVariable] = 'b';
   const config = { plugin: [packageName] };
-  await (
-    await descriptor.server(f.input)
-  ).config!(config);
+  const hooks = await descriptor.server(f.input);
+  const touched: string[] = [];
+  for (const name of ['lstat', 'readFile'] as const) {
+    const original = fs.promises[name] as (...args: unknown[]) => Promise<unknown>;
+    const mocked = t.mock.method(fs.promises, name, (...args: unknown[]) => {
+      touched.push(String(args[0]));
+      return original(...args);
+    });
+    t.after(() => mocked.mock.restore());
+  }
+  syncBuiltinESMExports();
+  t.after(() => syncBuiltinESMExports());
+  await hooks.config!(config);
+  assert.ok(!touched.includes(first.selectionLocator.path));
   const again = readRuntimeContext(config, { root: f.root, directory: f.root });
   assert.equal(again.definitionId, first.definitionId);
   assert.equal(again.candidate?.profile, 'a');
@@ -302,4 +314,25 @@ test('an unreadable saved selection fails composition after native inputs are ob
   assert.equal(runtime.status, 'error');
   assert.match(runtime.diagnostic!, /Composer not applied.*Invalid or unsupported selection state/);
   assert.deepEqual(runtime.observation, first.observation);
+});
+
+test('a native observation failure is reported over an unreadable saved selection', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.source, JSON.stringify({ profiles: { a: { model: 'p/a' } }, defaultProfile: 'a' }));
+  const first = await f.load();
+  await mkdir(dirname(first.selectionLocator.path), { recursive: true });
+  await writeFile(first.selectionLocator.path, 'unreadable');
+  await mkdir(join(f.root, 'agents'));
+  await writeFile(join(f.root, 'agents/broken.md'), '---\nmodel: p/a\nmodel: p/b\n---\nBroken agent.');
+  const config = { plugin: [packageName] };
+  await assert.rejects((await descriptor.server(f.input)).config!(config), /Native agent frontmatter/);
+  // Without an observation the runtime readers refuse the marker, so inspect what was published.
+  const entry = (config.plugin as unknown[]).find((value): value is unknown[] => Array.isArray(value));
+  const marker = (entry?.[1] as { __configComposerRuntime?: Record<string, unknown> } | undefined)
+    ?.__configComposerRuntime;
+  assert.ok(marker !== undefined);
+  assert.equal(marker.status, 'error');
+  assert.match(String(marker.diagnostic), /Composer not applied\. Native agent frontmatter/);
+  assert.equal(marker.observation, undefined);
+  assert.equal(marker.globalJsonBaseline, undefined);
 });

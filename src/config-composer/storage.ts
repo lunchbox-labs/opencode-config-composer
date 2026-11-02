@@ -17,6 +17,7 @@ import {
 } from './composition/runtime-baseline.ts';
 import { type CompositionRevision, compositionRevision, digest, observeNative } from './composition/revision.ts';
 import { resolveComposition } from './composition/runtime.ts';
+import { allInOrder } from './ordered.ts';
 import type { ResolvedCandidate, Selection } from './composition/document-types.ts';
 export interface ConfigurationConnection {
   location: RuntimeLocation;
@@ -49,17 +50,22 @@ export async function loadConfigurationContext(connection: ConfigurationConnecti
     throw new SettingsError(processProfileNotice(profile));
   }
   const runtime = readRuntimeContext(config, connection.location);
-  await verifySelectionProof(runtime.selectionEnvironment);
   const source = runtime.source;
-  const selection = await readSelectionAt(runtime.selectionEnvironment, runtime.selectionLocator);
+  // Both only read; a missing state proof is still reported before a selection read failure.
+  const [, selection] = await allInOrder([
+    verifySelectionProof(runtime.selectionEnvironment),
+    readSelectionAt(runtime.selectionEnvironment, runtime.selectionLocator),
+  ]);
   connection.assertCurrent();
   return { connection, runtime, source, selection };
 }
 async function verifySavedInputs(context: ConfigurationContext): Promise<void> {
   const { connection, runtime, selection } = context;
   connection.assertCurrent();
-  await verifySelectionProof(runtime.selectionEnvironment);
-  const current = await readSelectionAt(runtime.selectionEnvironment, runtime.selectionLocator);
+  const [, current] = await allInOrder([
+    verifySelectionProof(runtime.selectionEnvironment),
+    readSelectionAt(runtime.selectionEnvironment, runtime.selectionLocator),
+  ]);
   if (!isDeepStrictEqual(current, selection)) {
     throw new SettingsError('Profile selection changed. Reopen Config Composer.');
   }
