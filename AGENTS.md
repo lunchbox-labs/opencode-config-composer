@@ -15,6 +15,6 @@ Write documentation for knowledgeable OpenCode users: explain plugin-specific co
 
 ## Contributor workflows
 
-Use independent `opencode-user-review` for changes to profiles, selection/Apply, inspector, diagnostics or user-facing documentation. Use independent `composition-contract-review` for composition, frontmatter authority, permissions, models or process/worktree state changes. Use both when both surfaces change; unrelated changes do not need these specialist reviews. Supply the diff, affected paths and actual test/runtime evidence, then address findings and recheck fixes.
+Use independent `opencode-user-review` for changes to profiles, selection/Apply, inspector, diagnostics or user-facing documentation. Use independent `composition-contract-review` for composition, frontmatter authority, permissions, models or process/worktree state changes. Use both when both surfaces change; unrelated changes do not need these specialist reviews. Supply the diff, affected paths and actual test/runtime evidence.
 
 Use `.agents/skills/native-package-verification/SKILL.md` to select applicable checks; it is not an additional review role. Keep contributor workflows separate from the shipped end-user `skills/` directory. The [agent tooling conventions](https://github.com/lunchbox-labs/.github/blob/main/agent-guidance/agent-tooling.md) cover the file layout, invocation in each tool and reviewer permissions.
