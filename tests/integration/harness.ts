@@ -221,8 +221,8 @@ export async function nativeHarness(t: TestContext, name: string) {
         throw error;
       }
     });
-    const installDependencies = async () => {
-      await promisify(execFile)(
+    const install = () =>
+      promisify(execFile)(
         process.execPath,
         [
           npm,
@@ -233,26 +233,39 @@ export async function nativeHarness(t: TestContext, name: string) {
           '--no-audit',
           '--no-fund',
           '--save-exact',
+          '--fetch-timeout=30000',
+          '--fetch-retries=3',
           `@opencode-ai/plugin@${testVersion}`,
         ],
-        { cwd: directory, timeout: process.platform === 'win32' ? 240_000 : 120_000 },
-      ).catch((error: unknown) => {
-        const failure = error as NodeJS.ErrnoException & {
-          signal?: string;
-          killed?: boolean;
-          stdout?: string;
-          stderr?: string;
-        };
-        throw new Error(
-          `Native SDK preparation failed in ${directory}: ${JSON.stringify({
-            code: failure.code,
-            signal: failure.signal,
-            killed: failure.killed,
-            stdout: failure.stdout?.slice(-4000),
-            stderr: failure.stderr?.slice(-4000),
-          })}`,
-        );
-      });
+        { cwd: directory, timeout: 120_000 },
+      );
+    const installDependencies = async () => {
+      // A stalled registry fetch is killed at the timeout; one fresh attempt
+      // usually succeeds, while a slow but progressing install never needs it.
+      await install()
+        .catch((error: unknown) => {
+          if ((error as { killed?: boolean }).killed !== true) {
+            throw error;
+          }
+          return install();
+        })
+        .catch((error: unknown) => {
+          const failure = error as NodeJS.ErrnoException & {
+            signal?: string;
+            killed?: boolean;
+            stdout?: string;
+            stderr?: string;
+          };
+          throw new Error(
+            `Native SDK preparation failed in ${directory}: ${JSON.stringify({
+              code: failure.code,
+              signal: failure.signal,
+              killed: failure.killed,
+              stdout: failure.stdout?.slice(-4000),
+              stderr: failure.stderr?.slice(-4000),
+            })}`,
+          );
+        });
     };
     if (directory === configRoot) {
       // Install the genuine pinned SDK once per fixture. Native loading still

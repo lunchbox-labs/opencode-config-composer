@@ -274,7 +274,8 @@ async function main() {
     await runNativeTests({
       files,
       // Windows runners are markedly slower; the heaviest single-file suites
-      // run close to eight minutes there.
+      // run close to eight minutes there. `all` is sized for Linux and local
+      // runs; CI runs Windows one suite at a time.
       timeout: suite === 'all' ? 900_000 : process.platform === 'win32' ? 720_000 : 480_000,
       env: { ...testEnvironment, INTEGRATION_FIXTURE_ROOT: root },
       signal: cancellation.signal,
