@@ -235,7 +235,7 @@ export async function nativeHarness(t: TestContext, name: string) {
           '--save-exact',
           `@opencode-ai/plugin@${testVersion}`,
         ],
-        { cwd: directory, timeout: 120_000 },
+        { cwd: directory, timeout: process.platform === 'win32' ? 240_000 : 120_000 },
       ).catch((error: unknown) => {
         const failure = error as NodeJS.ErrnoException & {
           signal?: string;

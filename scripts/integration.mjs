@@ -25,15 +25,13 @@ const suites = {
   core: ['tests/config-composer.native.ts', 'tests/process-profile.native.ts'],
   examples: ['tests/review-programming.native.ts'],
   coexistence: ['tests/integration/prompt-coexistence.integration.ts'],
-  profile: [
-    'tests/composition-profiles.native.ts',
-    'tests/model-aliases.native.ts',
-    'tests/model-parameters.native.ts',
-  ],
+  profile: ['tests/composition-profiles.native.ts'],
+  models: ['tests/model-aliases.native.ts', 'tests/model-parameters.native.ts'],
   permissions: ['tests/integration/permission-runtime.integration.ts', 'tests/permission-combinations.native.ts'],
   inspector: ['tests/integration/running-inspector.integration.ts'],
   apply: ['tests/integration/scoped-apply.integration.ts'],
-  terminal: ['tests/config-composer-tui.native.ts', 'tests/integration/terminal.integration.ts'],
+  tui: ['tests/config-composer-tui.native.ts'],
+  terminal: ['tests/integration/terminal.integration.ts'],
   cleanup: ['tests/integration/cleanup.integration.mjs'],
 };
 
@@ -161,7 +159,7 @@ async function main() {
   const args = process.argv.slice(2);
   assert.ok(
     args.length === 0 || (args.length === 2 && args[0] === '--suite'),
-    'Usage: npm run test:integration -- [--suite all|registration|core|examples|coexistence|profile|permissions|inspector|apply|terminal|cleanup]',
+    'Usage: npm run test:integration -- [--suite all|registration|core|examples|coexistence|profile|models|permissions|inspector|apply|tui|terminal|cleanup]',
   );
   const suite = args[1] ?? 'all';
   const files = integrationFiles(suite);
@@ -275,7 +273,9 @@ async function main() {
     );
     await runNativeTests({
       files,
-      timeout: suite === 'all' ? 900_000 : 480_000,
+      // Windows runners are markedly slower; the heaviest single-file suites
+      // run close to eight minutes there.
+      timeout: suite === 'all' ? 900_000 : process.platform === 'win32' ? 720_000 : 480_000,
       env: { ...testEnvironment, INTEGRATION_FIXTURE_ROOT: root },
       signal: cancellation.signal,
       capture,

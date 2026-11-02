@@ -41,9 +41,21 @@ jobs:
         # Windows runs on pushes to main and manual runs; pull requests run Linux only, which
         # keeps the slowest jobs off the review path.
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
-        suite: [registration, core, examples, coexistence, profile, permissions, inspector, apply, terminal, cleanup]
+        suite:
+          - registration
+          - core
+          - examples
+          - coexistence
+          - profile
+          - models
+          - permissions
+          - inspector
+          - apply
+          - tui
+          - terminal
+          - cleanup
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -77,7 +89,7 @@ jobs:
           key: ${{ steps.dependencies.outputs.cache-primary-key }}
       - name: Test the installed package in native OpenCode
         run: npm run test:integration -- --suite ${{ matrix.suite }}
-        timeout-minutes: 10
+        timeout-minutes: 14
       - name: Upload compact failure diagnostics
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
