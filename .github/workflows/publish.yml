@@ -60,6 +60,10 @@ jobs:
           persist-credentials: false
       - name: Require a commit already on main
         run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - name: Keep provenance aligned with the triggering commit
+        env:
+          WORKFLOW_COMMIT: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$WORKFLOW_COMMIT"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
