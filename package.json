@@ -55,8 +55,8 @@
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
     "@eslint/js": "10.0.1",
-    "@opencode-ai/plugin": "1.19.0",
-    "@opencode-ai/sdk": "1.19.0",
+    "@opencode-ai/plugin": "1.19.5",
+    "@opencode-ai/sdk": "1.19.5",
     "@opentui/core": "0.4.5",
     "@opentui/keymap": "0.4.5",
     "@opentui/solid": "0.4.5",
@@ -79,13 +79,5 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
-  },
-  "overrides": {
-    "@opentui/solid": {
-      "@babel/core": "7.29.7"
-    },
-    "solid-js@1.9.12": {
-      "seroval": "1.6.3"
-    }
   }
 }
