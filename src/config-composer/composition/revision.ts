@@ -6,6 +6,7 @@ import { type NativeFrontmatterContext, nativeAgentSourceRoots, readNativeAgentF
 import type { NativeAuthority, ResolvedCandidate } from './document-types.ts';
 import type { LoadedSource } from './sources.ts';
 import type { SelectionSnapshot } from './selection-state.ts';
+import { allInOrder } from '../ordered.ts';
 export interface CompositionRevision {
   sources: string;
   effective: string;
@@ -111,34 +112,40 @@ export async function nativeCommandPaths(context: NativeFrontmatterContext): Pro
       }
     }
   };
-  for (const root of nativeAgentSourceRoots(context)) {
-    for (const name of ['command', 'commands']) {
-      await scan(join(root, name));
-    }
-  }
+  // Each command directory is scanned independently; the result is sorted, so completion order is irrelevant.
+  await allInOrder(
+    nativeAgentSourceRoots(context).flatMap((root) => ['command', 'commands'].map((name) => scan(join(root, name)))),
+  );
   return paths.sort();
 }
 export async function observeNative(context: NativeFrontmatterContext): Promise<NativeObservation> {
-  const authority = Object.fromEntries(await readNativeAgentFrontmatter(context));
+  // Resolve every path list before starting reads, so a synchronous path error leaves no read unobserved.
   const roots = nativeAgentSourceRoots(context);
+  const discoveryPaths = roots.flatMap((root) => [
+    root,
+    ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name)),
+  ]);
+  const jsonPaths = nativeJsonPaths(context);
+  const globalJsonPaths = nativeGlobalJsonPaths(context);
   const fingerprints = (paths: string[]) => Promise.all(paths.map((path) => observation(path, true)));
-  // Collect independent fingerprints concurrently while preserving each category's path order.
-  const [discovery, sources, json, globalJson, commands] = await Promise.all([
-    Promise.all(
-      roots
-        .flatMap((root) => [root, ...['agent', 'agents', 'mode', 'modes'].map((name) => join(root, name))])
-        .map((path) => observation(path)),
-    ),
+  const authorityRead = readNativeAgentFrontmatter(context).then((agents) => Object.fromEntries(agents));
+  // Only the agent source fingerprints depend on authority; collect every other fingerprint alongside the
+  // frontmatter read. A frontmatter failure is still reported first, and each category keeps its path order.
+  const [authority, discovery, sources, json, globalJson, commands] = await allInOrder([
+    authorityRead,
+    Promise.all(discoveryPaths.map((path) => observation(path))),
     // Independent agents may be enumerated differently by the native host and editor.
     // Keep each agent's source chain in native precedence order.
-    Promise.all(
-      Object.keys(authority)
-        .sort()
-        .flatMap((name) => authority[name].sources)
-        .map(async (source) => [source, await observation(source.path)]),
+    authorityRead.then((agents) =>
+      Promise.all(
+        Object.keys(agents)
+          .sort()
+          .flatMap((name) => agents[name].sources)
+          .map(async (source) => [source, await observation(source.path)]),
+      ),
     ),
-    fingerprints(nativeJsonPaths(context)),
-    fingerprints(nativeGlobalJsonPaths(context)),
+    fingerprints(jsonPaths),
+    fingerprints(globalJsonPaths),
     nativeCommandPaths(context).then(fingerprints),
   ]);
   return {

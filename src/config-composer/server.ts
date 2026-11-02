@@ -5,6 +5,7 @@ import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { configurationDirectory } from './configuration-directory.ts';
 import { bundledSkillDirectory, validateBundledSkills } from './bundled-skills.ts';
 import { SettingsError, record } from './settings.ts';
+import { allInOrder } from './ordered.ts';
 import { nativeAgentSettings } from './membership.ts';
 import { type LoadedSource, loadSource, pluginOptions } from './composition/sources.ts';
 import { agentFields, commandFields } from './composition/document.ts';
@@ -132,10 +133,14 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
     typeof input.worktree === 'string' && input.worktree !== '' && input.worktree !== '/' ? input.worktree : directory,
   );
   const location = { root: worktree, directory };
+  // Bundled skill validation is independent of the startup definition and selection proof.
+  // Its failure is still reported after theirs.
+  const bundledSkills = validateBundledSkills();
+  bundledSkills.catch(() => undefined);
   const loaded = await definition(directory, worktree, rawOptions);
   const { selectionEnvironment } = loaded;
   await publishSelectionProof(selectionEnvironment);
-  await validateBundledSkills();
+  await bundledSkills;
   let parameters: { candidate: ResolvedCandidate; authority: NativeAuthority } | undefined;
   return {
     'chat.params': (request, output) => {
@@ -200,6 +205,13 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           }
         }
         native = restored;
+        // The saved selection is read alongside the native observation. A read failure is reported
+        // after the observation is recorded, as reading them in sequence would.
+        const selectionRead =
+          loaded.error === undefined && loaded.processProfile === undefined && loaded.selectionLocator !== undefined
+            ? readSelectionAt(selectionEnvironment, loaded.selectionLocator)
+            : undefined;
+        selectionRead?.catch(() => undefined);
         observation = await observeNative(
           discoveryContext(directory, typeof input.worktree === 'string' ? input.worktree : worktree),
         );
@@ -217,7 +229,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
         let selection: SelectionSnapshot | undefined;
         let selected: SelectionInput;
         if (profile === undefined) {
-          selection = await readSelectionAt(selectionEnvironment, loaded.selectionLocator);
+          selection = await (selectionRead ?? readSelectionAt(selectionEnvironment, loaded.selectionLocator));
           identities.selection = {
             path: selection.path,
             choice: selection.choice,
@@ -236,10 +248,11 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           observation.authority,
         );
         const revision = compositionRevision(source, selected, candidate);
-        if (selection !== undefined) {
-          await verifySelection(selection);
-        }
-        const after = await observeNative(observation.context);
+        // Both rechecks only read. A changed selection is still reported before changed native inputs.
+        const [, after] = await allInOrder([
+          selection === undefined ? undefined : verifySelection(selection),
+          observeNative(observation.context),
+        ]);
         if (!isDeepStrictEqual(after, observation)) {
           throw new SettingsError('Native inputs changed. Restart the OpenCode server process, then review again.');
         }
