@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -221,4 +221,17 @@ test('minimum coverage selects the configured test floor without querying npm', 
     ),
     '1.19.0',
   );
+});
+
+test('TUI dev dependencies match the copies every supported OpenCode host loads', async () => {
+  // OpenCode 1.19.x maps a plugin's @opentui/* and solid-js imports to its own
+  // bundled copies (@opentui 0.4.5, solid-js 1.9.x). Building against newer
+  // releases would let code use APIs no supported host provides.
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const lock = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  for (const name of ['@opentui/core', '@opentui/keymap', '@opentui/solid']) {
+    assert.equal(manifest.devDependencies[name], '0.4.5', name);
+    assert.equal(lock.packages[`node_modules/${name}`].version, '0.4.5', name);
+  }
+  assert.equal(manifest.devDependencies['solid-js'], '1.9.12');
 });

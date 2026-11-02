@@ -57,9 +57,9 @@
     "@eslint/js": "10.0.1",
     "@opencode-ai/plugin": "1.19.5",
     "@opencode-ai/sdk": "1.19.5",
-    "@opentui/core": "0.8.1",
-    "@opentui/keymap": "0.8.1",
-    "@opentui/solid": "0.8.1",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
     "@types/js-yaml": "3.12.10",
     "@types/node": "24.19.1",
     "@xterm/headless": "6.0.0",
@@ -72,7 +72,7 @@
     "node-pty": "1.1.0",
     "prettier": "3.9.9",
     "semver": "7.8.5",
-    "solid-js": "1.9.18",
+    "solid-js": "1.9.12",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.0"
   },
@@ -81,6 +81,13 @@
     "registry": "https://registry.npmjs.org"
   },
   "overrides": {
+    "@opentui/solid@0.4.5": {
+      "@babel/core": "7.29.7"
+    },
+    "solid-js@1.9.12": {
+      "seroval": "1.6.12",
+      "seroval-plugins": "1.6.12"
+    },
     "@opencode-ai/plugin@1.19.5": {
       "zod": "4.6.7"
     },
