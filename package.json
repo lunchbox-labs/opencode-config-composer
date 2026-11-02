@@ -88,7 +88,7 @@
       "seroval": "1.6.12",
       "seroval-plugins": "1.6.12"
     },
-    "@opencode-ai/plugin": {
+    "@opencode-ai/plugin@1.19.0": {
       "zod": "4.6.7"
     },
     "effect@4.0.0-beta.83": {
