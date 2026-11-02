@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { validateRelease } from '../scripts/validate-release.mjs';
+import { releaseCiState } from '../scripts/release-ci.mjs';
 
 const release = {
   name: '@lunchbox-labs/opencode-config-composer',
@@ -68,7 +69,12 @@ test('release publication verifies the tagged main commit and publishes only thr
   const download = publish.steps.find((step) => step.uses?.startsWith('actions/download-artifact@'));
   assert.equal(download.with.name, upload.with.name, 'publish consumes the verified artifact');
   assert.equal(upload.with['if-no-files-found'], 'error');
-  assert.equal(publish.needs, 'verify');
+  assert.deepEqual(publish.needs, ['checks', 'verify']);
+  const checks = workflow.jobs.checks;
+  assert.equal(checks.if, verify.if);
+  assert.deepEqual(checks.permissions, { contents: 'read', actions: 'read' });
+  const gate = checks.steps.find((step) => step.run === 'node scripts/release-ci.mjs');
+  assert.deepEqual(gate.env.REQUIRED_WORKFLOWS.split(','), ['Check', 'Integration Tests']);
   assert.equal(publish.environment, 'npm');
   assert.deepEqual(publish.permissions, { contents: 'read', 'id-token': 'write' });
   const operation = publish.steps.find((step) => step.run?.includes('npm publish'));
@@ -99,4 +105,57 @@ test('release publication verifies the tagged main commit and publishes only thr
       }
     }
   }
+});
+
+test('release commit checks wait for every required push run and accept only the latest success', () => {
+  const required = ['Check', 'Integration Tests'];
+  const run = (name, status, conclusion, created_at = '2026-11-01T22:40:00Z', event = 'push') => ({
+    name,
+    status,
+    conclusion,
+    created_at,
+    event,
+  });
+  assert.equal(
+    releaseCiState([run('Check', 'completed', 'success'), run('Integration Tests', 'completed', 'success')], required)
+      .state,
+    'success',
+  );
+  assert.equal(
+    releaseCiState([run('Check', 'completed', 'success'), run('Integration Tests', 'in_progress', null)], required)
+      .state,
+    'pending',
+  );
+  assert.equal(releaseCiState([run('Check', 'completed', 'success')], required).state, 'pending');
+  assert.equal(
+    releaseCiState(
+      [
+        run('Check', 'completed', 'success'),
+        run('Integration Tests', 'completed', 'success', undefined, 'pull_request'),
+      ],
+      required,
+    ).state,
+    'pending',
+  );
+  const failed = releaseCiState(
+    [
+      run('Check', 'completed', 'success'),
+      run('Integration Tests', 'in_progress', null),
+      run('Check', 'completed', 'failure', '2026-11-01T22:45:00Z'),
+    ],
+    required,
+  );
+  assert.equal(failed.state, 'failure');
+  assert.match(failed.detail, /Check \(failure\)/);
+  assert.equal(
+    releaseCiState(
+      [
+        run('Check', 'completed', 'success'),
+        run('Integration Tests', 'completed', 'failure', '2026-11-01T22:40:00Z'),
+        run('Integration Tests', 'completed', 'success', '2026-11-01T23:10:00Z'),
+      ],
+      required,
+    ).state,
+    'success',
+  );
 });
