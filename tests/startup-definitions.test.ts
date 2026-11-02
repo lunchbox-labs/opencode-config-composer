@@ -12,12 +12,7 @@ import descriptor from '../src/config-composer/server.ts';
 import { packageName } from '../src/config-composer/package-name.ts';
 import { readRuntimeContext } from '../src/config-composer/composition/runtime-baseline.ts';
 import { loadConfigurationContext } from '../src/config-composer/storage.ts';
-import {
-  processProfileVariable,
-  selectionLifetime,
-  selectionLocator,
-  selectionStateDirectory,
-} from '../src/config-composer/composition/selection-state.ts';
+import { processProfileVariable } from '../src/config-composer/composition/selection-state.ts';
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'composer-startup-'));
@@ -77,16 +72,15 @@ for (const mutation of ['agent edit', 'agent addition', 'agent deletion', 'JSON 
     await writeFile(json, '{"model":"p/native"}');
     await writeFile(command, 'Native command.');
     const hooks = await descriptor.server(f.input);
-    const locator = await selectionLocator(
-      { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
-      { root: f.root, baseFile: f.source },
-    );
-    const original = fs.promises.lstat;
+    // Each native observation first checks the global native root (XDG_CONFIG_HOME/opencode).
+    // Its second check starts the recheck after the first observation has finished, which
+    // provides a deterministic edit during composition while keeping discovery and reads real.
+    const globalRoot = join(f.root, 'opencode');
+    let globalRootChecks = 0;
+    const original = fs.promises.stat;
     let changed = false;
-    // Selection is read after native observation, providing a deterministic edit
-    // during composition while keeping native discovery and file reads real.
-    const mocked = t.mock.method(fs.promises, 'lstat', async (...args: Parameters<typeof fs.promises.lstat>) => {
-      if (!changed && String(args[0]) === locator.path) {
+    const mocked = t.mock.method(fs.promises, 'stat', async (...args: Parameters<typeof fs.promises.stat>) => {
+      if (!changed && String(args[0]) === globalRoot && ++globalRootChecks === 2) {
         changed = true;
         if (mutation === 'agent edit') {
           await writeFile(agent, '---\nmodel: p/changed\n---\nNative agent.');
@@ -293,4 +287,19 @@ test('loaded definition and locator transport reject malformed attestation', asy
     Object.assign(altered.plugin[0][1].__configComposerRuntime, patch);
     assert.throws(() => readRuntimeContext(altered, { root: f.root, directory: f.root }), /Invalid server attestation/);
   }
+});
+
+test('an unreadable saved selection fails composition after native inputs are observed', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.source, JSON.stringify({ profiles: { a: { model: 'p/a' } }, defaultProfile: 'a' }));
+  const first = await f.load();
+  await mkdir(dirname(first.selectionLocator.path), { recursive: true });
+  await writeFile(first.selectionLocator.path, 'unreadable');
+  const config = { plugin: [packageName], model: 'p/native' };
+  await assert.rejects((await descriptor.server(f.input)).config!(config), /Invalid or unsupported selection state/);
+  assert.equal(config.model, 'p/native');
+  const runtime = readRuntimeContext(config, { root: f.root, directory: f.root });
+  assert.equal(runtime.status, 'error');
+  assert.match(runtime.diagnostic!, /Composer not applied.*Invalid or unsupported selection state/);
+  assert.deepEqual(runtime.observation, first.observation);
 });

@@ -66,12 +66,16 @@ async function verifySavedInputs(context: ConfigurationContext): Promise<void> {
   connection.assertCurrent();
 }
 async function verifyInputs(context: ConfigurationContext): Promise<void> {
-  await verifySavedInputs(context);
   const { connection, runtime } = context;
+  // The native observation only reads local files, so it runs while saved inputs and the shared
+  // filesystem are checked. Their failures are still reported first, as checking in sequence would.
+  const observing = observeNative(runtime.observation.context);
+  observing.catch(() => undefined);
+  await verifySavedInputs(context);
   await connection.proveFilesystem();
   let observed;
   try {
-    observed = await observeNative(runtime.observation.context);
+    observed = await observing;
   } catch {
     throw new SettingsError(metadataChanged);
   }
