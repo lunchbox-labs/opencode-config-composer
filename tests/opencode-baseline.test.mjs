@@ -235,4 +235,5 @@ test('TUI dev dependencies match the copies every supported OpenCode host loads'
     assert.equal(lock.packages[`node_modules/${name}`].version, '0.4.5', name);
   }
   assert.equal(manifest.devDependencies['solid-js'], '1.9.12');
+  assert.equal(lock.packages['node_modules/solid-js'].version, '1.9.12');
 });
