@@ -98,8 +98,7 @@ export function resolveComposition(
       }
     }
   }
-  // Validate all authored command references, including inactive profiles.
-  const validateReference = (patch: unknown) => {
+  const validateAuthoredCommandReference = (patch: unknown) => {
     if (record(patch) && Object.hasOwn(patch, 'agent')) {
       const target = String(patch.agent);
       check('agent', target);
@@ -110,7 +109,7 @@ export function resolveComposition(
   };
   for (const layer of [document, ...Object.values(document.profiles)]) {
     for (const patch of Object.values(layer.command ?? {})) {
-      validateReference(patch);
+      validateAuthoredCommandReference(patch);
     }
   }
   const result: ResolvedCandidate = { profile, agent: {}, command: {}, memberships: {}, decisions: {} };

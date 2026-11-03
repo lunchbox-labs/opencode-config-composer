@@ -151,15 +151,22 @@ test(
       defaultProfile: 'b',
       profiles: { a: {}, b: { agent: { worker: { temperature: 0.9 } } } },
     });
-    // Retargeting cannot redirect either definitions or the external state namespace.
     await rm(alias, { recursive: true });
     await link(alternateDirectory);
     for (const choice of ['b', 'a', null, undefined] as const) {
       await f.editor.applySelection(await f.editor.select(choice));
       const current = await f.editor.context();
-      assert.equal(current.runtime.definitionId, initial.runtime.definitionId);
-      assert.deepEqual(current.source, initial.source);
-      assert.equal(current.selection.path, initial.selection.path);
+      assert.equal(
+        current.runtime.definitionId,
+        initial.runtime.definitionId,
+        'retargeting cannot redirect definitions',
+      );
+      assert.deepEqual(current.source, initial.source, 'retargeting cannot redirect definitions');
+      assert.equal(
+        current.selection.path,
+        initial.selection.path,
+        'retargeting cannot redirect the external state namespace',
+      );
       assert.equal(
         current.runtime.candidate?.agent.worker.model,
         choice === 'b' ? 'fixture/beta' : choice === null ? undefined : 'fixture/alpha',

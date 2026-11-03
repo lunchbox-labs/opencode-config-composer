@@ -513,8 +513,10 @@ test('native discovery merges and reports the first failure in traversal order a
   assert.deepEqual([...(await readNativeAgentFrontmatter(f.context)).keys()], await names());
   const broken = [...order.filter((_path, index) => index % 7 === 3), inner, link];
   const remaining = order.filter((path) => broken.includes(path));
-  // A failure inside the directory must be reported after earlier sibling failures and before later ones.
-  assert.ok(remaining.indexOf(inner) > 0 && remaining.indexOf(inner) < remaining.length - 1, 'directory position');
+  assert.ok(
+    remaining.indexOf(inner) > 0 && remaining.indexOf(inner) < remaining.length - 1,
+    'a failure inside the directory must be reported between earlier and later sibling failures',
+  );
   for (const [rank, path] of remaining.entries()) {
     if (path !== link) {
       // Read failures alternate with failures found while merging an entry that read cleanly.
@@ -586,7 +588,6 @@ test(
       join(root, 'config-composer.jsonc'),
       JSON.stringify({ groups: { workers: { agent: { model: 'p/composed', temperature: 0.1 } } } }),
     );
-    // Every agent receives its group's model, while its authored temperature stays pinned.
     const script = `import assert from 'node:assert/strict';
 import server from ${JSON.stringify(new URL('../src/config-composer/server.ts', import.meta.url).href)};
 import { packageName } from ${JSON.stringify(new URL('../src/config-composer/package-name.ts', import.meta.url).href)};
@@ -598,7 +599,11 @@ for (let index = 0; index < 800; index++) {
 const config = { plugin: [packageName], agent };
 await (await server.server({ directory: root, worktree: root })).config(config);
 for (let index = 0; index < 800; index++) {
-  assert.deepEqual(config.agent['agent-' + index], { temperature: 0.5, prompt: 'Native agent ' + index + '.', model: 'p/composed' });
+  assert.deepEqual(
+    config.agent['agent-' + index],
+    { temperature: 0.5, prompt: 'Native agent ' + index + '.', model: 'p/composed' },
+    'every agent receives the group model while its authored temperature stays pinned',
+  );
 }`;
     await promisify(execFile)(
       'prlimit',

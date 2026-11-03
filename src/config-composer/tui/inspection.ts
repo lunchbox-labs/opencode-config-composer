@@ -88,14 +88,13 @@ export function appliedProfile(config: unknown, directory: string, root: string)
   // A process profile is not the saved worktree choice that /profiles would change.
   return label !== undefined && typeof marker.processProfile === 'string' ? `${label} (env)` : label;
 }
-/** The diagnostic the server published when its config hook failed for this location. */
-export function runtimeDiagnostic(config: unknown, directory: string, root: string): string | undefined {
+export function configHookFailureDiagnostic(config: unknown, directory: string, root: string): string | undefined {
   const marker = loadedMarker(config, directory, root);
   return marker?.status === 'error' && typeof marker.diagnostic === 'string' ? marker.diagnostic : undefined;
 }
 /** The prompt slot label; a failed composition stays visible after its toast is dismissed. */
 export function profileSlot(config: unknown, directory: string, root: string): { text: string; error: boolean } {
-  if (runtimeDiagnostic(config, directory, root) !== undefined) {
+  if (configHookFailureDiagnostic(config, directory, root) !== undefined) {
     return { text: 'Profile: error', error: true };
   }
   const profile = appliedProfile(config, directory, root);

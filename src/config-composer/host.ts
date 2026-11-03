@@ -4,15 +4,14 @@ import type { AgentConfig, PermissionActionConfig, PermissionConfig } from '@ope
 // these tables through 1.19.5) check them at compile time, so an SDK update that changes them
 // fails typechecking.
 
-/** Keys a type declares, excluding its index signature. */
-type Declared<T> = keyof { [K in keyof T as string extends K ? never : K]: unknown };
+type DeclaredKeysWithoutIndexSignature<T> = keyof { [K in keyof T as string extends K ? never : K]: unknown };
 type PermissionRules = Exclude<PermissionConfig, PermissionActionConfig>;
-type PermissionName = Declared<PermissionRules>;
+type PermissionName = DeclaredKeysWithoutIndexSignature<PermissionRules>;
 type ActionOnlyPermission = {
   [K in PermissionName]-?: [Exclude<PermissionRules[K], undefined>] extends [PermissionActionConfig] ? K : never;
 }[PermissionName];
 /** Agent keys the host declares. Native moves any other agent key into options. */
-export type AgentConfigKey = Declared<AgentConfig>;
+export type AgentConfigKey = DeclaredKeysWithoutIndexSignature<AgentConfig>;
 
 /** Permission keys the host declares, in declaration order. Native lists them before other keys. */
 export const permissionNames: readonly string[] = Object.keys({

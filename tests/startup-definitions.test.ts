@@ -186,7 +186,6 @@ test('concurrent first registrations and duplicate module loads share one captur
   assert.equal(reads, 1);
   assert.equal(a.definitionId, b.definitionId);
   assert.notEqual(a.id, b.id);
-  // A consumer mutating its clone cannot mutate the process capture.
   a.source.document.model = 'p/tampered';
   await writeFile(f.source, '{"model":"p/second"}');
   const duplicate = (await import(
@@ -198,7 +197,11 @@ test('concurrent first registrations and duplicate module loads share one captur
   ).config!(config);
   const reused = readRuntimeContext(config, { root: f.root, directory: f.root });
   assert.equal(reused.definitionId, b.definitionId);
-  assert.equal(reused.source.document.model, 'p/first');
+  assert.equal(
+    reused.source.document.model,
+    'p/first',
+    'a consumer mutating its clone cannot mutate the process capture',
+  );
   assert.equal(reads, 1);
   const other = join(f.root, 'other');
   await mkdir(other);
@@ -224,7 +227,6 @@ test('a captured process profile replaces saved and default choices and keeps sa
   assert.equal(first.candidate?.profile, 'a');
   assert.equal(first.applied.model, 'p/a');
   assert.equal(first.selection, undefined);
-  // Saved state that would stop normal composition is neither read nor replaced.
   await mkdir(dirname(first.selectionLocator.path), { recursive: true });
   await writeFile(first.selectionLocator.path, 'unreadable');
   process.env[processProfileVariable] = 'b';
@@ -242,7 +244,10 @@ test('a captured process profile replaces saved and default choices and keeps sa
   syncBuiltinESMExports();
   t.after(() => syncBuiltinESMExports());
   await hooks.config!(config);
-  assert.ok(!touched.includes(first.selectionLocator.path));
+  assert.ok(
+    !touched.includes(first.selectionLocator.path),
+    'saved state that would stop normal composition is not read',
+  );
   const again = readRuntimeContext(config, { root: f.root, directory: f.root });
   assert.equal(again.definitionId, first.definitionId);
   assert.equal(again.candidate?.profile, 'a');
@@ -255,7 +260,11 @@ test('a captured process profile replaces saved and default choices and keeps sa
     }),
     /OPENCODE_CONFIG_COMPOSER_PROFILE selects profile a.*read-only/,
   );
-  assert.equal(await readFile(first.selectionLocator.path, 'utf8'), 'unreadable');
+  assert.equal(
+    await readFile(first.selectionLocator.path, 'utf8'),
+    'unreadable',
+    'saved state that would stop normal composition is not replaced',
+  );
 });
 
 test('an empty process profile is unset', async (t) => {
@@ -277,8 +286,11 @@ test('an unknown process profile is a sticky startup error naming the variable a
   process.env[processProfileVariable] = 'a';
   const config = { plugin: [packageName], model: 'p/native' };
   await assert.rejects((await descriptor.server(f.input)).config!(config), diagnostic);
-  // Composer is not applied; neither the default profile nor shared settings replace the request.
-  assert.equal(config.model, 'p/native');
+  assert.equal(
+    config.model,
+    'p/native',
+    'Composer is not applied; neither the default profile nor shared settings replace the request',
+  );
   assert.throws(() => readRuntimeContext(config, { root: f.root, directory: f.root }), diagnostic);
 });
 

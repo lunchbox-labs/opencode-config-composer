@@ -70,7 +70,10 @@ test(
       [variable]: 'missing',
     });
     assert.match(result.stderr, /OPENCODE_CONFIG_COMPOSER_PROFILE names unknown profile \\?"missing\\?"/);
-    // Neither the default profile nor a saved choice replaces the requested profile.
-    assert.equal(workerRequest(f, 'Run with a missing profile.').model, 'alpha');
+    assert.equal(
+      workerRequest(f, 'Run with a missing profile.').model,
+      'alpha',
+      'neither the default profile nor a saved choice replaces the requested profile',
+    );
   },
 );

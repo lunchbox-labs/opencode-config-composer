@@ -64,9 +64,12 @@ test(
     await terminal.choose('○ review', 'Apply profile selection?');
     await applyFromTerminal(f, terminal, 'Profile review applied.');
     assert.equal((await f.editor.context()).selection.choice, 'review');
-    // The applied notice is a toast and the requesting review menu closes, leaving the input usable.
     await terminal.wait(['ctrl+p', 'Profile: review']);
-    assert.doesNotMatch(terminal.text(), /Apply profile selection\?|Follow configured default/);
+    assert.doesNotMatch(
+      terminal.text(),
+      /Apply profile selection\?|Follow configured default/,
+      'the applied notice is a toast and the requesting review menu closes, leaving the input usable',
+    );
     await terminal.command('/view-configs', 'Configuration');
     await terminal.choose('agent worker', 'agent worker', 'model');
     await terminal.chooseFixed(

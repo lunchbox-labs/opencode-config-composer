@@ -112,14 +112,17 @@ test(
     assert.equal(loaded.status, 'applied');
     assert.equal(loaded.candidate?.profile, 'a');
 
-    // Composer definitions stay captured while live selection changes.
     const edited = structuredClone(document);
     edited.profiles.a.permission.skill['included-skill'] = 'deny';
     await f.write(f.paths.shared, edited);
     for (const choice of ['a', 'b', 'a', null] as const) {
       await f.editor.applySelection(await f.editor.select(choice));
       const runtime = await f.editor.runtime();
-      assert.equal(runtime.definitionId, loaded.definitionId);
+      assert.equal(
+        runtime.definitionId,
+        loaded.definitionId,
+        'Composer definitions stay captured while live selection changes',
+      );
       const agents = await f.host.api<PermissionAgent[]>('/agent');
       // Every agent the host reports, including built-ins Composer did not see in native config.
       for (const { name } of agents) {

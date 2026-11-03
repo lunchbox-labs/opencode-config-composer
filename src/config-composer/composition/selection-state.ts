@@ -280,7 +280,6 @@ async function writeSelectionLocked(
   }
 }
 
-/** Persist a selection under its scoped lock. */
 export async function saveSelection(
   snapshot: SelectionSnapshot,
   choice: Selection,
