@@ -82,7 +82,6 @@ test('server clears model parameters after failed apply and recovers without pol
     options: { native: true, reasoningEffort: 'low', nested: { flag: false } },
   });
 
-  // Definition edits stay deferred until process restart, even while saved choices change.
   await writeFile(source, '{ invalid after startup');
   await saveSelection(
     await readSelectionAt(applied.selectionEnvironment, applied.selectionLocator),
@@ -101,7 +100,11 @@ test('server clears model parameters after failed apply and recovers without pol
   await hooks.config!(config);
   const recovered = readRuntimeContext(config, location);
   assert.equal(recovered.status, 'applied');
-  assert.equal(recovered.definitionId, applied.definitionId);
+  assert.equal(
+    recovered.definitionId,
+    applied.definitionId,
+    'definition edits stay deferred until process restart, even while saved choices change',
+  );
   assert.deepEqual(recovered.candidate?.modelParameters?.worker?.parameters, { maxOutputTokens: 64 });
   assert.deepEqual(config.agent.worker, { model: 'p/alias', variant: '', prompt: 'NATIVE_BODY' });
   assert.deepEqual(await dispatch(), { ...defaults(), maxOutputTokens: 64 });

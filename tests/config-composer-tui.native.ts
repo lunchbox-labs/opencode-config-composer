@@ -200,12 +200,11 @@ test('native TUI shows delayed config failures until recovery and again after it
     const loaded = await f.host.api('/config');
     assert.match(configHookFailureDiagnostic(loaded, f.host.project, f.host.project) ?? '', /Composer not applied/);
     await terminal.wait(['Config Composer', 'Composer not applied.', 'Profile: error']);
-    // The host expires the toast; the prompt slot still reports the failed composition.
     for (let attempt = 0; terminal.text().includes('Composer not applied.') && attempt < 400; attempt++) {
       await setTimeout(50);
     }
-    assert.doesNotMatch(terminal.text(), /Composer not applied\./);
-    assert.match(terminal.text(), /Profile: error/);
+    assert.doesNotMatch(terminal.text(), /Composer not applied\./, 'the host expires the toast');
+    assert.match(terminal.text(), /Profile: error/, 'the prompt slot still reports the failed composition');
     assert.doesNotMatch(terminal.text(), /Profile: Shared only/);
     await f.write(projectNative, {});
     await f.host.api('/instance/dispose', {});

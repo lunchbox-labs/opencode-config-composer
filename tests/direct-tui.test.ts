@@ -362,8 +362,7 @@ test('a failing applied notice does not report an attested apply as failed', asy
   assert.equal(f.rendered.includes('Config Composer'), false);
   assert.equal(f.disposed, 1);
   assert.equal(f.config.agent.worker.model, 'p/a');
-  // The command is no longer busy: profiles open again.
-  await f.reopen();
+  await assert.doesNotReject(f.reopen(), 'the command is no longer busy: profiles open again');
 });
 
 test('a long profile preview scrolls whole before its separate Apply confirmation', async (t) => {

@@ -23,10 +23,13 @@ test('prompt slot shows the applied profile or a failed composition and remains 
   assert.deepEqual(read(), { text: 'Profile: Primary', error: false });
   marker.candidate.profile = null;
   assert.deepEqual(read(), { text: 'Profile: Shared only', error: false });
-  // The slot outlasts the toast and shows neither the earlier profile nor the diagnostic text.
   marker.status = 'error';
   marker.diagnostic = 'Composer not applied. apiKey=PRIVATE_SENTINEL';
-  assert.deepEqual(read(), { text: 'Profile: error', error: true });
+  assert.deepEqual(
+    read(),
+    { text: 'Profile: error', error: true },
+    'the slot outlasts the toast and shows neither the earlier profile nor the diagnostic text',
+  );
   assert.deepEqual(profileSlot(config, '/other', '/other'), { text: '', error: false });
   marker.status = 'applied';
   assert.deepEqual(read(), { text: 'Profile: Shared only', error: false });

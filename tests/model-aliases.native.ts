@@ -60,7 +60,6 @@ test(
     const nativeBytes = await readFile(f.paths.native);
     await f.host.start();
     await f.editor.runtime();
-    // Definitions remain the startup capture even when the external file changes.
     await f.write(f.paths.shared, { invalidAfterStartup: true });
     for (const [choice, model, variant, effort] of [
       ['a', 'beta', 'high', 'high'],
@@ -70,7 +69,11 @@ test(
     ] as const) {
       await f.editor.applySelection(await f.editor.select(choice));
       const config = await f.host.api<{ agent: Record<string, Record<string, unknown>>; models?: unknown }>('/config');
-      assert.equal(config.agent.worker.model, `fixture/${model}`);
+      assert.equal(
+        config.agent.worker.model,
+        `fixture/${model}`,
+        'definitions remain the startup capture even when the external file changes',
+      );
       assert.equal(config.agent.worker.variant, variant);
       assert.equal(config.agent.worker.temperature, 0);
       assert.equal(config.agent.helper.model, 'fixture/alpha');

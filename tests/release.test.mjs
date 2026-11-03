@@ -145,14 +145,16 @@ test('release commit checks accept only the latest push run of every required wo
   assert.equal(state([runOf(first, { status: 'in_progress', conclusion: null })]).state, 'pending');
   assert.equal(releaseCiState([], REQUIRED).state, 'pending');
   assert.equal(state([runOf(first, { event: 'pull_request' })]).state, 'pending');
-  // A re-run keeps its run object and created_at and only raises run_attempt.
-  assert.equal(state([runOf(first, { run_attempt: 2, status: 'in_progress', conclusion: null })]).state, 'pending');
-  // A separate later run has a higher id, whatever its created_at says.
+  assert.equal(
+    state([runOf(first, { run_attempt: 2, status: 'in_progress', conclusion: null })]).state,
+    'pending',
+    'a re-run keeps its run object and created_at and only raises run_attempt',
+  );
   const failed = state([
     runOf(first, { id: 900, conclusion: 'success', created_at: '2026-11-01T23:59:00Z' }),
     runOf(first, { id: 901, conclusion: 'failure', created_at: '2026-11-01T22:00:00Z' }),
   ]);
-  assert.equal(failed.state, 'failure');
+  assert.equal(failed.state, 'failure', 'a separate later run has a higher id, whatever its created_at says');
   assert.match(failed.detail, new RegExp(`${first} \\(failure\\)`));
   assert.deepEqual(failed.cancelled, []);
   assert.equal(
@@ -161,17 +163,22 @@ test('release commit checks accept only the latest push run of every required wo
       runOf(first, { id: 900, conclusion: 'failure', created_at: '2026-11-01T23:59:00Z' }),
     ]).state,
     'success',
+    'a separate later run has a higher id, whatever its created_at says',
   );
   const cancelled = state([runOf(first, { conclusion: 'cancelled' })]);
   assert.equal(cancelled.state, 'failure');
   assert.deepEqual(cancelled.cancelled, [first]);
   assert.equal(state([runOf(first, { conclusion: 'skipped' })]).state, 'failure');
-  // Workflows the gate does not require never decide it.
   assert.equal(
     releaseCiState([...passing, runOf('Unrelated', { id: 999, conclusion: 'failure' })], REQUIRED).state,
     'success',
+    'workflows the gate does not require never decide it',
   );
-  assert.equal(state([runOf('Unrelated', { id: 999 })]).state, 'pending');
+  assert.equal(
+    state([runOf('Unrelated', { id: 999 })]).state,
+    'pending',
+    'workflows the gate does not require never decide it',
+  );
 });
 
 function fakeGitHub(replies) {
@@ -266,8 +273,7 @@ test('the release commit gate times out at the deadline', async () => {
     { waitMinutes: 1 },
   );
   assert.equal(outcome, 'timeout');
-  // Polls at 0, 30 and 60 seconds; the last one is at the deadline.
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 3, 'polls at 0, 30 and 60 seconds; the last one is at the deadline');
   assert.equal(logs.at(-1), 'Timed out waiting for the release commit checks.');
 });
 
