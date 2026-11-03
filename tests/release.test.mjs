@@ -148,13 +148,13 @@ test('release commit checks accept only the latest push run of every required wo
   assert.equal(
     state([runOf(first, { run_attempt: 2, status: 'in_progress', conclusion: null })]).state,
     'pending',
-    'a re-run keeps its run object and created_at and only raises run_attempt',
+    'an in-progress re-run of the latest run keeps the gate pending',
   );
   const failed = state([
     runOf(first, { id: 900, conclusion: 'success', created_at: '2026-11-01T23:59:00Z' }),
     runOf(first, { id: 901, conclusion: 'failure', created_at: '2026-11-01T22:00:00Z' }),
   ]);
-  assert.equal(failed.state, 'failure', 'a separate later run has a higher id, whatever its created_at says');
+  assert.equal(failed.state, 'failure', 'the run with the highest id decides, whatever its created_at says');
   assert.match(failed.detail, new RegExp(`${first} \\(failure\\)`));
   assert.deepEqual(failed.cancelled, []);
   assert.equal(
@@ -163,7 +163,7 @@ test('release commit checks accept only the latest push run of every required wo
       runOf(first, { id: 900, conclusion: 'failure', created_at: '2026-11-01T23:59:00Z' }),
     ]).state,
     'success',
-    'a separate later run has a higher id, whatever its created_at says',
+    'the run with the highest id decides, whatever its created_at says',
   );
   const cancelled = state([runOf(first, { conclusion: 'cancelled' })]);
   assert.equal(cancelled.state, 'failure');
