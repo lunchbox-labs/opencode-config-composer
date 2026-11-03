@@ -11,6 +11,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  checks:
+    name: Release commit checks
+    if: >-
+      github.repository == 'lunchbox-labs/opencode-config-composer' &&
+      github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    # Windows runs only after merge, so a release can be published while the
+    # commit's Check and Integration Tests runs are still going.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Require passing Check and Integration Tests runs for the release commit
+        run: node scripts/release-ci.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REQUIRED_WORKFLOWS: Check,Integration Tests
+
   verify:
     name: Verify
     if: >-
@@ -33,6 +60,10 @@ jobs:
           persist-credentials: false
       - name: Require a commit already on main
         run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - name: Keep provenance aligned with the triggering commit
+        env:
+          WORKFLOW_COMMIT: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$WORKFLOW_COMMIT"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
@@ -68,7 +99,7 @@ jobs:
 
   publish:
     name: Publish npm
-    needs: verify
+    needs: [checks, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: npm
