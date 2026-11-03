@@ -6,7 +6,7 @@ import { setTimeout } from 'node:timers/promises';
 import { compositionFixture } from './integration/composition-fixture.ts';
 import { nativeTerminal } from './integration/terminal.ts';
 import { applyFromTerminal } from './integration/terminal-editor.ts';
-import { runtimeDiagnostic } from '../src/config-composer/tui/inspection.ts';
+import { configHookFailureDiagnostic } from '../src/config-composer/tui/inspection.ts';
 
 test(
   'native inspector explains the selected alias binding and native default variant',
@@ -142,7 +142,7 @@ test(
     await terminal.command('/view-configs', 'Configuration');
     await terminal.choose(title, title, 'Current loaded configuration', 'enter/esc back');
     assert.equal(terminal.shows('"reasoningEffort": "high"'), false, 'the definitions extend beyond the dialog');
-    const read = await terminal.scrollTo('"reasoningEffort": "high"');
+    const read = await terminal.pageDownUntilVisible('"reasoningEffort": "high"');
     assert.ok(terminal.shows(title) && terminal.shows('enter/esc back'), 'scrolling keeps the title and hint');
     assert.equal(terminal.shows('Current loaded configuration'), false);
     assert.match(read, /apiKey=\[redacted\]/);
@@ -155,7 +155,7 @@ test(
     // The command helper waits for the restored conversation input.
     await terminal.command('/profiles', 'Follow configured default');
     await terminal.choose('○ review', 'Apply profile selection?', 'enter apply…');
-    const preview = await terminal.scrollTo('Existing session model/variant choices remain native.');
+    const preview = await terminal.pageDownUntilVisible('Existing session model/variant choices remain native.');
     for (const name of members) {
       assert.match(preview, new RegExp(`/agent/${name}/model`));
     }
@@ -198,7 +198,7 @@ test('native TUI shows delayed config failures until recovery and again after it
     await f.write(projectNative, { agent: { worker: { groups: ['missing-group'] } } });
     await f.host.api('/instance/dispose', {});
     const loaded = await f.host.api('/config');
-    assert.match(runtimeDiagnostic(loaded, f.host.project, f.host.project) ?? '', /Composer not applied/);
+    assert.match(configHookFailureDiagnostic(loaded, f.host.project, f.host.project) ?? '', /Composer not applied/);
     await terminal.wait(['Config Composer', 'Composer not applied.', 'Profile: error']);
     // The host expires the toast; the prompt slot still reports the failed composition.
     for (let attempt = 0; terminal.text().includes('Composer not applied.') && attempt < 400; attempt++) {

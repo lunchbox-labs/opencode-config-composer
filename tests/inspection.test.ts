@@ -3,9 +3,9 @@ import { test } from 'node:test';
 import {
   type Inspection,
   appliedProfile,
+  configHookFailureDiagnostic,
   inspectionAgents,
   profileSlot,
-  runtimeDiagnostic,
 } from '../src/config-composer/tui/inspection.ts';
 import { sameConfigurationValue } from '../src/config-composer/composition/runtime-baseline.ts';
 
@@ -39,17 +39,17 @@ test('the published diagnostic is read only from an error marker for the same lo
     location: { directory: '/project', root: '/project' },
   };
   const config = new Proxy({ plugin: ['other', ['composer', { __configComposerRuntime: marker }]] }, {});
-  const read = () => runtimeDiagnostic(config, '/project', '/project');
+  const read = () => configHookFailureDiagnostic(config, '/project', '/project');
   assert.equal(read(), undefined);
   marker.status = 'error';
   assert.equal(read(), undefined);
   marker.diagnostic = 'Composer not applied. Fix the file.';
   assert.equal(read(), 'Composer not applied. Fix the file.');
-  assert.equal(runtimeDiagnostic(config, '/other', '/other'), undefined);
+  assert.equal(configHookFailureDiagnostic(config, '/other', '/other'), undefined);
   assert.equal(appliedProfile(config, '/project', '/project'), undefined);
   marker.status = 'applied';
   assert.equal(read(), undefined);
-  assert.equal(runtimeDiagnostic({}, '/project', '/project'), undefined);
+  assert.equal(configHookFailureDiagnostic({}, '/project', '/project'), undefined);
 });
 test('native classification wins over names, hidden is independent and absent built-ins use names', () => {
   const snapshot = {

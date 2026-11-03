@@ -1,7 +1,7 @@
 import type { TuiPluginApi } from '@opencode-ai/plugin/tui';
 import { createComputed, createRoot, onCleanup, untrack } from 'solid-js';
 import { diagnosticText } from './configuration-error.ts';
-import { runtimeDiagnostic, stateLocation } from './inspection.ts';
+import { configHookFailureDiagnostic, stateLocation } from './inspection.ts';
 
 /** Observe the host's shared Solid store, including config refreshes that finish later. */
 export function registerErrorNotice(api: TuiPluginApi): () => void {
@@ -14,7 +14,7 @@ export function registerErrorNotice(api: TuiPluginApi): () => void {
     let shown: string | undefined;
     createComputed(() => {
       const { directory, root } = stateLocation(api);
-      const diagnostic = runtimeDiagnostic(api.state.config, directory, root);
+      const diagnostic = configHookFailureDiagnostic(api.state.config, directory, root);
       const current = diagnostic === undefined ? undefined : JSON.stringify([directory, root, diagnostic]);
       if (current === shown) {
         return;

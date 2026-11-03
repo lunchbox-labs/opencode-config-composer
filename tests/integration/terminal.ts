@@ -170,11 +170,11 @@ export async function nativeTerminal(
       await setTimeout(250);
     }
   };
-  /** Page down the focused details view until `end` shows; returns every screen read on the way. */
-  const scrollTo = async (end: string) => {
+  /** Returns every screen read while paging down. */
+  const pageDownUntilVisible = async (expectedText: string) => {
     let read = text();
-    for (let page = 0; !shows(end); page++) {
-      assert.ok(page < 100, `Scrolling did not reveal ${JSON.stringify(end)}:\n${text()}`);
+    for (let page = 0; !shows(expectedText); page++) {
+      assert.ok(page < 100, `Scrolling did not reveal ${JSON.stringify(expectedText)}:\n${text()}`);
       const before = revision;
       child.write('\x1b[6~');
       await waitInput(() => revision > before, 'the next scrolled frame');
@@ -189,5 +189,5 @@ export async function nativeTerminal(
     await waitInput(() => search.echoed(name), `the command query ${JSON.stringify(name)}`);
     await press('\r', ...labels);
   };
-  return { text, shows, wait, idle, press, choose, chooseFixed, scrollTo, command, stop };
+  return { text, shows, wait, idle, press, choose, chooseFixed, pageDownUntilVisible, command, stop };
 }

@@ -281,6 +281,7 @@ async function fixture(
     applied,
     preview: detailText,
     detailText,
+    unwrappedDetailText: async () => (await detailText()).replaceAll('\n', ''),
     wait,
     reopen: async () => {
       api.ui.dialog.clear();
@@ -327,10 +328,9 @@ test('profile preview confirms selection and writes no definition bytes', async 
   assert.equal(await f.read(), before);
   await f.open('view-configs', 'Configuration');
   await f.choose('Runtime status and sources', 'Runtime status and sources');
-  const status = await f.detailText();
+  const status = await f.unwrappedDetailText();
   assert.match(status, /Applied profile: a/);
-  // Detail pages hard-wrap long lines.
-  assert.ok(status.replaceAll('\n', '').includes(sessionNotice), 'retained-session guidance remains in the inspector');
+  assert.ok(status.includes(sessionNotice), 'retained-session guidance remains in the inspector');
 });
 test('following the configured default reports the default profile as applied', async (t) => {
   const f = await fixture(t, '', undefined, undefined, {
@@ -413,8 +413,7 @@ test('a preview beyond the scroll bound opens bounded pages and applies only aft
   assert.ok(f.current!.message!.split('\n').length <= detailRows);
   await f.escape(title);
   assert.equal(f.current!.current, pages[1].value, 'Escape returns to the page menu at the same page');
-  // Pages are wrapped rows; joined without breaks they hold the whole preview.
-  const text = (await f.detailText()).replaceAll('\n', '');
+  const text = await f.unwrappedDetailText();
   assert.ok(text.includes(`"note":"${note}"`));
   assert.ok(text.endsWith('Existing session model/variant choices remain native.'));
   await f.choose('Apply', 'Apply reviewed changes?');
@@ -483,20 +482,19 @@ test('inspection attributes group and profile steps to their Composer pointers',
   await f.choose('agent worker', 'agent worker');
   assert.equal(f.current.options.find((option) => option.title === 'steps')?.description, '6');
   await f.choose('steps', 'agent worker · steps');
-  // Long source pointers wrap in the dialog.
-  const shared = (await f.detailText()).replaceAll('\n', '');
+  const shared = await f.unwrappedDetailText();
   assert.match(shared, /Loaded configuration contribution: 6/);
   assert.match(shared, /config-composer\.jsonc · \/groups\/workers\/agent\/steps/);
   assert.match(shared, /Effective native steps: 6/);
   await f.reopen();
   await f.choose('○ capped', 'Apply profile selection?');
-  assert.match((await f.preview()).replaceAll('\n', ''), /\/profiles\/capped\/groups\/workers\/agent\/steps/);
+  assert.match(await f.unwrappedDetailText(), /\/profiles\/capped\/groups\/workers\/agent\/steps/);
   await f.applied();
   f.setNativeAgents([{ name: 'worker', native: false, steps: 1 }]);
   await f.open('view-configs', 'Configuration');
   await f.choose('agent worker', 'agent worker');
   await f.choose('steps', 'agent worker · steps');
-  const capped = (await f.detailText()).replaceAll('\n', '');
+  const capped = await f.unwrappedDetailText();
   assert.match(capped, /Loaded configuration contribution: 1/);
   assert.match(capped, /\/profiles\/capped\/groups\/workers\/agent\/steps/);
   assert.match(capped, /Effective native steps: 1/);

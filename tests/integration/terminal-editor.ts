@@ -36,6 +36,6 @@ export async function applyFromTerminal(
 
 export async function readPreview(terminal: Awaited<ReturnType<typeof nativeTerminal>>): Promise<string> {
   return terminal.shows(reviewAction)
-    ? terminal.scrollTo('Existing session model/variant choices remain native.')
+    ? terminal.pageDownUntilVisible('Existing session model/variant choices remain native.')
     : terminal.text();
 }

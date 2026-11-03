@@ -73,20 +73,22 @@ async function definition(directory: string, worktree: string, rawOptions: unkno
         id: randomUUID(),
         selectionEnvironment: { stateDirectory: selectionStateDirectory(), lifetime: selectionLifetime() },
       };
-      // Read once with this location's source capture.
-      const profile = processProfile();
+      const processProfileCapturedWithSource = processProfile();
       try {
         const options = pluginOptions(rawOptions);
         const configDirectory = configurationDirectory();
         const source = await loadSource(options, configDirectory);
-        if (profile !== undefined && !Object.hasOwn(source.document.profiles, profile)) {
+        if (
+          processProfileCapturedWithSource !== undefined &&
+          !Object.hasOwn(source.document.profiles, processProfileCapturedWithSource)
+        ) {
           const names = Object.keys(source.document.profiles);
           throw new SettingsError(
-            `${processProfileVariable} names unknown profile ${JSON.stringify(profile)}. ${names.length === 0 ? `${source.path} defines no profiles.` : `Profiles in ${source.path}: ${names.map((name) => JSON.stringify(name)).join(', ')}.`}`,
+            `${processProfileVariable} names unknown profile ${JSON.stringify(processProfileCapturedWithSource)}. ${names.length === 0 ? `${source.path} defines no profiles.` : `Profiles in ${source.path}: ${names.map((name) => JSON.stringify(name)).join(', ')}.`}`,
           );
         }
         value.source = source;
-        value.processProfile = profile;
+        value.processProfile = processProfileCapturedWithSource;
         value.selectionLocator = await selectionLocator(value.selectionEnvironment, {
           root: worktree,
           baseFile: value.source.canonicalPath,
