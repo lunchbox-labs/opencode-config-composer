@@ -1,5 +1,8 @@
 # Config Composer
 
+> [!WARNING]
+> Config Composer is deprecated. Use [OpenCode Model Profiles](https://github.com/lunchbox-labs/opencode-model-profiles) for new setups.
+
 Share native OpenCode settings through agent-owned groups and one selected profile per worktree. Choose profiles with `/profiles` and inspect loaded definitions and applied values with read-only `/view-configs`. The prompt shows the applied profile, or `Profile: error` while the loaded composition has failed. Pieces that can't apply in a project, such as an unknown group, a patch for an agent or command it doesn't load, or an invalid agent file field, are skipped with a warning toast instead; the inspector hides built-in agents until toggled. Tested against OpenCode V1 1.19.x.
 
 Add the package to `plugin` in both `opencode.jsonc` and `tui.jsonc`:
