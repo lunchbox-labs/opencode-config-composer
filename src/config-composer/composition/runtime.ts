@@ -133,7 +133,6 @@ export function resolveComposition(
       const selected = Object.hasOwn(selectedModels ?? {}, modelRef);
       const bindings = selected ? selectedModels : document.models;
       const binding = Object.hasOwn(bindings ?? {}, modelRef) ? bindings?.[modelRef] : undefined;
-      const referencePointer = `${origin.pointer ?? ''}/modelRef`;
       bindingVariant = !Object.hasOwn(patch, 'variant');
       patch =
         binding === undefined
@@ -142,7 +141,7 @@ export function resolveComposition(
       if (binding !== undefined) {
         bindingOrigin = {
           ...origin,
-          pointer: referencePointer,
+          pointer: `${origin.pointer ?? ''}/modelRef`,
           modelBinding: {
             name: modelRef,
             pointer: `${selected && profile !== null ? `/profiles/${pointer(profile)}` : ''}/models/${pointer(modelRef)}`,
