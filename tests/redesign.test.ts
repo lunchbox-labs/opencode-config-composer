@@ -230,7 +230,7 @@ test('patches for agents and commands not loaded here are skipped, warning only 
   assert.equal(Object.hasOwn(result.command.run, 'agent'), false);
   assert.deepEqual(warnings, [
     "`/agent/missing` patches agent `missing`, which isn't loaded here; skipped it.",
-    'command `run` targets unavailable agent `missing`; kept its native agent.',
+    'command `run` targets unavailable agent `missing`; ignored that `agent`.',
     "`/command/absent` patches command `absent`, which isn't loaded here; skipped it.",
     "`/profiles/selected/agent/gone` patches agent `gone`, which isn't loaded here; skipped it.",
   ]);
@@ -249,6 +249,12 @@ test('frontmatter for an agent OpenCode has not loaded is ignored with a warning
   assert.deepEqual(warnings, [
     "agent `late` in `/agents/late.md` isn't loaded by OpenCode yet; restart OpenCode to apply it.",
   ]);
+});
+test('an unloaded agent file whose settings were all ignored needs no restart warning', () => {
+  const source = { path: '/agents/broken.md', canonicalPath: '/agents/broken.md', fingerprint: '0'.repeat(64) };
+  const warnings: string[] = [];
+  resolveComposition(read({}), null, native, { broken: { fields: {}, sources: [source] } }, warnings);
+  assert.deepEqual(warnings, []);
 });
 test('unavailable default, primary and command target agents are left to the host', () => {
   const allSubagents = { agent: { build: { mode: 'subagent' }, plan: { mode: 'subagent' } } };

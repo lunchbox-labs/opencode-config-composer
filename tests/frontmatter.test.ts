@@ -289,7 +289,7 @@ test('native recursive agent paths include dotfiles and symlinks; flat modes for
   await f.markdown(f.global, 'modes/flat.md', 'mode: subagent\nmodel: fixture/flat');
   await f.markdown(f.global, 'mode/default.md', 'model: fixture/default');
   await f.markdown(f.global, 'modes/nested/ignored.md', 'model: fixture/ignored');
-  // The directory and file aliases above deliberately share the same native name; the later one is used.
+  // The directory and file aliases above deliberately share the same native name, so neither is used.
   const warnings: string[] = [];
   await readNativeAgentFrontmatter(f.context, warnings);
   assert.equal(warnings.length, 1);
@@ -319,15 +319,17 @@ test('native dotfiles named exactly .md keep their full root and nested identiti
   assert.equal(agents.has('nested/'), false);
 });
 
-test('same-batch duplicate native identities use the later file across singular and plural aliases', async (t) => {
+test('same-batch duplicate native identities contribute no settings across singular and plural aliases', async (t) => {
   const f = await fixture(t);
   await f.markdown(f.near, 'agents/collision.md', 'temperature: 0.5');
   const first = await f.markdown(f.global, 'agent/first.md', 'name: collision\nmodel: fixture/first\ntop_p: 0.5');
   const second = await f.markdown(f.global, 'agents/second.md', 'name: collision\nmodel: fixture/second');
   const warnings: string[] = [];
   const collision = (await readNativeAgentFrontmatter(f.context, warnings)).get('collision')!;
-  assert.deepEqual(warnings, [`\`${first}\` and \`${second}\` both define agent \`collision\`; used \`${second}\`.`]);
-  assert.equal(collision.fields.model?.value, 'fixture/second');
+  assert.deepEqual(warnings, [
+    `\`${first}\` and \`${second}\` both define agent \`collision\`; ignored their settings.`,
+  ]);
+  assert.equal(collision.fields.model, undefined);
   assert.equal(collision.fields.temperature?.value, 0.5);
   assert.equal(collision.fields.top_p, undefined);
   assert.deepEqual(
@@ -463,6 +465,21 @@ test('native-invalid known field shapes are ignored with a warning even in legac
     assert.deepEqual(warnings, [`ignored invalid \`${field}\` in \`${path}\`.`]);
     assert.deepEqual(Object.keys(agents.get('invalid')?.fields ?? {}), ['variant'], metadata);
   }
+});
+
+test('Markdown groups normalize names and lists, and other values leave earlier membership intact', async (t) => {
+  const f = await fixture(t);
+  await f.markdown(f.global, 'agents/kept.md', 'groups: [first]');
+  const invalid = await f.markdown(f.near, 'agents/kept.md', 'groups: 5');
+  const bare = await f.markdown(f.global, 'agents/bare.md', 'groups: review');
+  const warnings: string[] = [];
+  const agents = await readNativeAgentFrontmatter(f.context, warnings);
+  assert.deepEqual(agents.get('kept')?.groups?.value, ['first']);
+  assert.deepEqual(agents.get('bare')?.groups?.value, ['review']);
+  assert.deepEqual(warnings.toSorted(), [
+    `\`${bare}\`: groups normalized to ["review"].`,
+    `ignored invalid \`groups\` in \`${invalid}\`.`,
+  ]);
 });
 
 test('native accepts empty string names and preserves wildcard permission order and nested policies', async (t) => {

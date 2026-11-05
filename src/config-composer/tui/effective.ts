@@ -6,7 +6,7 @@ import { processProfileNotice } from '../storage.ts';
 import { record } from '../settings.ts';
 import { retainedSession, sessionNotice } from './running.ts';
 import { inspectionText } from './configuration-error.ts';
-import { type Inspection, inspectionAgents } from './inspection.ts';
+import { type Inspection, inspectionAgents, runtimeWarnings } from './inspection.ts';
 
 type InspectionView = Pick<ConfigurationView, 'api' | 'nav' | 'run' | 'details'> & { snapshot: Inspection };
 const builtinsKey = 'config-composer.showBuiltins';
@@ -225,9 +225,14 @@ export function openEffective(view: InspectionView): void {
                 runtime?.processProfile === undefined
                   ? 'Saved choices awaiting apply are shown in /profiles.'
                   : processProfileNotice(runtime.processProfile);
+              const warnings = runtimeWarnings(runtime);
+              const skipped =
+                warnings.length === 0
+                  ? ''
+                  : `Skipped or normalized:\n${warnings.map((line) => `- ${line}`).join('\n')}\n`;
               view.details(
                 'Runtime status and sources',
-                `Current loaded server configuration\n${runtime?.status === 'applied' ? `Applied profile: ${runtime.candidate?.profile ?? 'Shared only'}` : 'Applied Composer profile unavailable.'}\n${runtime === undefined ? 'Composer source attribution unavailable.' : `Source: ${runtime.source.path}\nLoaded default: ${document?.defaultProfile ?? 'Shared only'}\nStatus: ${runtime.status}\n${runtime.diagnostic ?? ''}`}\n${selection}\n\n${sessionNotice}`,
+                `Current loaded server configuration\n${runtime?.status === 'applied' ? `Applied profile: ${runtime.candidate?.profile ?? 'Shared only'}` : 'Applied Composer profile unavailable.'}\n${runtime === undefined ? 'Composer source attribution unavailable.' : `Source: ${runtime.source.path}\nLoaded default: ${document?.defaultProfile ?? 'Shared only'}\nStatus: ${runtime.status}\n${runtime.diagnostic ?? ''}`}\n${skipped}${selection}\n\n${sessionNotice}`,
               );
             } else if (option.value === '\0session') {
               const checkpoint = view.nav.checkpoint();

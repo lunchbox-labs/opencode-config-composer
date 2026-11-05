@@ -284,7 +284,7 @@ export function resolveComposition(
         let applied = patch;
         if (kind === 'command' && Object.hasOwn(patch, 'agent') && !targets.agent.has(String(patch.agent))) {
           warnings.push(
-            `command \`${name}\` targets unavailable agent \`${String(patch.agent)}\`; kept its native agent.`,
+            `command \`${name}\` targets unavailable agent \`${String(patch.agent)}\`; ignored that \`agent\`.`,
           );
           const { agent: _unavailable, ...rest } = patch;
           applied = rest;
@@ -300,8 +300,11 @@ export function resolveComposition(
   }
   for (const [name, metadata] of Object.entries(authority)) {
     if (!targets.agent.has(name)) {
-      const files = metadata.sources.map((source) => `\`${source.path}\``).join(', ');
-      warnings.push(`agent \`${name}\` in ${files} isn't loaded by OpenCode yet; restart OpenCode to apply it.`);
+      // A file whose settings were all ignored has nothing a restart would apply.
+      if (metadata.groups !== undefined || Object.keys(metadata.fields).length > 0) {
+        const files = metadata.sources.map((source) => `\`${source.path}\``).join(', ');
+        warnings.push(`agent \`${name}\` in ${files} isn't loaded by OpenCode yet; restart OpenCode to apply it.`);
+      }
       continue;
     }
     for (const [field, pin] of Object.entries(metadata.fields)) {

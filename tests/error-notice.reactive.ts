@@ -131,7 +131,7 @@ test('an applied composition toasts what it skipped once as a warning', (t) => {
 test('a warning toast lists three skipped pieces and counts the rest', (t) => {
   const f = fixture(t);
   f.setState('config', applied(['one', 'two', 'three', 'four', 'five']));
-  assert.equal(f.toasts.at(-1)?.message, 'one\ntwo\nthree\n…and 2 more.');
+  assert.equal(f.toasts.at(-1)?.message, 'one\ntwo\nthree\n…and 2 more in /view-configs.');
 });
 
 test('a failed composition toasts its error and not the warnings of an earlier one', (t) => {

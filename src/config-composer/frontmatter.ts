@@ -104,8 +104,7 @@ function jsonCopy(value: unknown, parents = new Set<unknown>()): { value: unknow
 
 const colorNames = ['primary', 'secondary', 'accent', 'success', 'warning', 'error', 'info'];
 
-function validField(data: Record<string, unknown>, key: string): boolean {
-  const value = data[key];
+function validField(key: string, value: unknown): boolean {
   const action = (item: unknown) => typeof item === 'string' && actions.has(item);
   switch (key) {
     case 'name':
@@ -126,6 +125,8 @@ function validField(data: Record<string, unknown>, key: string): boolean {
       return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
     case 'mode':
       return typeof value === 'string' && ['subagent', 'primary', 'all'].includes(value);
+    case 'groups':
+      return typeof value === 'string' || Array.isArray(value);
     case 'options':
       return record(value);
     case 'tools':
@@ -149,13 +150,13 @@ function validField(data: Record<string, unknown>, key: string): boolean {
 function authoredMetadata(data: Record<string, unknown>, path: string, warnings: string[]): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    const copy = key === 'groups' ? { value } : jsonCopy(value);
-    if (copy === undefined || !validField({ [key]: copy.value }, key)) {
+    const copy = jsonCopy(value);
+    if (copy === undefined || !validField(key, copy.value)) {
       warnings.push(`ignored invalid \`${key}\` in \`${path}\`.`);
       continue;
     }
     Object.defineProperty(result, key, {
-      value: key === 'groups' ? readAgentGroups(value, `\`${path}\``, warnings) : copy.value,
+      value: key === 'groups' ? readAgentGroups(copy.value, `\`${path}\``, warnings) : copy.value,
       enumerable: true,
       writable: true,
       configurable: true,
@@ -391,7 +392,8 @@ async function readStableMetadata(path: string, warnings: string[]): Promise<Met
 async function readMetadata(path: string, warnings: string[]): Promise<MetadataRead | undefined> {
   try {
     // A file that changes mid-read is read once more before it is skipped.
-    for (const _attempt of [1, 2]) {
+    const attempts = 2;
+    for (let attempt = 0; attempt < attempts; attempt++) {
       const attemptWarnings: string[] = [];
       const read = await readStableMetadata(path, attemptWarnings);
       if (read !== undefined) {
@@ -495,12 +497,17 @@ export async function readNativeAgentFrontmatter(
                 ? candidate
                 : candidate.slice(0, -extension.length);
           const previous = batch.get(name);
+          const sources = [...(agents.get(name)?.sources ?? []), source];
           if (previous !== undefined) {
-            warnings.push(`\`${previous}\` and \`${read.path}\` both define agent \`${name}\`; used \`${read.path}\`.`);
+            // OpenCode's choice between same-folder duplicates isn't knowable here, so neither file is authored.
+            warnings.push(
+              `\`${previous}\` and \`${read.path}\` both define agent \`${name}\`; ignored their settings.`,
+            );
+            agents.set(name, { ...(beforeBatch.get(name) ?? { fields: {} }), sources });
+            continue;
           }
           batch.set(name, read.path);
-          // Within one batch the later file replaces the earlier one; earlier batches still merge underneath.
-          const earlier = previous === undefined ? agents.get(name) : beforeBatch.get(name);
+          const earlier = agents.get(name);
           agents.set(name, {
             ...(Object.hasOwn(data, 'groups')
               ? { groups: { value: readAgentGroups(data.groups, source.path), source } }
@@ -508,7 +515,7 @@ export async function readNativeAgentFrontmatter(
                 ? {}
                 : { groups: earlier.groups }),
             fields: { ...earlier?.fields, ...authoredFields(data, source, primary) },
-            sources: [...(agents.get(name)?.sources ?? []), source],
+            sources,
           });
         }
       };

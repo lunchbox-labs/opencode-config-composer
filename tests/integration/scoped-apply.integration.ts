@@ -77,7 +77,7 @@ test(
     const skipped = await f.editor.runtime();
     assert.equal(skipped.status, 'applied');
     assert.deepEqual(skipped.warnings, [
-      'command `review` targets unavailable agent `missing`; kept its native agent.',
+      'command `review` targets unavailable agent `missing`; ignored that `agent`.',
       "`/command/absent` patches command `absent`, which isn't loaded here; skipped it.",
     ]);
     const review = (await f.host.api<{ command: Record<string, Record<string, unknown>> }>('/config')).command.review;

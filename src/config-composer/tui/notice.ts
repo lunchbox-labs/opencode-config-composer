@@ -8,7 +8,7 @@ const listedWarnings = 3;
 function warningText(warnings: string[]): string {
   const listed = warnings.slice(0, listedWarnings).join('\n');
   const more = warnings.length - listedWarnings;
-  return diagnosticText(more > 0 ? `${listed}\n…and ${more} more.` : listed);
+  return diagnosticText(more > 0 ? `${listed}\n…and ${more} more in /view-configs.` : listed);
 }
 
 /**
