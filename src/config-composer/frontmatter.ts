@@ -8,7 +8,7 @@ import { type AgentConfigKey, actionOnlyPermissions } from './host.ts';
 import { readAgentGroups, withoutGroups } from './membership.ts';
 
 export type AuthoredAgentField =
-  'model' | 'variant' | 'temperature' | 'top_p' | 'steps' | 'options' | 'mode' | 'permission';
+  'model' | 'variant' | 'temperature' | 'top_p' | 'steps' | 'options' | 'mode' | 'permission' | 'disable';
 
 export interface NativeFrontmatterSource {
   /** Lexical native discovery path; aliases retain their native identity. */
@@ -66,7 +66,7 @@ const nativeAgentKeys = new Set(
     tools: true,
   } satisfies Record<AgentConfigKey | 'name' | 'groups', true>),
 );
-const directFields = ['model', 'variant', 'temperature', 'top_p', 'mode'] as const;
+const directFields = ['model', 'variant', 'temperature', 'top_p', 'mode', 'disable'] as const;
 const actions = new Set(['allow', 'ask', 'deny']);
 
 function diagnostic(path: string, detail: string): SettingsError {

@@ -12,6 +12,7 @@ export interface AgentPatch extends Record<string, unknown> {
   options?: Record<string, unknown>;
   mode?: 'primary' | 'subagent' | 'all';
   permission?: Permission;
+  disable?: boolean;
 }
 export interface CommandPatch extends Record<string, unknown> {
   agent?: string;

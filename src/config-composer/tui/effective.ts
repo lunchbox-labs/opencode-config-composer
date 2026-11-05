@@ -28,6 +28,10 @@ function nativeField(view: InspectionView, kind: 'agent' | 'command', name: stri
   if (item === undefined) {
     return undefined;
   }
+  // Native removes disabled agents from the roster, so every listed agent is enabled.
+  if (kind === 'agent' && field === 'disable') {
+    return false;
+  }
   const value: unknown = Reflect.get(item, field === 'top_p' ? 'topP' : field);
   if (field === 'model' && record(value)) {
     return `${String(value.providerID)}/${String(value.modelID)}`;

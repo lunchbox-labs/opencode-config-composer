@@ -106,6 +106,9 @@
         "mode": {
           "enum": ["primary", "subagent", "all"]
         },
+        "disable": {
+          "type": "boolean"
+        },
         "permission": {
           "anyOf": [
             {
