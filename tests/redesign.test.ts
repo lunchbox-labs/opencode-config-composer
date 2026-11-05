@@ -237,13 +237,67 @@ test('unavailable default, primary and command target agents are left to the hos
     ),
   );
   const disabledDefault = resolveComposition(
-    read({}),
-    null,
-    { ...native, default_agent: 'worker', agent: { worker: { disable: true } } },
+    read({ profiles: { off: { agent: { worker: { disable: true } } } } }),
+    'off',
+    { ...native, default_agent: 'worker' },
     {},
   );
   assert.equal(disabledDefault.default_agent, 'worker');
   assert.equal(disabledDefault.agent.worker.disable, true);
+});
+test('disable follows scalar precedence and final frontmatter', () => {
+  const document = read({
+    groups: { reviewers: { agent: { disable: true } } },
+    agent: { named: { disable: true } },
+    profiles: {
+      quiet: { agent: { build: { disable: true }, named: { disable: false } } },
+      grouped: { groups: { reviewers: { agent: { disable: false } } } },
+    },
+  });
+  const baseline = {
+    agent: { worker: { groups: ['reviewers'] }, named: {}, other: { disable: true } },
+  };
+  const disabled = (profile: string | null) => {
+    const result = resolveComposition(document, profile, baseline, {});
+    return Object.fromEntries(
+      ['build', 'worker', 'named', 'other'].map((name) => {
+        const key = `/agent/${name}/disable`;
+        return [
+          name,
+          [
+            Object.hasOwn(result.agent, name) ? result.agent[name].disable : undefined,
+            Object.hasOwn(result.decisions, key) ? result.decisions[key].origin.pointer : undefined,
+          ],
+        ];
+      }),
+    );
+  };
+  assert.deepEqual(disabled(null), {
+    build: [undefined, undefined],
+    worker: [true, '/groups/reviewers/agent/disable'],
+    named: [true, '/agent/named/disable'],
+    other: [true, undefined],
+  });
+  assert.deepEqual(disabled('quiet'), {
+    build: [true, '/profiles/quiet/agent/build/disable'],
+    worker: [true, '/groups/reviewers/agent/disable'],
+    named: [false, '/profiles/quiet/agent/named/disable'],
+    other: [true, undefined],
+  });
+  assert.deepEqual(disabled('grouped').worker, [false, '/profiles/grouped/groups/reviewers/agent/disable']);
+  const source = { path: '/native/named.md', canonicalPath: '/native/named.md', fingerprint: 'x' };
+  const pinned = resolveComposition(document, 'quiet', baseline, {
+    named: { fields: { disable: { value: true, authored: { disable: true }, source } }, sources: [source] },
+  });
+  assert.equal(pinned.agent.named.disable, true);
+  assert.equal(pinned.decisions['/agent/named/disable'].origin.kind, 'frontmatter');
+  assert.equal(pinned.decisions['/agent/named/disable'].blockedComposer?.value, false);
+  for (const value of [
+    { agent: { build: { disable: 'yes' } } },
+    { profiles: { a: { agent: { build: { disable: 1 } } } } },
+  ]) {
+    assert.throws(() => read(value), /Expected a boolean/);
+  }
 });
 test('legacy group arrays/members, invalid values and escaped pointers', () => {
   for (const value of [

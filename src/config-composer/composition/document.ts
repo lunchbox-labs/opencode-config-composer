@@ -11,6 +11,7 @@ export const agentFields = [
   'options',
   'mode',
   'permission',
+  'disable',
 ] as const;
 export const commandFields = ['agent', 'model', 'subtask'] as const;
 function fail(path: string, message: string): never {
@@ -136,7 +137,7 @@ function patch(value: unknown, kind: 'agent' | 'command', path: string, referenc
       references.push({ alias: v, path: at });
     } else if (key === 'agent') {
       name(v, at);
-    } else if (key === 'subtask') {
+    } else if (key === 'subtask' || key === 'disable') {
       if (typeof v !== 'boolean') {
         fail(at, 'Expected a boolean.');
       }

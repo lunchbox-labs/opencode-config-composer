@@ -977,6 +977,18 @@ test('config-only disabled agents are inspectable without suggesting an active i
   assert.match(await f.detailText(), /Agent unavailable in the native roster/);
   assert.doesNotMatch(await f.detailText(), /Effective native model: Inherit/);
 });
+test('disable reads as the config value for an absent agent and false for a listed one', async (t) => {
+  const f = await fixture(t, '', {}, { disabled: { disable: true } });
+  f.setNativeAgents([{ name: 'worker', native: false }]);
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent disabled', 'agent disabled');
+  assert.equal(f.current?.options?.find((option) => option.title === 'disable')?.description, 'true');
+  await f.open('view-configs', 'Configuration');
+  await f.choose('agent worker', 'agent worker');
+  assert.equal(f.current.options.find((option) => option.title === 'disable')?.description, 'false');
+  await f.choose('disable', 'agent worker · disable');
+  assert.match(await f.detailText(), /Effective native disable: false/);
+});
 test('an effective native model different from the config contribution is explicitly distinguished', async (t) => {
   const f = await fixture(t, 'model: p/native');
   f.setNativeAgents([{ name: 'worker', native: false, model: { providerID: 'p', modelID: 'b' } }]);

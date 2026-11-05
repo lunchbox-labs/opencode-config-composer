@@ -28,6 +28,10 @@ function nativeField(view: InspectionView, kind: 'agent' | 'command', name: stri
   if (item === undefined) {
     return undefined;
   }
+  const listedAgentsAreEnabled = kind === 'agent' && field === 'disable';
+  if (listedAgentsAreEnabled) {
+    return false;
+  }
   const value: unknown = Reflect.get(item, field === 'top_p' ? 'topP' : field);
   if (field === 'model' && record(value)) {
     return `${String(value.providerID)}/${String(value.modelID)}`;

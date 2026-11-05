@@ -147,6 +147,7 @@ test('authored field entries preserve explicit empty, false, and zero values wit
     top_p: 0,
     options: {},
     permission: {},
+    disable: false,
   });
   assert.deepEqual(fields.options?.authored, { options: {} });
   assert.deepEqual(fields.permission?.authored, { permission: {} });

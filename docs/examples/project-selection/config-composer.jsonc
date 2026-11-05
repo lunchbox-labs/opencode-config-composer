@@ -13,6 +13,11 @@
       },
     },
     "review": {
+      "agent": {
+        "build": {
+          "disable": true,
+        },
+      },
       "groups": {
         "coding": {
           "agent": {

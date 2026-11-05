@@ -67,11 +67,11 @@ test('all shipped examples select and reset settings on existing native agents',
     {
       path: '../docs/examples/project-selection/config-composer.jsonc',
       defaultProfile: 'development',
-      shared: { build: { temperature: undefined }, plan: { temperature: undefined } },
+      shared: { build: { temperature: undefined, disable: undefined }, plan: { temperature: undefined } },
       profiles: {
-        development: { build: { temperature: 0.2 }, plan: { temperature: 0.2 } },
+        development: { build: { temperature: 0.2, disable: undefined }, plan: { temperature: 0.2 } },
         review: {
-          build: { temperature: 0, permission: { edit: 'ask' } },
+          build: { temperature: 0, permission: { edit: 'ask' }, disable: true },
           plan: { temperature: 0, permission: { edit: 'ask' } },
         },
       },
@@ -150,7 +150,16 @@ test('all shipped examples select and reset settings on existing native agents',
       }
       assert.equal(config.agent.worker.prompt, 'NATIVE_WORKER');
       assert.equal(config.command.review.template, 'NATIVE_REVIEW $ARGUMENTS');
-      await f.host.api('/agent');
+      const roster = new Set((await f.host.api<{ name: string }[]>('/agent')).map((agent) => agent.name));
+      for (const [name, fields] of Object.entries(expected)) {
+        if (Object.hasOwn(fields, 'disable')) {
+          assert.equal(
+            roster.has(name),
+            fields.disable !== true,
+            `${example.path} / ${String(choice)} / ${name} roster`,
+          );
+        }
+      }
       assert.equal(await readFile(f.paths.shared, 'utf8'), text);
       assert.deepEqual(await readFile(f.paths.native), nativeBytes);
     }

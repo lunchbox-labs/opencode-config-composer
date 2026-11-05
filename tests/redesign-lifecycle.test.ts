@@ -51,7 +51,7 @@ async function fixture(t: TestContext, sourceAlias = false, sourceDocument?: Rec
     defaultProfile: 'a',
     profiles: {
       a: {
-        agent: { worker: { model: 'p/a', variant: 'high', steps: 3, options: { a: false } } },
+        agent: { worker: { model: 'p/a', variant: 'high', steps: 3, disable: true, options: { a: false } } },
         command: { run: { subtask: false } },
       },
       b: { agent: { worker: { model: 'p/b' } } },
@@ -187,6 +187,10 @@ test('selection A B A none default restores native fields for fresh and reused o
       (f.config.agent.worker as Record<string, unknown>).steps,
       choice === null || choice === 'b' ? undefined : 3,
     );
+    assert.equal(
+      (f.config.agent.worker as Record<string, unknown>).disable,
+      choice === null || choice === 'b' ? undefined : true,
+    );
     assert.equal(f.config.command.run.subtask, choice === null || choice === 'b');
   }
   const context = await loadConfigurationContext(f.connection);
@@ -197,6 +201,7 @@ test('selection A B A none default restores native fields for fresh and reused o
   assert.equal(f.config.agent.worker.model, 'p/native');
   assert.equal((f.config.agent.worker as Record<string, unknown>).variant, undefined);
   assert.equal((f.config.agent.worker as Record<string, unknown>).steps, undefined);
+  assert.equal((f.config.agent.worker as Record<string, unknown>).disable, undefined);
 });
 test('native enumeration order permits guarded recomposition without changing source or permission precedence', async (t) => {
   const f = await fixture(t);
