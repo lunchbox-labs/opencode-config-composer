@@ -215,17 +215,20 @@ test('permission blocks combine patterns and move to incoming order; options are
   assert.deepEqual(result.agent.worker.permission, { edit: 'ask', read: { '*': 'deny', '*.md': 'ask' }, bash: 'deny' });
   assert.deepEqual(result.agent.worker.options, { new: false });
 });
-test('unknown inactive targets, disabled command targets and no visible primary fail atomically', () => {
+test('unknown inactive targets fail atomically', () => {
   for (const doc of [
     { profiles: { bad: { agent: { missing: { model: 'p/m' } } } } },
-    { agent: { build: { mode: 'subagent' }, plan: { mode: 'subagent' } } },
     { command: { run: { agent: 'missing' } } },
   ]) {
-    assert.throws(() =>
-      resolveComposition(read(doc), null, { ...native, agent: { worker: { mode: 'subagent' } } }, {}),
-    );
+    assert.throws(() => resolveComposition(read(doc), null, native, {}), /Unknown native agent target missing/);
   }
-  assert.throws(() =>
+});
+test('unavailable default, primary and command target agents are left to the host', () => {
+  const allSubagents = { agent: { build: { mode: 'subagent' }, plan: { mode: 'subagent' } } };
+  assert.doesNotThrow(() =>
+    resolveComposition(read(allSubagents), null, { ...native, agent: { worker: { mode: 'subagent' } } }, {}),
+  );
+  assert.doesNotThrow(() =>
     resolveComposition(
       read({ command: { run: { agent: 'worker' } } }),
       null,
@@ -233,7 +236,14 @@ test('unknown inactive targets, disabled command targets and no visible primary 
       {},
     ),
   );
-  assert.doesNotThrow(() => resolveComposition(read({}), null, { ...native, default_agent: 'worker' }, {}));
+  const disabledDefault = resolveComposition(
+    read({}),
+    null,
+    { ...native, default_agent: 'worker', agent: { worker: { disable: true } } },
+    {},
+  );
+  assert.equal(disabledDefault.default_agent, 'worker');
+  assert.equal(disabledDefault.agent.worker.disable, true);
 });
 test('legacy group arrays/members, invalid values and escaped pointers', () => {
   for (const value of [

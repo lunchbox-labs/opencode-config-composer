@@ -117,7 +117,7 @@ test('explicit referencing variants and later patches win while literal model se
   assert.equal(named.agent.worker.variant, 'profile-named');
 });
 
-test('profile-only aliases contribute neither model nor referencing variant in Shared only', () => {
+test('unbound aliases contribute neither model nor referencing variant in Shared only or an unbinding profile', () => {
   const doc = {
     groups: { coding: { agent: { modelRef: 'coding', variant: 'explicit', temperature: 0 } } },
     agent: { worker: { modelRef: 'coding', variant: 'named' } },
@@ -128,7 +128,11 @@ test('profile-only aliases contribute neither model nor referencing variant in S
   assert.equal(shared.agent.worker.variant, 'native');
   assert.equal(shared.agent.worker.temperature, 0);
   assert.equal(resolve(doc, 'a').agent.worker.variant, 'named');
-  assert.throws(() => resolve(doc, 'b'), /\/groups\/coding\/agent\/modelRef.*coding.*profile.*b/i);
+  const unbound = resolve(doc, 'b');
+  assert.equal(unbound.agent.worker.model, 'p/native');
+  assert.equal(unbound.agent.worker.variant, 'native');
+  assert.equal(unbound.agent.worker.temperature, 0);
+  assert.equal(unbound.modelParameters?.worker, undefined);
 });
 
 test('unknown aliases fail even in unused groups and inactive profiles with escaped pointer context', () => {
@@ -156,21 +160,17 @@ test('unknown aliases fail even in unused groups and inactive profiles with esca
   );
 });
 
-test('binding validation follows consumed groups even when later patches or frontmatter shadow them', () => {
+test('an unbound alias under a frontmatter model pin keeps the pin', () => {
   const doc = readCompositionDocument({
-    groups: { unused: { agent: { modelRef: 'coding' } }, coding: { agent: { modelRef: 'coding' } } },
-    agent: { worker: { model: 'p/override' } },
+    groups: { coding: { agent: { modelRef: 'coding' } } },
     profiles: { a: { models: { coding: { model: 'p/a' } } }, b: {} },
   });
-  assert.doesNotThrow(() => resolveComposition(doc, 'b', { agent: { worker: {} } }, {}));
   const source = { path: '/worker.md', canonicalPath: '/worker.md', fingerprint: 'x' };
-  assert.throws(
-    () =>
-      resolveComposition(doc, 'b', native, {
-        worker: { fields: { model: { value: 'p/pin', authored: { model: 'p/pin' }, source } }, sources: [source] },
-      }),
-    /\/groups\/coding\/agent\/modelRef.*coding.*profile.*b/i,
-  );
+  const result = resolveComposition(doc, 'b', native, {
+    worker: { fields: { model: { value: 'p/pin', authored: { model: 'p/pin' }, source } }, sources: [source] },
+  });
+  assert.equal(result.agent.worker.model, 'p/pin');
+  assert.equal(result.decisions['/agent/worker/model'].origin.kind, 'frontmatter');
 });
 
 test('exact prototype-like alias keys resolve safely and preserve binding and reference provenance', () => {
