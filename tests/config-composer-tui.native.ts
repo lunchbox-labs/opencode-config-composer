@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { compositionFixture } from './integration/composition-fixture.ts';
 import { nativeTerminal } from './integration/terminal.ts';
@@ -187,15 +187,15 @@ test('native TUI shows delayed config failures until recovery and again after it
   }) };`,
   );
   await f.write(f.paths.native, { ...f.native, plugin: [f.host.installed.directory, slow] });
-  const projectNative = join(f.host.project, 'opencode.jsonc');
-  await f.write(projectNative, {});
   await f.host.start();
   const terminal = await nativeTerminal(f.host, undefined, 'error-notice');
   await terminal.wait(['Profile: Shared only']);
+  const selection = (await f.editor.context()).selection.path;
+  await mkdir(dirname(selection), { recursive: true });
   for (let episode = 0; episode < 2; episode++) {
     // The later config hook keeps the host refresh pending beyond the old timer.
     // The second episode publishes the identical diagnostic after a good refresh.
-    await f.write(projectNative, { agent: { worker: { groups: ['missing-group'] } } });
+    await writeFile(selection, JSON.stringify({ version: 2, revision: episode + 1, selection: { choice: 'missing' } }));
     await f.host.api('/instance/dispose', {});
     const loaded = await f.host.api('/config');
     assert.match(configHookFailureDiagnostic(loaded, f.host.project, f.host.project) ?? '', /Composer not applied/);
@@ -206,7 +206,7 @@ test('native TUI shows delayed config failures until recovery and again after it
     assert.doesNotMatch(terminal.text(), /Composer not applied\./, 'the host expires the toast');
     assert.match(terminal.text(), /Profile: error/, 'the prompt slot still reports the failed composition');
     assert.doesNotMatch(terminal.text(), /Profile: Shared only/);
-    await f.write(projectNative, {});
+    await rm(selection);
     await f.host.api('/instance/dispose', {});
     await terminal.wait(['Profile: Shared only']);
     assert.doesNotMatch(terminal.text(), /Profile: error|Composer not applied\./);

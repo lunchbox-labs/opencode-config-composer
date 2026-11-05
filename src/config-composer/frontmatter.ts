@@ -73,88 +73,96 @@ function diagnostic(path: string, detail: string): SettingsError {
   return new SettingsError(`Native agent frontmatter ${path}: ${detail}`);
 }
 
-function jsonValue(value: unknown, parents = new Set<unknown>()): boolean {
+/** A JSON copy, with YAML dates as ISO strings; undefined for cycles and other non-JSON values. */
+function jsonCopy(value: unknown, parents = new Set<unknown>()): { value: unknown } | undefined {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-    return true;
+    return { value };
   }
   if (typeof value === 'number') {
-    return Number.isFinite(value);
+    return Number.isFinite(value) ? { value } : undefined;
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : { value: value.toISOString() };
   }
   if (!Array.isArray(value) && (!record(value) || Object.getPrototypeOf(value) !== Object.prototype)) {
-    return false;
+    return undefined;
   }
   if (parents.has(value)) {
-    return false;
+    return undefined;
   }
   const ancestors = new Set([...parents, value]);
-  return Object.values(value).every((item: unknown) => jsonValue(item, ancestors));
+  const items: [string, unknown][] = [];
+  for (const [key, item] of Object.entries(value)) {
+    const copy = jsonCopy(item, ancestors);
+    if (copy === undefined) {
+      return undefined;
+    }
+    items.push([key, copy.value]);
+  }
+  return { value: Array.isArray(value) ? items.map(([, item]) => item) : Object.fromEntries(items) };
 }
 
-function validateMetadata(data: Record<string, unknown>, path: string): void {
-  const invalid = (key: string) => {
-    throw diagnostic(path, `invalid native ${key} field; authored authority is unavailable.`);
-  };
-  if (Object.hasOwn(data, 'groups')) {
-    readAgentGroups(data.groups, `${path}: groups`);
+const colorNames = ['primary', 'secondary', 'accent', 'success', 'warning', 'error', 'info'];
+
+function validField(key: string, value: unknown): boolean {
+  const action = (item: unknown) => typeof item === 'string' && actions.has(item);
+  switch (key) {
+    case 'name':
+    case 'model':
+    case 'variant':
+    case 'description':
+      return typeof value === 'string';
+    case 'color':
+      return typeof value === 'string' && (/^#[\da-f]{6}$/i.test(value) || colorNames.includes(value));
+    case 'temperature':
+    case 'top_p':
+      return typeof value === 'number';
+    case 'disable':
+    case 'hidden':
+      return typeof value === 'boolean';
+    case 'steps':
+    case 'maxSteps':
+      return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+    case 'mode':
+      return typeof value === 'string' && ['subagent', 'primary', 'all'].includes(value);
+    case 'groups':
+      return typeof value === 'string' || Array.isArray(value);
+    case 'options':
+      return record(value);
+    case 'tools':
+      return record(value) && Object.values(value).every((enabled) => typeof enabled === 'boolean');
+    case 'permission':
+      return (
+        action(value) ||
+        (record(value) &&
+          Object.entries(value).every(
+            ([tool, policy]) =>
+              action(policy) ||
+              (!actionOnlyPermissions.has(tool) && record(policy) && Object.values(policy).every(action)),
+          ))
+      );
+    default:
+      return true;
   }
-  // Native overwrites a header's prompt with its body before validation. It is never metadata authority.
-  for (const key of ['name', 'model', 'variant', 'description', 'color']) {
-    if (Object.hasOwn(data, key) && typeof data[key] !== 'string') {
-      invalid(key);
+}
+
+/** Header fields that native OpenCode would accept; anything else is treated as not authored. */
+function authoredMetadata(data: Record<string, unknown>, path: string, warnings: string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    const copy = jsonCopy(value);
+    if (copy === undefined || !validField(key, copy.value)) {
+      warnings.push(`ignored invalid \`${key}\` in \`${path}\`.`);
+      continue;
     }
+    Object.defineProperty(result, key, {
+      value: key === 'groups' ? readAgentGroups(copy.value, `\`${path}\``, warnings) : copy.value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
-  for (const key of ['temperature', 'top_p']) {
-    if (Object.hasOwn(data, key) && (typeof data[key] !== 'number' || !Number.isFinite(data[key]))) {
-      invalid(key);
-    }
-  }
-  for (const key of ['disable', 'hidden']) {
-    if (Object.hasOwn(data, key) && typeof data[key] !== 'boolean') {
-      invalid(key);
-    }
-  }
-  for (const key of ['steps', 'maxSteps']) {
-    const value = data[key];
-    if (Object.hasOwn(data, key) && (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0)) {
-      invalid(key);
-    }
-  }
-  if (
-    Object.hasOwn(data, 'mode') &&
-    (typeof data.mode !== 'string' || !['subagent', 'primary', 'all'].includes(data.mode))
-  ) {
-    invalid('mode');
-  }
-  if (
-    typeof data.color === 'string' &&
-    !/^#[\da-f]{6}$/i.test(data.color) &&
-    !['primary', 'secondary', 'accent', 'success', 'warning', 'error', 'info'].includes(data.color)
-  ) {
-    invalid('color');
-  }
-  if (Object.hasOwn(data, 'options') && !record(data.options)) {
-    invalid('options');
-  }
-  if (
-    Object.hasOwn(data, 'tools') &&
-    (!record(data.tools) || Object.values(data.tools).some((value) => typeof value !== 'boolean'))
-  ) {
-    invalid('tools');
-  }
-  if (Object.hasOwn(data, 'permission')) {
-    const permission = data.permission;
-    const action = (value: unknown) => typeof value === 'string' && actions.has(value);
-    if (
-      !action(permission) &&
-      (!record(permission) ||
-        !Object.entries(permission).every(
-          ([key, value]) =>
-            action(value) || (!actionOnlyPermissions.has(key) && record(value) && Object.values(value).every(action)),
-        ))
-    ) {
-      invalid('permission');
-    }
-  }
+  return result;
 }
 
 // Copy native config/markdown.ts's fallback, including its deliberately limited key grammar.
@@ -218,40 +226,32 @@ export async function frontmatterData(content: string, path: string): Promise<un
   return matter(content, { engines: { yaml, json, javascript: unsupported } }).data;
 }
 
-async function parseMetadata(content: string, path: string): Promise<Record<string, unknown>> {
+/** A header that can't be parsed safely contributes no settings, as if the file had none. */
+async function parseMetadata(content: string, path: string, warnings: string[]): Promise<Record<string, unknown>> {
   const { matter } = await (parsers ??= importParsers());
+  const unparsable = () => {
+    warnings.push(`could not parse \`${path}\`; its settings were ignored.`);
+    return {};
+  };
   // gray-matter removes a UTF-8 BOM before selecting its engine. Match that preflight too.
   const input = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
   if (input.startsWith('---') && input[3] !== '-') {
     const language = matter.language(input).name;
     if (language !== '' && language !== 'json' && !['yaml', 'yml'].includes(language.toLowerCase())) {
-      throw diagnostic(
-        path,
-        `unsupported frontmatter engine ${JSON.stringify(language)}; only YAML and JSON are available.`,
-      );
+      return unparsable();
     }
   }
+  let data: unknown;
   try {
-    let data: unknown;
     try {
       data = await frontmatterData(content, path);
     } catch {
       data = await frontmatterData(sanitize(content), path);
     }
-    if (!record(data)) {
-      throw new Error('Native frontmatter must be an object.');
-    }
-    validateMetadata(data, path);
-    return data;
-  } catch (error) {
-    if (error instanceof SettingsError) {
-      throw error;
-    }
-    throw diagnostic(
-      path,
-      `could not parse native metadata: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  } catch {
+    return unparsable();
   }
+  return record(data) ? authoredMetadata(data, path, warnings) : unparsable();
 }
 
 function authoredFields(
@@ -266,9 +266,6 @@ function authoredFields(
     authored: Record<string, unknown>,
     derived?: 'primary-mode',
   ) => {
-    if (!jsonValue(value) || !jsonValue(authored)) {
-      throw diagnostic(source.path, `cyclic or non-JSON native ${key} field; authored authority is unavailable.`);
-    }
     fields[key] = { value, authored, source, ...(derived === undefined ? {} : { derived }) };
   };
   for (const key of directFields) {
@@ -322,25 +319,12 @@ function authoredFields(
   return fields;
 }
 
+/** Missing roots, roots that aren't directories, unresolved links and unreadable roots have no agents. */
 async function existsDirectory(path: string): Promise<boolean> {
   try {
-    if (!(await stat(path)).isDirectory()) {
-      throw diagnostic(path, 'native search root is not a directory.');
-    }
-    return true;
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      try {
-        await lstat(path);
-      } catch (missing) {
-        if (missing instanceof Error && 'code' in missing && missing.code === 'ENOENT') {
-          return false;
-        }
-        throw missing;
-      }
-      throw diagnostic(path, 'native search directory is an unresolved symbolic link.');
-    }
-    throw error;
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
   }
 }
 
@@ -369,13 +353,19 @@ export function nativeAgentSourceRoots(context: NativeFrontmatterContext): strin
   return [...new Set(roots)];
 }
 
-async function readMetadata(path: string): Promise<{ data: Record<string, unknown>; source: NativeFrontmatterSource }> {
+interface MetadataRead {
+  data: Record<string, unknown>;
+  source: NativeFrontmatterSource;
+}
+
+/** Undefined when the file kept changing or stopped being a regular file while it was read. */
+async function readStableMetadata(path: string, warnings: string[]): Promise<MetadataRead | undefined> {
   const canonicalPath = await realpath(path);
   const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
     const before = await file.stat({ bigint: true });
     if (!before.isFile()) {
-      throw diagnostic(path, 'native metadata must be a regular file.');
+      return undefined;
     }
     const bytes = await file.readFile();
     const after = await file.stat({ bigint: true });
@@ -388,11 +378,10 @@ async function readMetadata(path: string): Promise<{ data: Record<string, unknow
       before.ctimeNs !== after.ctimeNs ||
       canonicalPath !== (await realpath(path))
     ) {
-      throw diagnostic(path, 'native source changed while reading; retry discovery.');
+      return undefined;
     }
-    const text = bytes.toString('utf8');
     return {
-      data: await parseMetadata(text, path),
+      data: await parseMetadata(bytes.toString('utf8'), path, warnings),
       source: { path, canonicalPath, fingerprint: createHash('sha256').update(bytes).digest('hex') },
     };
   } finally {
@@ -400,118 +389,143 @@ async function readMetadata(path: string): Promise<{ data: Record<string, unknow
   }
 }
 
-/** Read only authored native Markdown metadata. Native normalized configuration is deliberately not an input. */
+async function readMetadata(path: string, warnings: string[]): Promise<MetadataRead | undefined> {
+  try {
+    // A file that changes mid-read is read once more before it is skipped.
+    const attempts = 2;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const attemptWarnings: string[] = [];
+      const read = await readStableMetadata(path, attemptWarnings);
+      if (read !== undefined) {
+        warnings.push(...attemptWarnings);
+        return read;
+      }
+    }
+    warnings.push(`\`${path}\` changed while it was read; its settings were ignored.`);
+    return undefined;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return undefined;
+    }
+    warnings.push(`could not read \`${path}\`; its settings were ignored.`);
+    return undefined;
+  }
+}
+
+async function listDirectory(directory: string) {
+  try {
+    return { canonical: await realpath(directory), entries: await readdir(directory, { withFileTypes: true }) };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read only authored native Markdown metadata. Native normalized configuration is deliberately not an input.
+ * Unreadable folders, dangling links and directory cycles are skipped; `warnings` names settings that were ignored.
+ */
 export async function readNativeAgentFrontmatter(
   context: NativeFrontmatterContext,
+  warnings: string[] = [],
 ): Promise<Map<string, NativeAgentFrontmatter>> {
-  type EntryRead =
-    | { path: string; directory: boolean; metadata?: Awaited<ReturnType<typeof readMetadata>> }
-    | { path: string; error: unknown };
+  interface EntryRead {
+    path: string;
+    directory: boolean;
+    metadata?: MetadataRead;
+    warnings: string[];
+  }
   const agents = new Map<string, NativeAgentFrontmatter>();
-  let activePath = context.directory;
-  try {
-    for (const root of nativeAgentSourceRoots(context)) {
-      activePath = root;
-      if (!(await existsDirectory(root))) {
-        continue;
-      }
-      for (const primary of [false, true]) {
-        const batch = new Map<string, string>();
-        const scan = async (directory: string, base: string, parents = new Set<string>()): Promise<void> => {
-          activePath = directory;
-          const canonical = await realpath(directory);
-          if (parents.has(canonical)) {
-            throw diagnostic(directory, 'native search contains a directory cycle.');
-          }
-          const entries = await readdir(directory, { withFileTypes: true });
-          // Read entries concurrently, then recurse, merge and report the first failure in readdir order.
-          // Every started read settles before any result is used, and reads never touch shared state.
-          // Each read may hold a descriptor; one directory reads at a time, so this bounds the whole traversal.
-          const reads: EntryRead[] = [];
-          let next = 0;
-          let failed = false;
-          await Promise.all(
-            Array.from({ length: Math.min(16, entries.length) }, async () => {
-              // Entries after a failure are never used, so stop claiming them.
-              while (!failed && next < entries.length) {
-                const index = next++;
-                const entry = entries[index];
-                const path = join(directory, entry.name);
-                try {
-                  const info = entry.isSymbolicLink() ? await stat(path) : await lstat(path);
-                  reads[index] = {
-                    path,
-                    directory: info.isDirectory(),
-                    metadata: info.isFile() && entry.name.endsWith('.md') ? await readMetadata(path) : undefined,
-                  };
-                } catch (error) {
-                  failed = true;
-                  reads[index] = { path, error };
-                }
+  for (const root of nativeAgentSourceRoots(context)) {
+    if (!(await existsDirectory(root))) {
+      continue;
+    }
+    for (const primary of [false, true]) {
+      const beforeBatch = new Map(agents);
+      const batch = new Map<string, string>();
+      const scan = async (directory: string, base: string, parents = new Set<string>()): Promise<void> => {
+        const listing = await listDirectory(directory);
+        if (listing === undefined || parents.has(listing.canonical)) {
+          return;
+        }
+        const { canonical, entries } = listing;
+        // Read entries concurrently, then recurse and merge in readdir order. Reads never touch shared state.
+        // Each read may hold a descriptor; one directory reads at a time, so this bounds the whole traversal.
+        const reads: (EntryRead | undefined)[] = [];
+        let next = 0;
+        await Promise.all(
+          Array.from({ length: Math.min(16, entries.length) }, async () => {
+            while (next < entries.length) {
+              const index = next++;
+              const entry = entries[index];
+              const path = join(directory, entry.name);
+              const info = await (entry.isSymbolicLink() ? stat(path) : lstat(path)).catch(() => undefined);
+              if (info === undefined) {
+                continue;
               }
-            }),
-          );
-          for (const read of reads) {
-            const path = read.path;
-            activePath = path;
-            if ('error' in read) {
-              throw read.error;
-            }
-            if (read.directory) {
-              if (!primary) {
-                await scan(path, base, new Set([...parents, canonical]));
-              }
-              continue;
-            }
-            if (read.metadata === undefined) {
-              continue;
-            }
-            const { data, source } = read.metadata;
-            const candidate = relative(base, path).replaceAll('\\', '/');
-            const extension = extname(candidate);
-            const name =
-              typeof data.name === 'string'
-                ? data.name
-                : extension === ''
-                  ? candidate
-                  : candidate.slice(0, -extension.length);
-            const previous = batch.get(name);
-            if (previous !== undefined) {
-              throw diagnostic(
+              const entryWarnings: string[] = [];
+              reads[index] = {
                 path,
-                `ambiguous native agent ${JSON.stringify(name)} in one traversal batch: ${previous} and ${path}.`,
-              );
+                directory: info.isDirectory(),
+                metadata:
+                  info.isFile() && entry.name.endsWith('.md') ? await readMetadata(path, entryWarnings) : undefined,
+                warnings: entryWarnings,
+              };
             }
-            batch.set(name, path);
-            const earlier = agents.get(name);
-            agents.set(name, {
-              ...(Object.hasOwn(data, 'groups')
-                ? { groups: { value: readAgentGroups(data.groups, source.path), source } }
-                : earlier?.groups === undefined
-                  ? {}
-                  : { groups: earlier.groups }),
-              fields: { ...earlier?.fields, ...authoredFields(data, source, primary) },
-              sources: [...(earlier?.sources ?? []), source],
-            });
+          }),
+        );
+        for (const read of reads) {
+          if (read === undefined) {
+            continue;
           }
-        };
-        for (const name of primary ? ['mode', 'modes'] : ['agent', 'agents']) {
-          const directory = join(root, name);
-          activePath = directory;
-          if (await existsDirectory(directory)) {
-            await scan(directory, directory);
+          warnings.push(...read.warnings);
+          if (read.directory) {
+            if (!primary) {
+              await scan(read.path, base, new Set([...parents, canonical]));
+            }
+            continue;
           }
+          if (read.metadata === undefined) {
+            continue;
+          }
+          const { data, source } = read.metadata;
+          const candidate = relative(base, read.path).replaceAll('\\', '/');
+          const extension = extname(candidate);
+          const name =
+            typeof data.name === 'string'
+              ? data.name
+              : extension === ''
+                ? candidate
+                : candidate.slice(0, -extension.length);
+          const previous = batch.get(name);
+          const sources = [...(agents.get(name)?.sources ?? []), source];
+          if (previous !== undefined) {
+            // OpenCode's choice between same-folder duplicates isn't knowable here, so neither file is authored.
+            warnings.push(
+              `\`${previous}\` and \`${read.path}\` both define agent \`${name}\`; ignored their settings.`,
+            );
+            agents.set(name, { ...(beforeBatch.get(name) ?? { fields: {} }), sources });
+            continue;
+          }
+          batch.set(name, read.path);
+          const earlier = agents.get(name);
+          agents.set(name, {
+            ...(Object.hasOwn(data, 'groups')
+              ? { groups: { value: readAgentGroups(data.groups, source.path), source } }
+              : earlier?.groups === undefined
+                ? {}
+                : { groups: earlier.groups }),
+            fields: { ...earlier?.fields, ...authoredFields(data, source, primary) },
+            sources,
+          });
+        }
+      };
+      for (const name of primary ? ['mode', 'modes'] : ['agent', 'agents']) {
+        const directory = join(root, name);
+        if (await existsDirectory(directory)) {
+          await scan(directory, directory);
         }
       }
     }
-    return agents;
-  } catch (error) {
-    if (error instanceof SettingsError) {
-      throw error;
-    }
-    throw diagnostic(
-      activePath,
-      `could not read native source: ${error instanceof Error ? error.message : String(error)}`,
-    );
   }
+  return agents;
 }

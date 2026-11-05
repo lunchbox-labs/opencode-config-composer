@@ -92,6 +92,15 @@ export function configHookFailureDiagnostic(config: unknown, directory: string, 
   const marker = loadedMarker(config, directory, root);
   return marker?.status === 'error' && typeof marker.diagnostic === 'string' ? marker.diagnostic : undefined;
 }
+/** What an applied composition skipped or normalized, in the order the server found it. */
+export function runtimeWarnings(marker: { status?: unknown; warnings?: unknown } | undefined): string[] {
+  return marker?.status === 'applied' && Array.isArray(marker.warnings)
+    ? marker.warnings.filter((warning: unknown): warning is string => typeof warning === 'string')
+    : [];
+}
+export function compositionWarnings(config: unknown, directory: string, root: string): string[] {
+  return runtimeWarnings(loadedMarker(config, directory, root));
+}
 /** The prompt slot label; a failed composition stays visible after its toast is dismissed. */
 export function profileSlot(config: unknown, directory: string, root: string): { text: string; error: boolean } {
   if (configHookFailureDiagnostic(config, directory, root) !== undefined) {

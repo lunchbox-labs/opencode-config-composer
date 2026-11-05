@@ -222,14 +222,30 @@ test(
 );
 
 test(
-  'native bootstrap failures strip membership metadata without claiming application',
+  'native membership metadata is stripped whether composition fails or skips unknown and malformed groups',
   { timeout: 240000 },
   async (t) => {
     const f = await compositionFixture(t, 'native-membership-failure');
     const cases = [
-      { groups: ['known'], document: { groups: { known: {} }, invalid: true }, diagnostic: /Unknown key/ },
-      { groups: ['missing'], document: { groups: { known: {} } }, diagnostic: /unknown group/ },
-      { groups: 'known', document: { groups: { known: {} } }, diagnostic: /array/i },
+      {
+        groups: ['known'],
+        document: { groups: { known: {} }, invalid: true },
+        status: 'error',
+        diagnostic: /Unknown key/,
+        warnings: undefined,
+      },
+      {
+        groups: ['missing'],
+        document: { groups: { known: {} } },
+        status: 'applied',
+        warnings: ['agent `worker` lists unknown group `missing`; ignored it.'],
+      },
+      {
+        groups: 'known',
+        document: { groups: { known: {} } },
+        status: 'applied',
+        warnings: ['Native agent worker: groups normalized to ["known"].'],
+      },
     ];
     for (const [index, scenario] of cases.entries()) {
       if (index > 0) {
@@ -255,7 +271,12 @@ test(
       await f.host.start();
       const config = await f.host.api<{
         agent: Record<string, Record<string, unknown>>;
-        plugin: [string, { __configComposerRuntime?: { status: string; revision?: unknown; diagnostic: string } }][];
+        plugin: [
+          string,
+          {
+            __configComposerRuntime?: { status: string; revision?: unknown; diagnostic?: string; warnings?: string[] };
+          },
+        ][];
       }>('/config');
       assert.equal(config.agent.worker.groups, undefined);
       assert.deepEqual(config.agent.worker.options, { retained: false });
@@ -265,9 +286,12 @@ test(
       const marker = config.plugin.find(([, options]) => options.__configComposerRuntime !== undefined)?.[1]
         .__configComposerRuntime;
       assert.ok(marker !== undefined);
-      assert.equal(marker.status, 'error');
-      assert.equal(marker.revision, undefined);
-      assert.match(marker.diagnostic, scenario.diagnostic);
+      assert.equal(marker.status, scenario.status);
+      assert.equal(marker.revision === undefined, scenario.status === 'error');
+      if (scenario.diagnostic !== undefined) {
+        assert.match(marker.diagnostic ?? '', scenario.diagnostic);
+      }
+      assert.deepEqual(marker.warnings, scenario.warnings);
       const agents = await f.host.api<{ name: string; options: Record<string, unknown> }[]>('/agent');
       assert.equal(agents.find((agent) => agent.name === 'worker')?.options.groups, undefined);
       assert.deepEqual(await readFile(f.paths.native), nativeBytes);

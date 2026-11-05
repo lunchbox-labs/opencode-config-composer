@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { SettingsError, record } from '../settings.ts';
 import { permissionNames } from '../host.ts';
-import { readAgentGroups } from '../membership.ts';
+import { normalizedGroups } from '../membership.ts';
 import { serverEntry } from '../registration.ts';
 import { configurationDirectory } from '../configuration-directory.ts';
 import type { CompositionDocument, NativeBaseline, ResolvedCandidate } from './document-types.ts';
@@ -21,6 +21,8 @@ export interface RuntimeMarker {
   location: RuntimeLocation;
   status: 'applied' | 'error';
   definitionId: string;
+  /** Pieces an applied composition skipped or normalized, shown to the user as warning toasts. */
+  warnings?: string[];
   source?: LoadedSource;
   selectionLocator?: SelectionLocator;
   selection?: { path: string; choice?: string | null; revision: number; identity?: string };
@@ -257,13 +259,9 @@ export function readLoadedRuntime(config: unknown, location: RuntimeLocation): A
         !record(entry.groups.source) ||
         typeof entry.groups.source.path !== 'string' ||
         typeof entry.groups.source.canonicalPath !== 'string' ||
-        !hash(entry.groups.source.fingerprint)
+        !hash(entry.groups.source.fingerprint) ||
+        !normalizedGroups(entry.groups.value)
       ) {
-        return fail('Invalid authored membership.');
-      }
-      try {
-        readAgentGroups(entry.groups.value, entry.groups.source.path);
-      } catch {
         return fail('Invalid authored membership.');
       }
     }

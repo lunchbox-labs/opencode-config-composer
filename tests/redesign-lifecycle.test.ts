@@ -397,14 +397,17 @@ test('fresh namespace separates canonical sources and worktrees and ignores old 
   assert.equal(source.choice, undefined);
   assert.match(same.path, /v2/);
 });
-test('invalid native authority fails closed with attested error and no managed mutation', async (t) => {
+test('an invalid native agent field is not authored and the applied runtime carries the warning', async (t) => {
   const f = await fixture(t);
   await mkdir(join(f.root, 'agents'));
-  await writeFile(join(f.root, 'agents/worker.md'), '---\nmode: wrong\n---\nopaque');
+  const path = join(f.root, 'agents/worker.md');
+  await writeFile(path, '---\nmode: wrong\n---\nopaque');
   f.config = f.base();
-  await assert.rejects(f.hook(f.config), /invalid native mode/);
-  assert.equal(f.config.agent.worker.model, 'p/native');
-  await assert.rejects(loadConfigurationContext(f.connection), /Exact native authority/);
+  await f.hook(f.config);
+  const context = await loadConfigurationContext(f.connection);
+  assert.equal(context.runtime.status, 'applied');
+  assert.deepEqual(context.runtime.warnings, [`ignored invalid \`mode\` in \`${path}\`.`]);
+  assert.equal(Object.hasOwn(context.runtime.observation.authority.worker.fields, 'mode'), false);
 });
 
 test('runtime replacement during idle check rejects before disposal and preview tampering rejects before save', async (t) => {

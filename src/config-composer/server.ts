@@ -243,11 +243,13 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           // The process profile replaces the saved worktree choice, which is neither read nor written.
           selected = { processProfile: profile };
         }
+        const warnings = [...observation.warnings];
         const candidate = resolveComposition(
           source.document,
           profile ?? selection?.choice,
           native,
           observation.authority,
+          warnings,
         );
         const revision = compositionRevision(source, selected, candidate);
         // Both rechecks only read. A changed selection is still reported before changed native inputs.
@@ -282,6 +284,7 @@ const ConfigComposerPlugin: Plugin = async (input, rawOptions = {}) => {
           selectionEnvironment,
           ...identities,
           status: 'applied',
+          ...(warnings.length === 0 ? {} : { warnings }),
           native: metadata(native),
           observation,
           globalJsonBaseline,

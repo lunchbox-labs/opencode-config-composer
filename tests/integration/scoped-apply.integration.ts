@@ -43,7 +43,7 @@ test(
   },
 );
 test(
-  'native swallowed hook failures remain recoverable, reject unknown targets and leave agent availability to the host',
+  'native swallowed hook failures remain recoverable, skip unknown targets and leave agent availability to the host',
   { timeout: 240000 },
   async (t) => {
     const f = await compositionFixture(t, 'recoverable-native');
@@ -70,9 +70,19 @@ test(
     await f.editor.applySelection(await f.editor.select(null));
     assert.equal((await f.editor.runtime()).status, 'applied');
     await f.host.stop();
-    await f.write(f.paths.shared, { command: { review: { agent: 'missing' } } });
+    await f.write(f.paths.shared, {
+      command: { review: { agent: 'missing', subtask: false }, absent: { model: 'fixture/beta' } },
+    });
     await f.host.start();
-    assert.equal((await f.editor.runtime()).status, 'error');
+    const skipped = await f.editor.runtime();
+    assert.equal(skipped.status, 'applied');
+    assert.deepEqual(skipped.warnings, [
+      'command `review` targets unavailable agent `missing`; ignored that `agent`.',
+      "`/command/absent` patches command `absent`, which isn't loaded here; skipped it.",
+    ]);
+    const review = (await f.host.api<{ command: Record<string, Record<string, unknown>> }>('/config')).command.review;
+    assert.equal(review.agent, 'worker');
+    assert.equal(review.subtask, false);
     await f.host.stop();
     await f.write(f.paths.shared, {
       agent: { build: { mode: 'subagent' }, plan: { mode: 'subagent' }, worker: { mode: 'subagent' } },
