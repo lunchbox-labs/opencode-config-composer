@@ -69,8 +69,13 @@ test('exact group keys include prototype-like names and produce escaped provenan
     selected.decisions['/agent/worker/temperature'].origin.pointer,
     '/profiles/selected/groups/a~1b~0c/agent/temperature',
   );
-  assert.throws(
-    () => resolveComposition(readCompositionDocument({}), null, { agent: { worker: { groups: ['constructor'] } } }, {}),
-    /unknown group/i,
+  const warnings: string[] = [];
+  resolveComposition(
+    readCompositionDocument({}),
+    null,
+    { agent: { worker: { groups: ['constructor'] } } },
+    {},
+    warnings,
   );
+  assert.deepEqual(warnings, ['agent `worker` lists unknown group `constructor`; ignored it.']);
 });

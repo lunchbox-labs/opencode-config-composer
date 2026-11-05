@@ -19,6 +19,8 @@ export interface NativeObservation {
   json: string;
   globalJson: string;
   commands: string;
+  /** Agent file settings that were ignored, in discovery order. */
+  warnings: string[];
 }
 export function discoveryContext(directory: string, worktree: string): NativeFrontmatterContext {
   return {
@@ -60,10 +62,8 @@ async function observation(path: string, bytes = false): Promise<unknown> {
         : []),
     ];
   } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return [resolve(path), null];
-    }
-    throw error;
+    // Only the kind of failure is fingerprinted, so a file that becomes readable again still counts as changed.
+    return [resolve(path), null, error instanceof Error && 'code' in error ? String(error.code) : 'unreadable'];
   }
 }
 export function nativeGlobalJsonPaths(context: NativeFrontmatterContext): string[] {
@@ -91,20 +91,19 @@ export function nativeJsonPaths(context: NativeFrontmatterContext): string[] {
 /** Native command bodies are opaque; fingerprint bytes and identities without interpreting their contents. */
 export async function nativeCommandPaths(context: NativeFrontmatterContext): Promise<string[]> {
   const paths: string[] = [];
+  // Unreadable folders and dangling links hold no commands Composer can see.
   const scan = async (directory: string, parents = new Set<string>()): Promise<void> => {
-    const identity = await realpath(directory).catch((error: unknown) => {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        return undefined;
-      }
-      throw error;
-    });
+    const identity = await realpath(directory).catch(() => undefined);
     if (identity === undefined || parents.has(identity)) {
       return;
     }
     const ancestors = new Set([...parents, identity]);
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
       const path = join(directory, entry.name);
-      const info = entry.isSymbolicLink() ? await stat(path) : entry;
+      const info = entry.isSymbolicLink() ? await stat(path).catch(() => undefined) : entry;
+      if (info === undefined) {
+        continue;
+      }
       if (info.isDirectory()) {
         await scan(path, ancestors);
       } else if (info.isFile() && entry.name.endsWith('.md')) {
@@ -128,7 +127,8 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
   const jsonPaths = nativeJsonPaths(context);
   const globalJsonPaths = nativeGlobalJsonPaths(context);
   const fingerprints = (paths: string[]) => Promise.all(paths.map((path) => observation(path, true)));
-  const authorityRead = readNativeAgentFrontmatter(context).then((agents) => Object.fromEntries(agents));
+  const warnings: string[] = [];
+  const authorityRead = readNativeAgentFrontmatter(context, warnings).then((agents) => Object.fromEntries(agents));
   // Only the agent source fingerprints depend on authority; collect every other fingerprint alongside the
   // frontmatter read. A frontmatter failure is still reported first, and each category keeps its path order.
   const [authority, discovery, sources, json, globalJson, commands] = await allInOrder([
@@ -155,6 +155,7 @@ export async function observeNative(context: NativeFrontmatterContext): Promise<
     json: digest(json),
     globalJson: digest(globalJson),
     commands: digest(commands),
+    warnings,
   };
 }
 /** The saved worktree state, or the process profile that replaces it. */

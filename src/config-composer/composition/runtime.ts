@@ -70,11 +70,16 @@ export function mergePermission(previous: unknown, incoming: unknown): unknown {
 export function effectiveProfile(document: CompositionDocument, choice: Selection): string | null {
   return choice === undefined ? (document.defaultProfile ?? null) : choice;
 }
+/**
+ * Pieces that can't apply here are skipped and described in `warnings`: shared definitions name agents and
+ * commands that only some projects load, and agent files name groups only some users define.
+ */
 export function resolveComposition(
   document: CompositionDocument,
   choice: Selection,
   native: NativeBaseline,
   authority: NativeAuthority,
+  warnings: string[] = [],
 ): ResolvedCandidate {
   const profile = effectiveProfile(document, choice);
   if (profile !== null && !Object.hasOwn(document.profiles, profile)) {
@@ -86,25 +91,6 @@ export function resolveComposition(
     agent: new Set([...builtins, ...Object.keys(native.agent ?? {})]),
     command: new Set(Object.keys(native.command ?? {})),
   };
-  const check = (kind: 'agent' | 'command', name: string) => {
-    if (!targets[kind].has(name)) {
-      throw new SettingsError(`Unknown native ${kind} target ${name}.`);
-    }
-  };
-  for (const layer of [document, ...Object.values(document.profiles)]) {
-    for (const kind of ['agent', 'command'] as const) {
-      for (const name of Object.keys(layer[kind] ?? {})) {
-        check(kind, name);
-      }
-    }
-  }
-  for (const layer of [document, ...Object.values(document.profiles)]) {
-    for (const patch of Object.values(layer.command ?? {})) {
-      if (record(patch) && Object.hasOwn(patch, 'agent')) {
-        check('agent', String(patch.agent));
-      }
-    }
-  }
   const result: ResolvedCandidate = { profile, agent: {}, command: {}, memberships: {}, decisions: {} };
   const composer = new Map<string, { value: unknown; origin: Origin }>();
   const assign = (
@@ -243,7 +229,7 @@ export function resolveComposition(
           }
         : supplied !== undefined && Object.hasOwn(supplied, 'groups')
           ? {
-              groups: readAgentGroups(supplied.groups, `Native agent ${name}`),
+              groups: readAgentGroups(supplied.groups, `Native agent ${name}`, warnings),
               origin: { kind: 'native' as const, pointer: `/agent/${pointer(name)}/groups` },
             }
           : undefined;
@@ -258,7 +244,8 @@ export function resolveComposition(
     });
     for (const groupName of declaration.groups) {
       if (!Object.hasOwn(document.groups, groupName)) {
-        throw new SettingsError(`Agent ${name}: unknown group ${groupName}.`);
+        warnings.push(`agent \`${name}\` lists unknown group \`${groupName}\`; ignored it.`);
+        continue;
       }
       assign('agent', name, document.groups[groupName].agent ?? {}, {
         kind: 'group',
@@ -289,10 +276,20 @@ export function resolveComposition(
     }
     for (const kind of ['agent', 'command'] as const) {
       for (const [name, patch] of Object.entries<Record<string, unknown>>(value[kind] ?? {})) {
-        assign(kind, name, patch, {
-          ...origin,
-          pointer: `${origin.pointer ?? ''}/${kind}/${pointer(name)}`,
-        });
+        const at = `${origin.pointer ?? ''}/${kind}/${pointer(name)}`;
+        if (!targets[kind].has(name)) {
+          warnings.push(`\`${at}\` patches ${kind} \`${name}\`, which isn't loaded here; skipped it.`);
+          continue;
+        }
+        let applied = patch;
+        if (kind === 'command' && Object.hasOwn(patch, 'agent') && !targets.agent.has(String(patch.agent))) {
+          warnings.push(
+            `command \`${name}\` targets unavailable agent \`${String(patch.agent)}\`; kept its native agent.`,
+          );
+          const { agent: _unavailable, ...rest } = patch;
+          applied = rest;
+        }
+        assign(kind, name, applied, { ...origin, pointer: at });
       }
     }
   };
@@ -303,7 +300,9 @@ export function resolveComposition(
   }
   for (const [name, metadata] of Object.entries(authority)) {
     if (!targets.agent.has(name)) {
-      throw new SettingsError(`Native frontmatter target ${name} was not loaded by OpenCode. Restart OpenCode.`);
+      const files = metadata.sources.map((source) => `\`${source.path}\``).join(', ');
+      warnings.push(`agent \`${name}\` in ${files} isn't loaded by OpenCode yet; restart OpenCode to apply it.`);
+      continue;
     }
     for (const [field, pin] of Object.entries(metadata.fields)) {
       assign('agent', name, { [field]: pin.value }, { kind: 'frontmatter', source: pin.source.path }, true);

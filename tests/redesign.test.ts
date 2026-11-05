@@ -215,13 +215,40 @@ test('permission blocks combine patterns and move to incoming order; options are
   assert.deepEqual(result.agent.worker.permission, { edit: 'ask', read: { '*': 'deny', '*.md': 'ask' }, bash: 'deny' });
   assert.deepEqual(result.agent.worker.options, { new: false });
 });
-test('unknown inactive targets fail atomically', () => {
-  for (const doc of [
-    { profiles: { bad: { agent: { missing: { model: 'p/m' } } } } },
-    { command: { run: { agent: 'missing' } } },
-  ]) {
-    assert.throws(() => resolveComposition(read(doc), null, native, {}), /Unknown native agent target missing/);
-  }
+test('patches for agents and commands not loaded here are skipped, warning only for active layers', () => {
+  const document = read({
+    agent: { missing: { model: 'p/m' }, worker: { model: 'p/worker' } },
+    command: { run: { agent: 'missing', model: 'p/run' }, absent: { model: 'p/m' } },
+    profiles: { selected: { agent: { gone: { model: 'p/m' } } }, unselected: { command: { other: { model: 'p/m' } } } },
+  });
+  const warnings: string[] = [];
+  const result = resolveComposition(document, 'selected', native, {}, warnings);
+  assert.deepEqual(Object.keys(result.agent), ['worker']);
+  assert.deepEqual(Object.keys(result.command), ['run']);
+  assert.equal(result.agent.worker.model, 'p/worker');
+  assert.equal(result.command.run.model, 'p/run');
+  assert.equal(Object.hasOwn(result.command.run, 'agent'), false);
+  assert.deepEqual(warnings, [
+    "`/agent/missing` patches agent `missing`, which isn't loaded here; skipped it.",
+    'command `run` targets unavailable agent `missing`; kept its native agent.',
+    "`/command/absent` patches command `absent`, which isn't loaded here; skipped it.",
+    "`/profiles/selected/agent/gone` patches agent `gone`, which isn't loaded here; skipped it.",
+  ]);
+});
+test('frontmatter for an agent OpenCode has not loaded is ignored with a warning', () => {
+  const source = { path: '/agents/late.md', canonicalPath: '/agents/late.md', fingerprint: '0'.repeat(64) };
+  const warnings: string[] = [];
+  const result = resolveComposition(
+    read({}),
+    null,
+    native,
+    { late: { fields: { model: { value: 'p/late', authored: { model: 'p/late' }, source } }, sources: [source] } },
+    warnings,
+  );
+  assert.equal(Object.hasOwn(result.agent, 'late'), false);
+  assert.deepEqual(warnings, [
+    "agent `late` in `/agents/late.md` isn't loaded by OpenCode yet; restart OpenCode to apply it.",
+  ]);
 });
 test('unavailable default, primary and command target agents are left to the host', () => {
   const allSubagents = { agent: { build: { mode: 'subagent' }, plan: { mode: 'subagent' } } };

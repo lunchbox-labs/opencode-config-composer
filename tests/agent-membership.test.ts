@@ -64,10 +64,29 @@ test('membership metadata is consumed without reaching native fields or provider
   assert.deepEqual(result.agent.unrelated.options, { keep: 0 });
 });
 
-test('membership arrays reject unknown, duplicate and invalid names, and central members are rejected', () => {
-  for (const groups of ['first', ['first', 'first'], ['unknown'], [''], [' '], [false], [0], [null]]) {
-    assert.throws(() => resolveComposition(document(), null, { agent: { worker: { groups } } }, {}), /group/i);
+test('malformed membership is normalized and unknown groups are skipped with warnings', () => {
+  for (const [groups, normalized] of [
+    ['first', ['first']],
+    [['first', 'first'], ['first']],
+    [['', ' ', false, 0, null, 'first'], ['first']],
+    [{ first: true }, []],
+  ] as const) {
+    const warnings: string[] = [];
+    const result = resolveComposition(document(), null, { agent: { worker: { groups } } }, {}, warnings);
+    assert.deepEqual(result.memberships.worker?.groups, normalized, JSON.stringify(groups));
+    assert.deepEqual(warnings, [`Native agent worker: groups normalized to ${JSON.stringify(normalized)}.`]);
   }
+  const warnings: string[] = [];
+  const result = resolveComposition(
+    document(),
+    'a',
+    { agent: { worker: { groups: ['unknown', 'first'] } } },
+    {},
+    warnings,
+  );
+  assert.equal(result.agent.worker.model, 'p/profile');
+  assert.deepEqual(result.memberships.worker?.groups, ['unknown', 'first']);
+  assert.deepEqual(warnings, ['agent `worker` lists unknown group `unknown`; ignored it.']);
   assert.throws(() => readCompositionDocument({ groups: { first: { members: { agent: ['build'] } } } }), /Unknown key/);
   assert.throws(() => readCompositionDocument({ groups: { first: { command: { model: 'p/model' } } } }), /Unknown key/);
   assert.throws(
@@ -140,7 +159,8 @@ async function hookFixture(t: TestContext, definition: unknown) {
   return { root, hook, config, location: { root, directory: root } };
 }
 
-for (const definition of [{ groups: { first: { members: { agent: ['worker'] } } } }, { groups: {} }]) {
+{
+  const definition = { groups: { first: { members: { agent: ['worker'] } } } };
   test('failed bootstrap strips reserved metadata without applying settings or discarding other native fields', async (t) => {
     const f = await hookFixture(t, definition);
     const sharedAgent = f.config.agent.worker;
@@ -180,12 +200,14 @@ test('same and reused nested objects retain membership through A B A none and sa
   assert.deepEqual(readRuntimeContext(replacement, f.location).candidate?.memberships.worker?.groups, ['first']);
   Object.assign(replacement.agent.worker, { groups: ['missing'] });
   Object.assign(replacement.agent.worker.options, { groups: ['missing'] });
-  await assert.rejects(f.hook(replacement), /unknown group/);
+  await f.hook(replacement);
   assert.equal(Object.hasOwn(replacement.agent.worker, 'groups'), false);
   assert.deepEqual(replacement.agent.worker.options, { native: false });
-  const failed = readRuntimeContext(replacement, f.location);
-  assert.equal(failed.status, 'error');
-  assert.deepEqual(failed.native.agent?.worker.groups, ['missing']);
+  const skipped = readRuntimeContext(replacement, f.location);
+  assert.equal(skipped.status, 'applied');
+  assert.equal(skipped.candidate?.agent.worker.model, undefined);
+  assert.deepEqual(skipped.native.agent?.worker.groups, ['missing']);
+  assert.deepEqual(skipped.warnings, ['agent `worker` lists unknown group `missing`; ignored it.']);
 });
 
 test('later Markdown source keeps an absent membership and an explicit empty array clears it', async (t) => {
@@ -218,28 +240,36 @@ test('later Markdown source keeps an absent membership and an explicit empty arr
   assert.equal(clear.worker.groups.source.path, last);
 });
 
-test('invalid native membership is stripped on failure while the error attests original metadata', async (t) => {
+test('a bare native group name applies as a one-item list with a warning', async (t) => {
   const f = await hookFixture(t, document());
   Object.assign(f.config.agent.worker, { groups: 'first' });
-  await assert.rejects(f.hook(f.config), /groups must be an array/);
+  await f.hook(f.config);
   assert.equal(Object.hasOwn(f.config.agent.worker, 'groups'), false);
   assert.deepEqual(f.config.agent.worker.options, { native: false });
   const runtime = readRuntimeContext(f.config, f.location);
-  assert.equal(runtime.status, 'error');
+  assert.equal(runtime.status, 'applied');
   assert.equal(runtime.native.agent?.worker.groups, 'first');
+  assert.deepEqual(runtime.candidate?.memberships.worker?.groups, ['first']);
+  assert.equal(runtime.candidate.agent.worker.model, 'p/first');
+  assert.deepEqual(runtime.warnings, ['Native agent worker: groups normalized to ["first"].']);
 });
 
-test('a failed sanitized object and its reused agent retain invalid membership until genuinely replaced', async (t) => {
+test('an unknown group keeps warning on repeated and reused objects until it is replaced', async (t) => {
   const f = await hookFixture(t, document());
   Object.assign(f.config.agent.worker, { groups: ['missing'] });
-  await assert.rejects(f.hook(f.config), /unknown group/);
-  await assert.rejects(f.hook(f.config), /unknown group/);
+  const warning = ['agent `worker` lists unknown group `missing`; ignored it.'];
+  await f.hook(f.config);
+  await f.hook(f.config);
+  assert.deepEqual(readRuntimeContext(f.config, f.location).warnings, warning);
   const reused = { plugin: [packageName], agent: { worker: f.config.agent.worker } };
-  await assert.rejects(f.hook(reused), /unknown group/);
+  await f.hook(reused);
   assert.deepEqual(readRuntimeContext(reused, f.location).native.agent?.worker.groups, ['missing']);
+  assert.deepEqual(readRuntimeContext(reused, f.location).warnings, warning);
   Object.assign(reused.agent.worker, { groups: ['first'] });
   await f.hook(reused);
-  assert.deepEqual(readRuntimeContext(reused, f.location).candidate?.memberships.worker?.groups, ['first']);
+  const replaced = readRuntimeContext(reused, f.location);
+  assert.deepEqual(replaced.candidate?.memberships.worker?.groups, ['first']);
+  assert.equal(replaced.warnings, undefined);
   assert.equal(Object.hasOwn(reused.agent.worker, 'groups'), false);
 });
 

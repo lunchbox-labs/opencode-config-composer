@@ -262,7 +262,7 @@ test('native YAML aliases, colon fallback, JSON engines, and literal substitutio
   assert.equal(agents.get('json')?.fields.model?.value, 'fixture/json');
 });
 
-test('unsupported frontmatter engines fail without executing authored content', async (t) => {
+test('unsupported frontmatter engines are ignored with a warning and never execute authored content', async (t) => {
   const f = await fixture(t);
   const marker = `composer-frontmatter-marker-${Date.now()}`;
   for (const language of ['javascript', 'js', 'custom']) {
@@ -271,7 +271,10 @@ test('unsupported frontmatter engines fail without executing authored content', 
       path,
       `---${language}\n(globalThis[${JSON.stringify(marker)}] = true, { model: 'fixture/unsafe' })\n---\nOpaque body.`,
     );
-    await assert.rejects(readNativeAgentFrontmatter(f.context), /unsafe\.md.*unsupported.*engine/i);
+    const warnings: string[] = [];
+    const agents = await readNativeAgentFrontmatter(f.context, warnings);
+    assert.deepEqual(agents.get('unsafe')?.fields, {});
+    assert.deepEqual(warnings, [`could not parse \`${path}\`; its settings were ignored.`]);
     assert.equal(Reflect.has(globalThis, marker), false);
   }
 });
@@ -286,11 +289,12 @@ test('native recursive agent paths include dotfiles and symlinks; flat modes for
   await f.markdown(f.global, 'modes/flat.md', 'mode: subagent\nmodel: fixture/flat');
   await f.markdown(f.global, 'mode/default.md', 'model: fixture/default');
   await f.markdown(f.global, 'modes/nested/ignored.md', 'model: fixture/ignored');
-  // The directory and file aliases above deliberately share the same native name.
-  await assert.rejects(
-    readNativeAgentFrontmatter(f.context),
-    /ambiguous.*linked.*file-link\.md.*linked-directory|ambiguous.*linked.*linked-directory.*file-link\.md/is,
-  );
+  // The directory and file aliases above deliberately share the same native name; the later one is used.
+  const warnings: string[] = [];
+  await readNativeAgentFrontmatter(f.context, warnings);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /file-link\.md.*linked-directory|linked-directory.*file-link\.md/s);
+  assert.match(warnings[0], /both define agent `linked`/);
   await rm(join(f.global, 'agents/file-link.md'));
   const agents = await readNativeAgentFrontmatter(f.context);
   assert.equal(agents.get('nested/deep')?.fields.model?.value, 'fixture/deep');
@@ -315,17 +319,21 @@ test('native dotfiles named exactly .md keep their full root and nested identiti
   assert.equal(agents.has('nested/'), false);
 });
 
-test('same-batch duplicate native identities fail across singular and plural aliases', async (t) => {
+test('same-batch duplicate native identities use the later file across singular and plural aliases', async (t) => {
   const f = await fixture(t);
-  const first = await f.markdown(f.global, 'agent/first.md', 'name: collision\nmodel: fixture/first');
+  await f.markdown(f.near, 'agents/collision.md', 'temperature: 0.5');
+  const first = await f.markdown(f.global, 'agent/first.md', 'name: collision\nmodel: fixture/first\ntop_p: 0.5');
   const second = await f.markdown(f.global, 'agents/second.md', 'name: collision\nmodel: fixture/second');
-  await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
-    assert.ok(error instanceof Error);
-    assert.match(error.message, /ambiguous.*collision/is);
-    assert.ok(error.message.includes(first));
-    assert.ok(error.message.includes(second));
-    return true;
-  });
+  const warnings: string[] = [];
+  const collision = (await readNativeAgentFrontmatter(f.context, warnings)).get('collision')!;
+  assert.deepEqual(warnings, [`\`${first}\` and \`${second}\` both define agent \`collision\`; used \`${second}\`.`]);
+  assert.equal(collision.fields.model?.value, 'fixture/second');
+  assert.equal(collision.fields.temperature?.value, 0.5);
+  assert.equal(collision.fields.top_p, undefined);
+  assert.deepEqual(
+    collision.sources.map((source) => source.path),
+    [first, second, join(f.near, 'agents/collision.md')],
+  );
 });
 
 test('no-frontmatter agents and absent builtin agents have no authored pins or stored bodies', async (t) => {
@@ -413,20 +421,23 @@ test('opaque native prompt body size does not limit authored metadata discovery'
   assert.equal(JSON.stringify([...agents]).includes('Native opaque prompt'), false);
 });
 
-test('unsupported cyclic and non-JSON option values fail with a source diagnostic', async (t) => {
+test('cyclic and non-JSON option values are ignored with a warning while YAML dates become ISO strings', async (t) => {
   const f = await fixture(t);
-  for (const metadata of ['options: &loop\n  self: *loop', 'options:\n  date: 2025-01-01', 'options:\n  value: .inf']) {
+  for (const metadata of ['options: &loop\n  self: *loop', 'options:\n  value: .inf']) {
     const path = await f.markdown(f.global, 'agents/unsupported.md', metadata);
-    await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.match(error.message, /cyclic or non-JSON.*options/);
-      assert.ok(error.message.includes(path));
-      return true;
-    });
+    const warnings: string[] = [];
+    const agents = await readNativeAgentFrontmatter(f.context, warnings);
+    assert.equal(agents.get('unsupported')?.fields.options, undefined);
+    assert.deepEqual(warnings, [`ignored invalid \`options\` in \`${path}\`.`]);
   }
+  await f.markdown(f.global, 'agents/unsupported.md', 'created: 2025-01-01\noptions:\n  date: 2025-01-02');
+  const warnings: string[] = [];
+  const options = (await readNativeAgentFrontmatter(f.context, warnings)).get('unsupported')?.fields.options;
+  assert.deepEqual(options?.value, { date: '2025-01-02T00:00:00.000Z', created: '2025-01-01T00:00:00.000Z' });
+  assert.deepEqual(warnings, []);
 });
 
-test('native-invalid known field shapes cannot create authored authority even in legacy modes', async (t) => {
+test('native-invalid known field shapes are ignored with a warning even in legacy modes', async (t) => {
   const f = await fixture(t);
   for (const metadata of [
     'name: false',
@@ -445,13 +456,12 @@ test('native-invalid known field shapes cannot create authored authority even in
     'permission:\n  todowrite:\n    "*": allow',
     'permission:\n  bash: [allow]',
   ]) {
-    const path = await f.markdown(f.global, 'modes/invalid.md', metadata);
-    await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.match(error.message, /invalid native/);
-      assert.ok(error.message.includes(path));
-      return true;
-    });
+    const path = await f.markdown(f.global, 'modes/invalid.md', `${metadata}\nvariant: kept`);
+    const warnings: string[] = [];
+    const agents = await readNativeAgentFrontmatter(f.context, warnings);
+    const field = metadata.slice(0, metadata.indexOf(':'));
+    assert.deepEqual(warnings, [`ignored invalid \`${field}\` in \`${path}\`.`]);
+    assert.deepEqual(Object.keys(agents.get('invalid')?.fields ?? {}), ['variant'], metadata);
   }
 });
 
@@ -467,36 +477,29 @@ test('native accepts empty string names and preserves wildcard permission order 
   assert.deepEqual(permission.value, { '*': 'deny', edit: { '*': 'deny', 'src/**': 'allow' }, bash: 'ask' });
 });
 
-test('missing optional roots are empty while unresolved root aliases surface their paths', async (t) => {
+test('missing roots and unresolved root aliases are empty without warnings', async (t) => {
   const f = await fixture(t);
   assert.equal((await readNativeAgentFrontmatter(f.context)).size, 0);
   await symlink(join(f.root, 'absent'), f.custom, 'dir');
-  await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
-    assert.ok(error instanceof Error);
-    assert.ok(error.message.includes(f.custom));
-    assert.match(error.message, /unresolved symbolic link/);
-    return true;
-  });
+  const warnings: string[] = [];
+  assert.equal((await readNativeAgentFrontmatter(f.context, warnings)).size, 0);
+  assert.deepEqual(warnings, []);
 });
 
-test('malformed sources and unreadable discovered files surface their native source paths', async (t) => {
+test('a malformed source contributes no settings with a warning and a dangling link is skipped', async (t) => {
   const f = await fixture(t);
   const path = await f.markdown(f.global, 'agents/broken.md', 'model: [unterminated');
-  await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
-    assert.ok(error instanceof Error);
-    assert.ok(error.message.includes(path));
-    return true;
-  });
+  const warnings: string[] = [];
+  assert.deepEqual((await readNativeAgentFrontmatter(f.context, warnings)).get('broken')?.fields, {});
+  assert.deepEqual(warnings, [`could not parse \`${path}\`; its settings were ignored.`]);
   await rm(path);
   await symlink(join(f.root, 'absent.md'), path);
-  await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
-    assert.ok(error instanceof Error);
-    assert.ok(error.message.includes(path));
-    return true;
-  });
+  warnings.length = 0;
+  assert.equal((await readNativeAgentFrontmatter(f.context, warnings)).has('broken'), false);
+  assert.deepEqual(warnings, []);
 });
 
-test('native discovery merges and reports the first failure in traversal order across concurrent reads', async (t) => {
+test('native discovery reports skipped settings in traversal order across concurrent reads', async (t) => {
   const f = await fixture(t);
   const agents = join(f.global, 'agents');
   for (let index = 0; index < 40; index++) {
@@ -532,18 +535,25 @@ test('native discovery merges and reports the first failure in traversal order a
   await writeFile(large, `---\nmodel: fixture/large\n---\n${'Opaque.\n'.repeat(524_288)}`);
   const openDescriptors = async () =>
     process.platform === 'linux' ? (await readdir('/proc/self/fd')).length : undefined;
-  while (remaining.length !== 0) {
-    const descriptors = await openDescriptors();
-    await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.ok(error.message.startsWith(`Native agent frontmatter ${remaining[0]}:`), error.message);
-      for (const later of remaining.slice(1)) {
-        assert.equal(error.message.includes(later), false);
-      }
-      return true;
-    });
-    assert.equal(await openDescriptors(), descriptors);
-    const repaired = remaining.shift()!;
+  const descriptors = await openDescriptors();
+  const warnings: string[] = [];
+  const skipped = await readNativeAgentFrontmatter(f.context, warnings);
+  assert.equal(await openDescriptors(), descriptors);
+  assert.deepEqual(
+    warnings,
+    remaining.flatMap((path, rank) =>
+      path === link
+        ? []
+        : [
+            rank % 2 === 0
+              ? `could not parse \`${path}\`; its settings were ignored.`
+              : `ignored invalid \`options\` in \`${path}\`.`,
+          ],
+    ),
+  );
+  assert.equal(skipped.has('link'), false);
+  assert.deepEqual(skipped.get('directory/inner')?.fields, {});
+  for (const repaired of remaining) {
     await writeFile(repaired === link ? target : repaired, '---\nmodel: fixture/repaired\n---\nOpaque native body.');
   }
   const discovered = await readNativeAgentFrontmatter(f.context);
@@ -552,7 +562,7 @@ test('native discovery merges and reports the first failure in traversal order a
   assert.equal(discovered.get('link')?.fields.model?.value, 'fixture/repaired');
 });
 
-test('a directory symlink back to an ancestor fails at the looping path among concurrent sibling reads', async (t) => {
+test('a directory symlink back to an ancestor is skipped among concurrent sibling reads', async (t) => {
   const f = await fixture(t);
   const agents = join(f.global, 'agents');
   for (let index = 0; index < 20; index++) {
@@ -561,11 +571,10 @@ test('a directory symlink back to an ancestor fails at the looping path among co
   }
   const loop = join(agents, 'sub', 'loop');
   await symlink(agents, loop, 'dir');
-  await assert.rejects(readNativeAgentFrontmatter(f.context), (error: unknown) => {
-    assert.ok(error instanceof Error);
-    assert.equal(error.message, `Native agent frontmatter ${loop}: native search contains a directory cycle.`);
-    return true;
-  });
+  const warnings: string[] = [];
+  const looped = await readNativeAgentFrontmatter(f.context, warnings);
+  assert.equal(looped.size, 40);
+  assert.deepEqual(warnings, []);
   await rm(loop);
   const discovered = await readNativeAgentFrontmatter(f.context);
   assert.equal(discovered.size, 40);

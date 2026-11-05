@@ -328,23 +328,23 @@ test('an unreadable saved selection fails composition after native inputs are ob
   assert.deepEqual(runtime.observation, first.observation);
 });
 
-test('a native observation failure is reported over an unreadable saved selection', async (t) => {
+test('an unparsable agent file is observed with a warning while an unreadable saved selection still fails', async (t) => {
   const f = await fixture(t);
   await writeFile(f.source, JSON.stringify({ profiles: { a: { model: 'p/a' } }, defaultProfile: 'a' }));
   const first = await f.load();
   await mkdir(dirname(first.selectionLocator.path), { recursive: true });
   await writeFile(first.selectionLocator.path, 'unreadable');
   await mkdir(join(f.root, 'agents'));
-  await writeFile(join(f.root, 'agents/broken.md'), '---\nmodel: p/a\nmodel: p/b\n---\nBroken agent.');
+  const broken = join(f.root, 'agents/broken.md');
+  await writeFile(broken, '---\nmodel: p/a\nmodel: p/b\n---\nBroken agent.');
   const config = { plugin: [packageName] };
-  await assert.rejects((await descriptor.server(f.input)).config!(config), /Native agent frontmatter/);
-  // Without an observation the runtime readers refuse the marker, so inspect what was published.
+  await assert.rejects((await descriptor.server(f.input)).config!(config), /Invalid or unsupported selection state/);
   const entry = (config.plugin as unknown[]).find((value): value is unknown[] => Array.isArray(value));
   const marker = (entry?.[1] as { __configComposerRuntime?: Record<string, unknown> } | undefined)
     ?.__configComposerRuntime;
   assert.ok(marker !== undefined);
   assert.equal(marker.status, 'error');
-  assert.match(String(marker.diagnostic), /Composer not applied\. Native agent frontmatter/);
-  assert.equal(marker.observation, undefined);
-  assert.equal(marker.globalJsonBaseline, undefined);
+  assert.deepEqual((marker.observation as { warnings?: unknown } | undefined)?.warnings, [
+    `could not parse \`${broken}\`; its settings were ignored.`,
+  ]);
 });

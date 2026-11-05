@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { type TestContext, test } from 'node:test';
 import type { TuiPluginApi, TuiToast } from '@opencode-ai/plugin/tui';
 import { createStore } from 'solid-js/store';
-import { registerErrorNotice } from '../src/config-composer/tui/notice.ts';
+import { registerCompositionNotice } from '../src/config-composer/tui/notice.ts';
 
 function fixture(t: TestContext, diagnostic?: string) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -24,7 +24,7 @@ function fixture(t: TestContext, diagnostic?: string) {
             ],
           ],
   });
-  const [state, setState] = createStore({
+  const [state, setState] = createStore<{ config: unknown; path: { directory: string; worktree: string } }>({
     config: config(diagnostic),
     path: { directory: '/project', worktree: '/project' },
   });
@@ -35,7 +35,7 @@ function fixture(t: TestContext, diagnostic?: string) {
     lifecycle: { signal: controller.signal },
     ui: { toast: (toast: TuiToast) => toasts.push(toast) },
   } as unknown as TuiPluginApi;
-  const dispose = registerErrorNotice(api);
+  const dispose = registerCompositionNotice(api);
   t.after(dispose);
   return { toasts, controller, dispose, setState, config };
 }
@@ -93,3 +93,53 @@ for (const stop of ['dispose', 'abort'] as const) {
     assert.equal(f.toasts.length, 0);
   });
 }
+
+const applied = (warnings?: string[], directory = '/project') => ({
+  plugin: [
+    [
+      'composer',
+      {
+        __configComposerRuntime: {
+          version: 2,
+          status: 'applied',
+          location: { directory, root: directory },
+          ...(warnings === undefined ? {} : { warnings }),
+        },
+      },
+    ],
+  ],
+});
+
+test('an applied composition toasts what it skipped once as a warning', (t) => {
+  const f = fixture(t);
+  f.setState('config', applied());
+  assert.equal(f.toasts.length, 0);
+  f.setState('config', applied(['agent `worker` lists unknown group `missing`; ignored it.']));
+  f.setState('config', applied(['agent `worker` lists unknown group `missing`; ignored it.']));
+  assert.deepEqual(f.toasts, [
+    {
+      variant: 'warning',
+      title: 'Config Composer',
+      message: 'agent `worker` lists unknown group `missing`; ignored it.',
+    },
+  ]);
+  f.setState('config', applied());
+  f.setState('config', applied(['agent `worker` lists unknown group `missing`; ignored it.']));
+  assert.equal(f.toasts.length, 2);
+});
+
+test('a warning toast lists three skipped pieces and counts the rest', (t) => {
+  const f = fixture(t);
+  f.setState('config', applied(['one', 'two', 'three', 'four', 'five']));
+  assert.equal(f.toasts.at(-1)?.message, 'one\ntwo\nthree\n…and 2 more.');
+});
+
+test('a failed composition toasts its error and not the warnings of an earlier one', (t) => {
+  const f = fixture(t);
+  f.setState('config', applied(['skipped']));
+  f.setState('config', f.config('Broken'));
+  assert.deepEqual(
+    f.toasts.map((toast) => toast.variant),
+    ['warning', 'error'],
+  );
+});

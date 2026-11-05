@@ -1,15 +1,26 @@
-import { SettingsError, record } from './settings.ts';
+import { record } from './settings.ts';
 
-/** Native agent metadata, never a provider option or a Composer settings patch. */
-export function readAgentGroups(value: unknown, source: string): string[] {
-  if (
-    !Array.isArray(value) ||
-    !value.every((item): item is string => typeof item === 'string' && item.trim() !== '' && !item.includes('\0')) ||
-    new Set(value).size !== value.length
-  ) {
-    throw new SettingsError(`${source}: groups must be an array of unique nonempty names.`);
+function groupName(item: unknown): item is string {
+  return typeof item === 'string' && item.trim() !== '' && !item.includes('\0');
+}
+
+/** True only for the normalized form readAgentGroups returns. */
+export function normalizedGroups(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(groupName) && new Set(value).size === value.length;
+}
+
+/**
+ * Native agent metadata, never a provider option or a Composer settings patch. A bare name becomes a
+ * one-item list; invalid and repeated entries are dropped, keeping the first occurrence.
+ */
+export function readAgentGroups(value: unknown, source: string, warnings?: string[]): string[] {
+  if (normalizedGroups(value)) {
+    return [...value];
   }
-  return [...value];
+  const listed: unknown[] = Array.isArray(value) ? value : [value];
+  const groups = [...new Set(listed.filter(groupName))];
+  warnings?.push(`${source}: groups normalized to ${JSON.stringify(groups)}.`);
+  return groups;
 }
 
 export function withoutGroups(options: Record<string, unknown>): Record<string, unknown> {
