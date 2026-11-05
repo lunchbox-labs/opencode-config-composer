@@ -80,6 +80,29 @@ test('published schema and parser accept only positive safe integer steps in eve
   }
 });
 
+test('published schema and parser accept only boolean disable in every agent patch', async () => {
+  const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as object;
+  const validate = new Ajv({ strict: false }).compile(schema);
+  const documents = (disable: unknown) => [
+    { agent: { worker: { disable } } },
+    { groups: { workers: { agent: { disable } } } },
+    { profiles: { inactive: { agent: { worker: { disable } } } } },
+    { groups: { workers: {} }, profiles: { inactive: { groups: { workers: { agent: { disable } } } } } },
+  ];
+  for (const disable of [true, false]) {
+    for (const document of documents(disable)) {
+      assert.equal(validate(document), true, JSON.stringify(document));
+      assert.doesNotThrow(() => readCompositionDocument(document));
+    }
+  }
+  for (const disable of ['yes', 1, null]) {
+    for (const document of documents(disable)) {
+      assert.equal(validate(document), false, JSON.stringify(document));
+      assert.throws(() => readCompositionDocument(document), /Expected a boolean/);
+    }
+  }
+});
+
 test('published schema uses native action-only permissions and string modes in every agent patch', async () => {
   const schema = JSON.parse(await readFile(new URL('../schema.json', import.meta.url), 'utf8')) as object;
   const validate = new Ajv({ strict: false }).compile(schema);

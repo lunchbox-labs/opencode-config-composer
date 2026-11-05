@@ -145,3 +145,41 @@ test(
     assert.equal(await readFile(f.paths.native, 'utf8'), nativeBytes);
   },
 );
+test(
+  'installed profile disable removes and restores native agents while frontmatter disable stays final',
+  { timeout: 240000 },
+  async (t) => {
+    const f = await compositionFixture(t, 'profile-disable');
+    await f.write(f.paths.native, {
+      ...f.native,
+      agent: {
+        ...f.native.agent,
+        worker: { ...f.native.agent.worker, groups: ['workers'] },
+        helper: { ...f.native.agent.helper, disable: true },
+      },
+    });
+    const global = join(f.host.configRoot, 'agents');
+    await mkdir(global);
+    await writeFile(join(global, 'pinned.md'), '---\ngroups: [workers]\ndisable: false\n---\nPINNED_BODY');
+    await f.write(f.paths.shared, {
+      groups: { workers: {} },
+      profiles: {
+        quiet: { groups: { workers: { agent: { disable: true } } }, agent: { helper: { disable: false } } },
+      },
+    });
+    await f.host.start();
+    for (const choice of ['quiet', null, 'quiet', null] as const) {
+      await f.editor.applySelection(await f.editor.select(choice));
+      const quiet = choice === 'quiet';
+      const roster = new Set((await f.host.api<{ name: string }[]>('/agent')).map((agent) => agent.name));
+      assert.deepEqual(
+        ['worker', 'helper', 'pinned'].map((name) => roster.has(name)),
+        [!quiet, quiet, true],
+        String(choice),
+      );
+      const decision = (await f.editor.runtime()).candidate!.decisions['/agent/pinned/disable'];
+      assert.equal(decision.origin.kind, 'frontmatter');
+      assert.equal(decision.blockedComposer?.value, quiet ? true : undefined);
+    }
+  },
+);
