@@ -111,7 +111,7 @@ test(
 );
 
 test(
-  'installed profile-only reference leaves Shared only native model and variant intact and rejects an unbound profile',
+  'installed unbound references leave native model and variant intact in Shared only and an unbinding profile',
   { timeout: 240000 },
   async (t) => {
     const f = await compositionFixture(t, 'native-profile-only-alias');
@@ -135,7 +135,10 @@ test(
     const active = await f.host.api<{ agent: Record<string, Record<string, unknown>> }>('/config');
     assert.equal(active.agent.worker.model, 'fixture/beta');
     assert.equal(active.agent.worker.variant, '');
-    await assert.rejects(f.editor.select('unbound'), /\/groups\/coding\/agent\/modelRef.*coding.*profile.*unbound/i);
-    assert.equal((await f.editor.runtime()).candidate!.profile, 'a');
+    await f.editor.applySelection(await f.editor.select('unbound'));
+    assert.equal((await f.editor.runtime()).candidate!.profile, 'unbound');
+    const unbound = await f.host.api<{ agent: Record<string, Record<string, unknown>> }>('/config');
+    assert.equal(unbound.agent.worker.model, 'fixture/alpha');
+    assert.equal(unbound.agent.worker.variant, 'high');
   },
 );

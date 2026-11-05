@@ -43,7 +43,7 @@ test(
   },
 );
 test(
-  'native swallowed hook failures remain recoverable and validate builtin/default/disabled targets',
+  'native swallowed hook failures remain recoverable, reject unknown targets and leave agent availability to the host',
   { timeout: 240000 },
   async (t) => {
     const f = await compositionFixture(t, 'recoverable-native');
@@ -69,23 +69,21 @@ test(
     );
     await f.editor.applySelection(await f.editor.select(null));
     assert.equal((await f.editor.runtime()).status, 'applied');
-    for (const document of [
-      { agent: { build: { mode: 'subagent' }, plan: { mode: 'subagent' }, worker: { mode: 'subagent' } } },
-      { command: { review: { agent: 'missing' } } },
-    ]) {
-      await f.host.stop();
-      await f.write(f.paths.shared, document);
-      await f.host.start();
-      assert.equal((await f.editor.runtime()).status, 'error');
-    }
-    await f.write(f.paths.shared, { command: { review: { agent: 'helper' } } });
     await f.host.stop();
+    await f.write(f.paths.shared, { command: { review: { agent: 'missing' } } });
+    await f.host.start();
+    assert.equal((await f.editor.runtime()).status, 'error');
+    await f.host.stop();
+    await f.write(f.paths.shared, {
+      agent: { build: { mode: 'subagent' }, plan: { mode: 'subagent' }, worker: { mode: 'subagent' } },
+      command: { review: { agent: 'helper' } },
+    });
     await f.write(f.paths.native, {
       ...f.native,
       agent: { ...f.native.agent, helper: { ...f.native.agent.helper, disable: true } },
     });
     await f.host.start();
-    assert.match((await f.editor.runtime()).diagnostic!, /disabled/);
+    assert.equal((await f.editor.runtime()).status, 'applied');
   },
 );
 

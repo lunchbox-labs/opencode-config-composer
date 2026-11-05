@@ -42,7 +42,7 @@ export type Inspection = Awaited<ReturnType<typeof loadInspection>>;
 export function inspectionAgents(snapshot: Inspection, showBuiltins: boolean): string[] {
   const agents = new Map(snapshot.agents.map((agent) => [agent.name, agent]));
   return [...new Set([...agents.keys(), ...Object.keys(snapshot.config.agent ?? {})])]
-    .filter((name) => showBuiltins || !(agents.get(name)?.native ?? Object.hasOwn(builtins, name)))
+    .filter((name) => showBuiltins || !(agents.get(name)?.native ?? builtins.has(name)))
     .sort();
 }
 

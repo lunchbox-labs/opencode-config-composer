@@ -9,15 +9,15 @@ import type {
   ResolvedCandidate,
   Selection,
 } from './document-types.ts';
-export const builtins: Readonly<Record<string, { mode: string; hidden?: boolean }>> = {
-  build: { mode: 'primary' },
-  plan: { mode: 'primary' },
-  general: { mode: 'subagent' },
-  explore: { mode: 'subagent' },
-  compaction: { mode: 'primary', hidden: true },
-  title: { mode: 'primary', hidden: true },
-  summary: { mode: 'primary', hidden: true },
-} as const;
+export const builtins: ReadonlySet<string> = new Set([
+  'build',
+  'plan',
+  'general',
+  'explore',
+  'compaction',
+  'title',
+  'summary',
+]);
 export function mergePermission(previous: unknown, incoming: unknown): unknown {
   if (incoming === undefined) {
     return structuredClone(previous);
@@ -83,7 +83,7 @@ export function resolveComposition(
     );
   }
   const targets = {
-    agent: new Set([...Object.keys(builtins), ...Object.keys(native.agent ?? {})]),
+    agent: new Set([...builtins, ...Object.keys(native.agent ?? {})]),
     command: new Set(Object.keys(native.command ?? {})),
   };
   const check = (kind: 'agent' | 'command', name: string) => {
@@ -98,18 +98,11 @@ export function resolveComposition(
       }
     }
   }
-  const validateAuthoredCommandReference = (patch: unknown) => {
-    if (record(patch) && Object.hasOwn(patch, 'agent')) {
-      const target = String(patch.agent);
-      check('agent', target);
-      if (native.agent?.[target]?.disable === true) {
-        throw new SettingsError(`Command target ${target} is disabled.`);
-      }
-    }
-  };
   for (const layer of [document, ...Object.values(document.profiles)]) {
     for (const patch of Object.values(layer.command ?? {})) {
-      validateAuthoredCommandReference(patch);
+      if (record(patch) && Object.hasOwn(patch, 'agent')) {
+        check('agent', String(patch.agent));
+      }
     }
   }
   const result: ResolvedCandidate = { profile, agent: {}, command: {}, memberships: {}, decisions: {} };
@@ -140,12 +133,6 @@ export function resolveComposition(
       const selected = Object.hasOwn(selectedModels ?? {}, modelRef);
       const bindings = selected ? selectedModels : document.models;
       const binding = Object.hasOwn(bindings ?? {}, modelRef) ? bindings?.[modelRef] : undefined;
-      const referencePointer = `${origin.pointer ?? ''}/modelRef`;
-      if (binding === undefined && profile !== null) {
-        throw new SettingsError(
-          `${referencePointer}: Model alias ${JSON.stringify(modelRef)} has no binding in profile ${JSON.stringify(profile)} or root models.`,
-        );
-      }
       bindingVariant = !Object.hasOwn(patch, 'variant');
       patch =
         binding === undefined
@@ -154,7 +141,7 @@ export function resolveComposition(
       if (binding !== undefined) {
         bindingOrigin = {
           ...origin,
-          pointer: referencePointer,
+          pointer: `${origin.pointer ?? ''}/modelRef`,
           modelBinding: {
             name: modelRef,
             pointer: `${selected && profile !== null ? `/profiles/${pointer(profile)}` : ''}/models/${pointer(modelRef)}`,
@@ -321,25 +308,6 @@ export function resolveComposition(
     for (const [field, pin] of Object.entries(metadata.fields)) {
       assign('agent', name, { [field]: pin.value }, { kind: 'frontmatter', source: pin.source.path }, true);
     }
-  }
-  const viable = (name: string) => {
-    const builtin = Object.hasOwn(builtins, name) ? builtins[name] : undefined;
-    const agent = result.agent[name] ?? {};
-    return (
-      targets.agent.has(name) &&
-      agent.disable !== true &&
-      (agent.hidden ?? (builtin !== undefined && 'hidden' in builtin ? builtin.hidden : false)) !== true &&
-      (agent.mode ?? builtin?.mode ?? 'all') !== 'subagent'
-    );
-  };
-  if (typeof native.default_agent === 'string') {
-    if (!viable(native.default_agent)) {
-      throw new SettingsError(
-        `Native default_agent ${native.default_agent} must be enabled, visible and not a subagent.`,
-      );
-    }
-  } else if (![...targets.agent].some(viable)) {
-    throw new SettingsError('At least one enabled visible primary agent must remain.');
   }
   return result;
 }
